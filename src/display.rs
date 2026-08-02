@@ -256,10 +256,23 @@ impl<'d> Panel<'d> {
         const START_TIMEOUT_MS: u32 = 500;
         /// How long to allow the refresh itself. Measured ~3.9 s.
         const REFRESH_TIMEOUT_MS: u32 = 15_000;
-        /// Poll interval. Long enough to yield to the scheduler on every pass --
-        /// a tight loop here starves the idle task and trips the task watchdog,
-        /// which is what a busy-wait delay did to this same code path.
-        const POLL_MS: u32 = 20;
+        /// Poll interval.
+        ///
+        /// **100 ms, and the number is load-bearing.** Two thresholds sit just
+        /// below it, and 20 ms — the obvious choice — fails both:
+        ///
+        /// * yielding at all, so the idle task runs and the task watchdog stays
+        ///   quiet. A busy-wait here rebooted the device mid-refresh;
+        /// * clearing FreeRTOS's light-sleep threshold, which is
+        ///   `CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP` = 3 ticks at
+        ///   `CONFIG_FREERTOS_HZ` = 100 — i.e. **30 ms**. A shorter delay yields
+        ///   but never sleeps, so the single longest wait in the system, a 3.8 s
+        ///   panel refresh, would hold the core awake at full clock for the
+        ///   whole of it.
+        ///
+        /// The moisture project shipped this bug for weeks at 10 ms. The cost is
+        /// up to 100 ms of latency on a refresh that takes 3800.
+        const POLL_MS: u32 = 100;
 
         let mut waited = 0;
         while Self::busy_level() && waited < START_TIMEOUT_MS {

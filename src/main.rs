@@ -9,6 +9,7 @@ mod display;
 mod defence;
 mod history;
 mod i2c_scan;
+mod power;
 mod settings;
 mod storage;
 mod system;
@@ -450,6 +451,23 @@ fn listen(
     // something to widen from -- and `None` from NVS is a virgin device, not an
     // error.
     let mut range = settings::battery_range().unwrap_or(battery::SEED_RANGE);
+
+    // §7's clock policy. Starts on the USB assumption -- the device is usually
+    // plugged in, and being wrong that way costs power rather than a console.
+    let mut policy = power::Policy::Usb;
+    match power::apply(policy) {
+        Ok(()) => match power::config() {
+            Some((max, min, sleep)) => println!(
+                "pm:   {} -- {}/{} MHz, light sleep {}",
+                policy.label(),
+                min,
+                max,
+                if sleep { "on" } else { "off" }
+            ),
+            None => println!("pm:   applied {} but could not read it back", policy.label()),
+        },
+        Err(e) => println!("pm:   could not apply {} -- {e}", policy.label()),
+    }
     let mut drawn: Option<Drawn> = None;
     let mut last_draw_ms: u32 = 0;
 
@@ -544,6 +562,34 @@ fn listen(
                 // when an endpoint actually moves, which the midpoint rule makes
                 // rare: it takes a NEW extreme, and new extrema in a noisy
                 // series get rarer the longer it runs.
+                // §7: follow the supply. `is_charging` is the only signal on
+                // this board -- there is no VBUS sense -- so "not discharging"
+                // stands in for "plugged in". It is right in the case that
+                // matters and harmless in the one it is not: a full cell on USB
+                // reads flat rather than charging, and treating flat as USB
+                // merely keeps the clock up on a device that is plugged in.
+                if let Some(reading) = reading {
+                    let want = if reading.crate_centi_per_hour < 0 {
+                        power::Policy::Battery
+                    } else {
+                        power::Policy::Usb
+                    };
+                    if want != policy {
+                        match power::apply(want) {
+                            Ok(()) => {
+                                policy = want;
+                                let actual = power::config();
+                                println!(
+                                    "pm:   -> {} {:?}",
+                                    policy.label(),
+                                    actual
+                                );
+                            }
+                            Err(e) => println!("pm:   could not switch to {} -- {e}", want.label()),
+                        }
+                    }
+                }
+
                 if let Some(reading) = reading {
                     if let Some(moved) = battery::widened(range, reading.millivolts) {
                         match settings::store_battery_range(moved.0, moved.1) {

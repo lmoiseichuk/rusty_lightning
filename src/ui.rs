@@ -62,6 +62,13 @@ fn blit(frame: &mut Display7in5, image: &Bitmap, at: Point) {
     }
 }
 
+/// Who built it.
+///
+/// Written the way it was given, with `AT` rather than `@`. That is the
+/// author's own convention and it is kept literally — a one-word change here if
+/// the symbol is wanted instead.
+const AUTHOR: &str = "Leonid.Moiseichuk AT gmail.com";
+
 /// The cold-boot splash.
 ///
 /// Worth the four seconds it costs. A device that takes nearly a minute to say
@@ -88,6 +95,17 @@ pub fn logo(frame: &mut Display7in5) {
         Point::new(WIDTH as i32 - 16, HEIGHT as i32 - 22),
         MonoTextStyle::new(&FONT_9X15, INK),
         Alignment::Right,
+    )
+    .draw(frame);
+
+    // Bottom left, balancing the version on the right. The artwork is 480 px
+    // wide and centred on an 800 px panel, so it occupies x=160..640 — both
+    // bottom corners are clear of it whatever the logo contains.
+    let _ = Text::with_baseline(
+        AUTHOR,
+        Point::new(16, HEIGHT as i32 - 26),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
     )
     .draw(frame);
 }
