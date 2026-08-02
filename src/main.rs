@@ -41,11 +41,17 @@ const I2C_HZ: u32 = 100_000;
 /// only what a virgin device starts as.
 const DEFAULT_LOCATION: Location = Location::Indoor;
 
-/// Notification values, so one wait serves two sources.
+/// Notification **bits**, so one wait serves two sources.
 ///
-/// `Notification::wait` hands back the value the notifier posted, which makes a
-/// second task or a second queue unnecessary — the loop stays single-threaded
-/// and the two events cannot race each other's handling.
+/// ⚠ **Bits, not values.** `Notification` notifies with
+/// `eNotifyAction_eSetBits`, so two notifications arriving before the waiter
+/// runs are OR'd into one word. Testing `value == NOTIFY_BUTTON` therefore
+/// works right up until a strike and a press land in the same window, at which
+/// point the value is `3`, matches neither arm, and the press is silently lost.
+/// That is exactly what a button that "sometimes does nothing" looks like.
+///
+/// So both are tested as bits and both are handled — a window can legitimately
+/// contain both events.
 const NOTIFY_STRIKE: u32 = 1;
 const NOTIFY_BUTTON: u32 = 2;
 
@@ -241,7 +247,7 @@ fn main() {
     // that must not be copied here.
     if let Err(e) = unsafe {
         irq.subscribe(move || {
-            notifier.notify_and_yield(NonZeroU32::new(1).unwrap());
+            notifier.notify_and_yield(NonZeroU32::new(NOTIFY_STRIKE).unwrap());
         })
     } {
         println!("FATAL: could not subscribe to GPIO21 -- {e}");
@@ -439,6 +445,8 @@ fn listen(
     let mut level: u8 = 0;
     let mut quiet_ms: u32 = 0;
     let mut button_blanked_ms: u32 = 0;
+    // Set by a button press, cleared by the redraw it causes.
+    let mut user_acted = false;
     let mut batch = Batch::default();
     let mut batch_started = now_ms();
 
@@ -491,17 +499,20 @@ fn listen(
         let woke = notification.wait(TickType::new_millis(remaining as u64).into());
 
         if let Some(source) = woke {
-            if source.get() == NOTIFY_BUTTON {
-                if button_blanked_ms == 0 {
-                    button_blanked_ms = BUTTON_DEBOUNCE_MS;
-                    toggle_location(sensor, i2c, location);
-                }
-            } else {
-                // Anything else is the sensor. Not `== NOTIFY_STRIKE` on
-                // purpose: an unrecognised value is far more likely to be a bug
-                // in the notifier than a real third source, and dropping it
-                // silently would lose a strike.
-                let _ = NOTIFY_STRIKE;
+            let bits = source.get();
+
+            if bits & NOTIFY_BUTTON != 0 && button_blanked_ms == 0 {
+                button_blanked_ms = BUTTON_DEBOUNCE_MS;
+                toggle_location(sensor, i2c, location);
+                // A deliberate press earns an immediate repaint -- see below.
+                user_acted = true;
+            }
+
+            // Any bit that is not the button is the sensor. Not
+            // `& NOTIFY_STRIKE` on purpose: an unrecognised bit is far more
+            // likely to be a bug in a notifier than a real third source, and
+            // dropping it silently would lose a strike.
+            if bits & !NOTIFY_BUTTON != 0 {
                 collect(sensor, i2c, &mut batch, &mut totals, &mut history, now_ms() / 60_000);
             }
         }
@@ -553,7 +564,19 @@ fn listen(
             let changed = drawn.as_ref() != Some(&want);
             let stale = since_draw_s >= REDRAW_BASELINE_S;
 
-            if (changed || stale) && since_draw_s >= REDRAW_MIN_GAP_S {
+            // **A button press bypasses the rate limit.** The 30 s floor exists
+            // to stop the panel being pinned by things that change on their own;
+            // a person pressing the only button on the device is not one of
+            // those. Waiting out the floor made a press taken shortly after any
+            // other redraw appear to do nothing for half a minute, which reads
+            // as a broken button rather than as a considered refresh policy.
+            //
+            // The worst case is bounded anyway: `show` blocks for the whole
+            // refresh, so a second press during one is handled after it rather
+            // than queued on top of it.
+            let allowed = user_acted || since_draw_s >= REDRAW_MIN_GAP_S;
+
+            if (changed || stale) && allowed {
                 // Read the slow-moving values only when about to draw them.
                 // Polling a fuel gauge every second to display it every fifteen
                 // minutes is bus traffic bought for nothing.
@@ -636,6 +659,7 @@ fn listen(
                 );
                 drawn = Some(want);
                 last_draw_ms = now_ms();
+                user_acted = false;
             }
         }
 
