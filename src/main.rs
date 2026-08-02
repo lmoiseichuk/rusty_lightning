@@ -4,6 +4,7 @@
 //! the I2C bus, then bring the AS3935 up and decode its interrupts.
 
 mod as3935;
+mod defence;
 mod i2c_scan;
 mod settings;
 mod storage;
@@ -53,10 +54,6 @@ const BUTTON_DEBOUNCE_MS: u32 = 300;
 /// changing it needs a scope on the IRQ pin (§3 step 5).
 const TUNING_CAPS_PF: u8 = 120;
 
-/// §3 step 6's starting points.
-const NOISE_FLOOR_START: u8 = 0;
-const WATCHDOG_THRESHOLD: u8 = 2;
-const SPIKE_REJECTION: u8 = 0;
 
 /// How long to collect events before summarising them (§4.2's "~1 s batch").
 const BATCH_MS: u32 = 1000;
@@ -277,22 +274,61 @@ fn configure(
     FreeRtos::delay_ms(500);
 
     sensor.set_tuning_caps(i2c, TUNING_CAPS_PF)?;
-    sensor.set_noise_floor(i2c, NOISE_FLOOR_START)?;
-    sensor.set_watchdog_threshold(i2c, WATCHDOG_THRESHOLD)?;
-    sensor.set_spike_rejection(i2c, SPIKE_REJECTION)?;
+    apply_defence(sensor, i2c, 0)?;
+
+    // Read the noise floor back rather than trusting the write. Every register
+    // access here is a read-modify-write over I2C, and a bus that NACKs
+    // mid-sequence leaves the sensor running settings nobody chose -- which
+    // presents as "the auto-tune does nothing", one of the harder things to
+    // notice from the outside.
+    let readback = sensor.noise_floor(i2c)?;
+    let expected = defence::settings(0).noise_floor;
+    if readback != expected {
+        println!("as:   ⚠ noise floor read back as {readback}, expected {expected}");
+    }
 
     println!(
-        "as:   {}, {} pF, noise floor {}, watchdog {}, spike reject {}",
+        "as:   {}, {} pF, defence 0/{} ({})",
         location.label(),
         TUNING_CAPS_PF,
-        sensor.noise_floor(i2c)?,
-        WATCHDOG_THRESHOLD,
-        SPIKE_REJECTION
+        defence::MAX_LEVEL,
+        defence::rung(0)
     );
     Ok(())
 }
 
-/// The event loop: wait for an edge, decode it, and keep the noise floor tuned.
+/// Push one defence level into the sensor's three registers.
+fn apply_defence(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    level: u8,
+) -> Result<(), esp_idf_hal::sys::EspError> {
+    let settings = defence::settings(level);
+    sensor.set_noise_floor(i2c, settings.noise_floor)?;
+    sensor.set_watchdog_threshold(i2c, settings.watchdog)?;
+    sensor.set_spike_rejection(i2c, settings.spike_reject)
+}
+
+/// What one batch window heard.
+#[derive(Default)]
+struct Batch {
+    strikes: u32,
+    disturbers: u32,
+    noise: u32,
+    unknown: u32,
+}
+
+impl Batch {
+    fn heard_interference(&self) -> bool {
+        self.disturbers > 0 || self.noise > 0
+    }
+
+    fn is_empty(&self) -> bool {
+        self.strikes == 0 && !self.heard_interference() && self.unknown == 0
+    }
+}
+
+/// The event loop: batch what arrives, then tune once per batch (§4.2).
 fn listen(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
@@ -301,9 +337,11 @@ fn listen(
     notification: &Notification,
     location: &mut Location,
 ) {
-    let mut noise_floor = NOISE_FLOOR_START;
+    let mut level: u8 = 0;
     let mut quiet_ms: u32 = 0;
     let mut button_blanked_ms: u32 = 0;
+    let mut batch = Batch::default();
+    let mut batch_started = now_ms();
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -318,57 +356,85 @@ fn listen(
             return;
         }
 
-        // Wait with a timeout rather than blocking forever, because §4.2's decay
-        // is driven by the *absence* of events -- a loop that only wakes on an
-        // edge can never notice that nothing happened.
-        let woke = notification.wait(TickType::new_millis(BATCH_MS as u64).into());
+        // Wait only for what is left of the current window, so the batch closes
+        // on time however many events arrive inside it.
+        let elapsed = now_ms().saturating_sub(batch_started);
+        let remaining = BATCH_MS.saturating_sub(elapsed).max(1);
+        let woke = notification.wait(TickType::new_millis(remaining as u64).into());
 
-        let Some(source) = woke else {
-            quiet_ms += BATCH_MS;
-            button_blanked_ms = button_blanked_ms.saturating_sub(BATCH_MS);
-            if quiet_ms >= NOISE_DECAY_S * 1000 && noise_floor > 0 {
-                noise_floor -= 1;
-                quiet_ms = 0;
-                match sensor.set_noise_floor(i2c, noise_floor) {
-                    Ok(()) => println!(
-                        "tune: quiet for {NOISE_DECAY_S} s -- noise floor down to {noise_floor}"
-                    ),
-                    Err(e) => println!("tune: could not lower the noise floor -- {e}"),
+        if let Some(source) = woke {
+            if source.get() == NOTIFY_BUTTON {
+                if button_blanked_ms == 0 {
+                    button_blanked_ms = BUTTON_DEBOUNCE_MS;
+                    toggle_location(sensor, i2c, location);
                 }
+            } else {
+                // Anything else is the sensor. Not `== NOTIFY_STRIKE` on
+                // purpose: an unrecognised value is far more likely to be a bug
+                // in the notifier than a real third source, and dropping it
+                // silently would lose a strike.
+                let _ = NOTIFY_STRIKE;
+                collect(sensor, i2c, &mut batch);
             }
-            continue;
-        };
+        }
 
-        if source.get() == NOTIFY_BUTTON {
-            if button_blanked_ms > 0 {
-                continue;
-            }
-            button_blanked_ms = BUTTON_DEBOUNCE_MS;
-            toggle_location(sensor, i2c, location);
+        // Not yet at the end of the window -- go back and keep listening.
+        if now_ms().saturating_sub(batch_started) < BATCH_MS {
             continue;
         }
 
-        // Anything else is the sensor. Not `== NOTIFY_STRIKE` on purpose: a
-        // notification value this loop does not recognise is far more likely to
-        // be a bug in the notifier than a real third source, and dropping it
-        // silently would lose a strike.
-        let _ = NOTIFY_STRIKE;
-        quiet_ms = 0;
+        button_blanked_ms = button_blanked_ms.saturating_sub(BATCH_MS);
+        report(&batch);
 
-        // The datasheet's settle time, and the reason this is in the main task
-        // rather than the ISR (§3).
-        FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
-
-        let reason = match sensor.interrupt_reason(i2c) {
-            Ok(reason) => reason,
-            Err(e) => {
-                println!("irq:  reason read failed -- {e}");
-                continue;
+        // §4.2, and the asymmetry is the whole design: up by one per BATCH that
+        // heard anything -- not per event, which saturates the ladder in a
+        // second and is a counter racing the interrupt rate, not tuning.
+        if batch.heard_interference() {
+            quiet_ms = 0;
+            if level < defence::MAX_LEVEL {
+                level += 1;
+                tune(sensor, i2c, level, "up");
             }
-        };
+        } else if batch.is_empty() {
+            quiet_ms += BATCH_MS;
+            if quiet_ms >= NOISE_DECAY_S * 1000 && level > 0 {
+                quiet_ms = 0;
+                level -= 1;
+                tune(sensor, i2c, level, "down");
+            }
+        }
 
-        match reason {
-            Interrupt::Lightning => match sensor.strike(i2c) {
+        batch = Batch::default();
+        batch_started = now_ms();
+    }
+}
+
+/// Milliseconds since boot.
+fn now_ms() -> u32 {
+    (unsafe { esp_idf_hal::sys::esp_timer_get_time() } / 1000) as u32
+}
+
+/// Read one interrupt and fold it into the batch.
+fn collect(sensor: &As3935, i2c: &mut I2cDriver<'_>, batch: &mut Batch) {
+    // The datasheet's settle time, and the reason this is in the main task
+    // rather than the ISR (§3).
+    FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
+
+    let reason = match sensor.interrupt_reason(i2c) {
+        Ok(reason) => reason,
+        Err(e) => {
+            println!("irq:  reason read failed -- {e}");
+            return;
+        }
+    };
+
+    match reason {
+        Interrupt::Lightning => {
+            batch.strikes += 1;
+            // Strikes are reported individually and immediately. They are the
+            // point of the device, they are rare, and a summary line would hide
+            // the distance and energy that §4.3 needs.
+            match sensor.strike(i2c) {
                 Ok(strike) => println!(
                     "STRIKE  {:?}  energy {} (intensity {}.{:03})",
                     strike.distance,
@@ -377,31 +443,40 @@ fn listen(
                     strike.intensity_milli() % 1000
                 ),
                 Err(e) => println!("STRIKE  -- but the detail read failed: {e}"),
-            },
-
-            // §4.2 is asymmetric on purpose: quick to defend, slow to relax.
-            // Any disturber or noise event raises the floor immediately.
-            Interrupt::Disturber | Interrupt::NoiseTooHigh => {
-                let what = if reason == Interrupt::Disturber {
-                    "disturber"
-                } else {
-                    "noise too high"
-                };
-                if noise_floor < 7 {
-                    noise_floor += 1;
-                    match sensor.set_noise_floor(i2c, noise_floor) {
-                        Ok(()) => println!("tune: {what} -- noise floor up to {noise_floor}"),
-                        Err(e) => println!("tune: {what} -- could not raise the floor: {e}"),
-                    }
-                } else {
-                    println!("tune: {what} -- noise floor already at 7, cannot defend further");
-                }
-            }
-
-            Interrupt::Unknown(bits) => {
-                println!("irq:  unexpected reason 0x{bits:02x} -- read too soon after the edge?")
             }
         }
+        Interrupt::Disturber => batch.disturbers += 1,
+        Interrupt::NoiseTooHigh => batch.noise += 1,
+        Interrupt::Unknown(_) => batch.unknown += 1,
+    }
+}
+
+/// One line per batch that heard interference. Silent otherwise — a quiet
+/// device should be quiet, and the earlier per-event printing made the console
+/// unreadable in a noisy room.
+fn report(batch: &Batch) {
+    if !batch.heard_interference() && batch.unknown == 0 {
+        return;
+    }
+    println!(
+        "batch: {} disturber(s), {} noise, {} unknown",
+        batch.disturbers, batch.noise, batch.unknown
+    );
+}
+
+/// Move the defence level and say what it did in terms of the knob it is on.
+fn tune(sensor: &As3935, i2c: &mut I2cDriver<'_>, level: u8, direction: &str) {
+    let settings = defence::settings(level);
+    match apply_defence(sensor, i2c, level) {
+        Ok(()) => println!(
+            "tune: {direction} to {level}/{} -- {} (nf {}, wdth {}, srej {})",
+            defence::MAX_LEVEL,
+            defence::rung(level),
+            settings.noise_floor,
+            settings.watchdog,
+            settings.spike_reject
+        ),
+        Err(e) => println!("tune: could not move to level {level} -- {e}"),
     }
 }
 
