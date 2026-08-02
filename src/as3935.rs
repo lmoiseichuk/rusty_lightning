@@ -380,6 +380,11 @@ impl As3935 {
 
     /// Discard the accumulated distance estimate.
     ///
+    /// Not on the wake path yet: it belongs to §4.3's storm-end detection,
+    /// which is unbuilt. Kept rather than deleted because it is a complete,
+    /// correct operation waiting for a caller — not a stub standing in for one.
+    #[allow(dead_code)]
+    ///
     /// The AS3935 estimates distance from statistics gathered over a *storm*,
     /// not from a single strike — so the figure is only meaningful while the
     /// strikes it was built from belong to the same weather. When a storm has

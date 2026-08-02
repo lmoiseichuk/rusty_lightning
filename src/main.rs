@@ -4,11 +4,13 @@
 //! the I2C bus, then bring the AS3935 up and decode its interrupts.
 
 mod as3935;
+mod battery;
 mod display;
 mod defence;
 mod i2c_scan;
 mod settings;
 mod storage;
+mod system;
 mod ui;
 
 use std::num::NonZeroU32;
@@ -181,6 +183,27 @@ fn main() {
     };
     println!("as:   found at 0x{:02x}", sensor.address());
 
+    // §2.1's fuel gauge. Absence is not fatal -- the device detects lightning
+    // whether or not it can say how much charge is left, and on USB it is not
+    // even an interesting question.
+    let gauge = match battery::Max17048::find(&mut i2c) {
+        Some((gauge, version)) => {
+            println!("bat:  MAX17048 at 0x36, version 0x{version:04x}");
+            Some(gauge)
+        }
+        None => {
+            println!("bat:  no fuel gauge answered at 0x36 -- running without a battery readout");
+            None
+        }
+    };
+
+    // Held open rather than installed per read: enabling the sensor takes time
+    // to settle, and this value moves slowly.
+    let die_temperature = system::DieTemperature::new();
+    if die_temperature.is_none() {
+        println!("sys:  die temperature sensor unavailable");
+    }
+
     // §4.1: NVS is the source of truth, the constant is only the fallback.
     let mut location = match settings::location() {
         Some(stored) => stored,
@@ -300,6 +323,8 @@ fn main() {
         panel.as_mut(),
         antenna_khz,
         irq_confirmed,
+        gauge.as_ref(),
+        die_temperature.as_ref(),
     );
 }
 
@@ -322,6 +347,12 @@ fn configure(
     sensor.set_tuning_caps(i2c, TUNING_CAPS_PF)?;
     apply_defence(sensor, i2c, 0)?;
 
+    // Explicit rather than relying on the reset default. One strike reports
+    // immediately; the alternatives make the sensor wait for a pattern before
+    // saying anything, and the first four strikes of a real storm are exactly
+    // the ones an early-warning device cannot afford to sit on.
+    let min_strikes = sensor.set_min_strikes(i2c, 1)?;
+
     // Read the noise floor back rather than trusting the write. Every register
     // access here is a read-modify-write over I2C, and a bus that NACKs
     // mid-sequence leaves the sensor running settings nobody chose -- which
@@ -334,11 +365,12 @@ fn configure(
     }
 
     println!(
-        "as:   {}, {} pF, defence 0/{} ({})",
+        "as:   {}, {} pF, defence 0/{} ({}), report after {} strike(s)",
         location.label(),
         TUNING_CAPS_PF,
         defence::MAX_LEVEL,
-        defence::rung(0)
+        defence::rung(0),
+        min_strikes
     );
     Ok(())
 }
@@ -385,6 +417,8 @@ fn listen(
     mut panel: Option<&mut display::Panel<'_>>,
     antenna_khz: u32,
     irq_confirmed: bool,
+    gauge: Option<&battery::Max17048>,
+    die_temperature: Option<&system::DieTemperature>,
 ) {
     let mut level: u8 = 0;
     let mut quiet_ms: u32 = 0;
@@ -468,18 +502,25 @@ fn listen(
         if let Some(panel) = panel.as_deref_mut() {
             let want = Drawn {
                 strikes: totals.strikes,
-                defence: level,
-                last_strike: totals.last_strike.map(|(d, i)| (d, i)),
+                last_strike: totals.last_strike,
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
             let stale = since_draw_s >= REDRAW_BASELINE_S;
 
             if (changed || stale) && since_draw_s >= REDRAW_MIN_GAP_S {
+                // Read the slow-moving values only when about to draw them.
+                // Polling a fuel gauge every second to display it every fifteen
+                // minutes is bus traffic bought for nothing.
+                let reading = gauge.and_then(|g| g.read(i2c).ok());
+
                 redraw(
                     panel,
                     &ui::Status {
                         location: *location,
+                        health: system::health(die_temperature),
+                        battery: reading,
+                        uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
                         irq_confirmed,
                         defence_level: level,
@@ -511,16 +552,23 @@ struct Totals {
 
 /// The subset of state the screen is redrawn for.
 ///
-/// **The disturber count is deliberately absent.** In a noisy room it changes
-/// every second, and including it would mean a 3.9 s refresh every 30 s
-/// forever — the panel would never rest and the count would still be wrong by
-/// the time it appeared. It rides the baseline redraw instead, which is the
-/// same reasoning that kept the pack voltage out of the moisture project's
-/// refresh decision.
+/// **Only strikes vote.** Everything else on the screen rides the baseline
+/// redraw, and that is a deliberate narrowing rather than an oversight:
+///
+/// * the **disturber count** moves every second in a noisy room;
+/// * the **defence level** oscillates across a rung whenever the environment
+///   sits near a threshold — measured here, 0→1→0 inside ninety seconds, which
+///   at a 30 s floor is a 3.9 s refresh every half minute, forever;
+/// * **battery, temperature and heap** move far slower than the baseline.
+///
+/// Each of those would pin the panel busy to report something nobody is waiting
+/// on. A strike is the one event this device exists to announce, and it is the
+/// one thing worth spending four seconds of panel time on the moment it
+/// happens. Same conclusion the moisture project reached about its pack
+/// voltage, arrived at from the opposite direction.
 #[derive(PartialEq)]
 struct Drawn {
     strikes: u32,
-    defence: u8,
     last_strike: Option<(as3935::Distance, u32)>,
 }
 
