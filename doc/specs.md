@@ -1,0 +1,364 @@
+# Lightning-Detector Terminal — Specification
+
+A battery-capable e-paper terminal that detects lightning with an AS3935 sensor, auto-tunes its
+sensitivity, tracks a storm's distance / intensity / score and trend, estimates arrival time, logs
+every strike to a CSV database, and shows the current situation on a 7.5" e-paper display —
+refreshing only when something meaningful changes.
+
+Firmware target: **Rust (`esp-idf-hal`, std)** on an **ESP32-C3**. A working MicroPython reference
+(`DFRobot_AS3935_Lib.py` + `deep_demo.py`) defines the sensor behaviour to reproduce.
+
+---
+
+## 1. Hardware
+
+- **Compute + display:** Seeed **XIAO 7.5" ePaper Panel** — driver board hosting a **XIAO ESP32-C3**
+  (RISC-V), a **7.5" 800×480 monochrome e-paper** (**UC8179**, "7.5in **V2**"), and a **2000 mAh**
+  battery with onboard charging. [Panel](https://www.seeedstudio.com/XIAO-7-5-ePaper-Panel-p-6416.html)
+  · [wiki](https://wiki.seeedstudio.com/xiao_075inch_epaper_panel/) ·
+  [Arduino](https://wiki.seeedstudio.com/xiao_075inch_epaper_panel_arduino/) ·
+  [ESPHome](https://wiki.seeedstudio.com/xiao_075inch_epaper_panel_esphome/) ·
+  [driver-board schematic (PDF)](https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf).
+- **Sensor:** DFRobot **Gravity Lightning Sensor (SEN0290)** = **AS3935**, I2C (address **0x03**) +
+  active-high IRQ. [wiki](https://wiki.dfrobot.com/Gravity:%20Lightning%20Sensor%20SKU:%20SEN0290).
+
+### Firmware stack
+
+ESP32-C3 is RISC-V → the **stock `rustup` target `riscv32imc-esp-espidf`** (no Xtensa/`espup`).
+Scaffold with `esp-idf-template`; use `esp-idf-hal` + `esp-idf-svc`. Console + flashing over the
+XIAO's **USB-C** (native USB-serial-JTAG), so UART0 (GPIO20/21) is free for I/O.
+
+**Chip choice — stay on C3.** A XIAO ESP32-C6 was considered but gives no benefit here: the display
+consumes the analog pads (D0–D3) on *both* chips, and the pads left free are digital-only on both —
+so a C6 frees **no ADC pin** either. The C6 also has a **boot/reset-button conflict on this panel**
+([forum](https://forum.seeedstudio.com/t/seeed-studio-xiao-7-5-epaper-panel-battery-status/292932/6))
+plus GPIO9 strapping quirks. Battery uses an **I2C monitor** (§2.1) that needs no ADC pin, so the
+chip choice is irrelevant to it.
+
+---
+
+## 2. Pin map
+
+**Display pins are fixed by the driver board** (from the Seeed ESPHome/Arduino configs):
+
+| Display signal | GPIO | Note |
+|---|---|---|
+| SPI SCK | GPIO8 | |
+| SPI MOSI | GPIO10 | |
+| CS | GPIO3 | |
+| DC | GPIO5 | |
+| RST | GPIO2 | |
+| BUSY | GPIO4 | **inverted logic** on this board |
+
+That consumes GPIO 2, 3, 4, 5, 8, 10. **Free XIAO pads → the AS3935:**
+
+| Sensor signal | XIAO pad | GPIO | Note |
+|---|---|---|---|
+| I2C SDA | D4 / SDA | **GPIO6** | XIAO native I2C, free |
+| I2C SCL | D5 / SCL | **GPIO7** | XIAO native I2C, free |
+| IRQ | D6 / RX | **GPIO21** | rising-edge input; UART0 pin, free (console is on USB-C) |
+| 3V3 / GND | — | — | AS3935 at 3.3 V |
+
+- **Do not** put the IRQ on **GPIO9 (D9)**: it's the boot strap pin and the AS3935 INT idles **low**
+  (low at reset → download mode → won't boot). GPIO20 (D7) is an acceptable alternate for the IRQ.
+- **No battery monitoring on the board, and no free C3 ADC pin.** The board has no battery-sense
+  circuit ([forum](https://forum.seeedstudio.com/t/seeed-studio-xiao-7-5-epaper-panel-battery-status/292932)),
+  and the C3's only ADC pads (A0–A3 = GPIO2–5) are all consumed by the display (ADC2 is also unusable
+  with WiFi on). So a divider-into-the-C3-ADC **cannot** be wired here — battery sensing must go on
+  the **shared I2C bus** (§2.1).
+
+### 2.1 Battery monitoring — Adafruit MAX17048
+
+A **MAX17048** LiPo fuel gauge on the **shared I2C bus** (GPIO6/7, addr **0x36** ≠ AS3935 0x03) — no
+extra MCU pins, no ADC needed. It self-calibrates (ModelGauge) on the cell it powers from and reports:
+
+- **`VCELL` (0x02)** — cell voltage;
+- **`SOC` (0x04)** — state of charge **%** (no divider/tuning);
+- **`CRATE` (0x16)** — discharge rate %/hr → **time-to-discharge ≈ SOC / |CRATE|** (a real figure).
+
+Two facts about the [Adafruit board](https://learn.adafruit.com/adafruit-max17048-lipoly-liion-fuel-gauge-and-battery-monitor/pinouts)
+(#5580) shape the wiring:
+
+- **Powered by the battery, not by VIN** — the chip runs off the cell in its **JST**. The board has
+  **two equivalent JST ports** (battery on one, load on the other → **inline pass-through**) and **two
+  STEMMA QT** ports for I2C chaining.
+- **SDA/SCL pull-ups reference VIN, and there's no level shifter** → **tie VIN → 3.3 V** (XIAO 3V3) so
+  the bus stays **3.3 V-safe** for the C3. Do *not* put 5 V or the battery on VIN.
+
+**Battery hookup — parallel is enough.** The MAX17048 measures **voltage only** (no current sense), so
+routing the load *through* it gains nothing. Simplest: solder 2 wires from the panel's `BAT+`/`BAT-`
+to a JST, plug it into **one** port, and leave the other empty — the gauge reads the cell in parallel
+(µA draw). *(Inline pass-through — battery → port A, port B → panel — also works, just isn't needed;
+no JST-JST harness required.)* Mind JST **polarity** (BAT+→+, BAT-→−; reversing can damage the gauge);
+find `BAT+`/`BAT-` on the
+[driver-board schematic](https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf)
+(`BAT-` = board GND).
+
+**Minimal-wire cascade** (your goal): one shared **4-wire I2C trunk** (3V3, GND, SDA=GPIO6, SCL=GPIO7)
++ **one IRQ wire** — mostly plug-in cables, not solder:
+
+```
+XIAO C3 ──5 solder wires──►  3V3 · GND · GPIO6(SDA) · GPIO7(SCL) · GPIO20(IRQ)
+                              └───────── I2C trunk (first four) ─────────┘
+   STEMMA QT cable →  MAX17048  ──STEMMA-to-Gravity cable──►  AS3935
+                      (battery via JST;                       (VCC = 3V3;
+                       VIN = 3V3 → pull-ups)                    IRQ → GPIO20)
+```
+
+- **Solder only 5 wires** off the XIAO (3V3, GND, GPIO6, GPIO7, GPIO20); chain the two boards with a
+  **STEMMA QT (Qwiic) cable** — use a **Qwiic-to-Gravity** adapter for the DFRobot AS3935 (or wire its
+  4-pin Gravity header onto the trunk). The gauge's **2nd STEMMA port is the chain-through**.
+- Both boards may carry their own I2C pull-ups; parallel pull-ups only lower the effective resistance —
+  fine. The gauge's `INT` / `QSTART` pads are unused.
+- **Rust:** the `max17048` crate over `esp-idf-hal` I2C, or trivial register reads (0x02 / 0x04 / 0x16).
+
+**Chosen build:** solder a **Gravity→QT** adapter on the AS3935 → QT cable into the MAX17048 → solder
+the gauge's **second QT** to the XIAO's **SDA(GPIO6) / SCL(GPIO7) / 3V3 / GND**. Two things are *not*
+on the QT bus and need their own connection: the **AS3935 IRQ → GPIO20** (one wire; the Gravity 4-pin
+is I2C-only), and the **battery → MAX17048 JST** (from the panel `BAT+`/`BAT-`).
+
+#### Substituting a MAX17043
+
+A **MAX17043** works as a replacement — same family, same **0x36** address, same 2.5–4.5 V range, same
+self-powered-from-the-cell wiring — but the firmware is **not** byte-identical. Three differences:
+
+| | MAX17043 | MAX17048 |
+|---|---|---|
+| `VCELL` (0x02) | **1.25 mV**/LSB in the **top 12 bits** → `mV = (raw >> 4) * 1.25` | **78.125 µV**/LSB, full 16 bits → `mV = raw * 0.078125` |
+| `SOC` (0x04) | %·256, identical | %·256 |
+| `CRATE` (0x16) | **absent** | 0.208 %/hr per LSB (signed) |
+| Registers | 0x02 / 0x04 / 0x06 / 0x08 / 0x0C / 0xFE only | + `HIBRT` 0x0A, `VALRT` 0x14, `CRATE` 0x16, `VRESET/ID` 0x18, `STATUS` 0x1A, `TABLE` 0x40–0x7F |
+| Quiescent | 50 µA typ (75 µA max); sleep stops gauging | **23 µA** active, **3 µA** hibernate (auto) |
+| Alerts | low-SOC threshold only (`ATHD`) | + voltage window, 1 % SOC step, battery-swap reset |
+
+Impact on this design:
+
+1. **Time-to-discharge must be derived in firmware** — with no `CRATE`, keep the previous `(timestamp,
+   SOC)` sample and compute `%/hr` from the slope over a ≥15 min window (EMA-smooth it; a 1-sample
+   delta is noise). The status bar already redraws on the hourly cadence, so a slow estimator is fine.
+2. **Different `VCELL` maths** — shifting by 4 and scaling by 1.25 mV. Getting this wrong yields a
+   plausible-but-wrong voltage, so gate it behind a `VERSION` (0x08) read or a build-time constant.
+3. **~2× the idle draw** — 50 µA vs 23 µA ≈ 1.2 mAh/day on the 2000 mAh pack (**0.06 %/day**).
+   Irrelevant next to the e-paper refreshes; not a reason to choose either part.
+
+Rust drivers cover both: [`max170xx`](https://crates.io/crates/max170xx) exposes distinct `Max17043` /
+`Max17048` types, so the scaling is handled for you — just instantiate the right one.
+
+**Verdict:** stay on **MAX17048** (`CRATE` for free, lower draw, better ModelGauge). The
+MAX17043 is a fine fallback if one is already on hand — cost is ~15 lines of slope estimator. Note the
+Adafruit-board specifics above (JST power, `VIN` as pull-up reference) are **board**-specific, not
+chip-specific: re-check power and pull-up arrangement on whatever MAX17043 breakout you use.
+
+**Fallback (only if no gauge is on hand)** — your 2R + 1C divider into an **ADS1115** I2C ADC
+(addr **0x48**), same bus; more parts, needs calibration, no SoC %:
+
+```
+ BAT+ ──[ R1 ]──┬──[ R2 ]── GND        R1 = R2 (1:2 → Vbat/2); 1 % metal film,
+                │                        e.g. 2× 200 kΩ–1 MΩ (higher = less drain)
+                ├───────────► ADS1115 A0
+                │
+              [100 nF]                   shunt tap → GND (reservoir/filter)
+                │
+               GND
+     ADS1115:  VDD→3V3  GND→BAT-  SDA→GPIO6  SCL→GPIO7  ADDR→GND (0x48)
+```
+The ADS1115 has a wide input range (no ~2.45 V ceiling like the C3), so the ratio is flexible;
+calibrate once against a multimeter.
+
+---
+
+## 3. Sensor: AS3935
+
+Register access and semantics per the reference driver (`DFRobot_AS3935_Lib.py`). Init sequence
+(from `deep_demo.py`):
+
+1. **Detect:** probe I2C **0x01/0x02/0x03**, `reset()` (write `0x3C=0x96`) until one ACKs (this unit
+   is **0x03**).
+2. `powerUp()` — clear PWD (reg 0x00 bit0) + **RCO calibration** (`0x3D=0x96`, then toggle `DISP_SRCO`
+   in reg 0x08).
+3. **Indoor/outdoor** — reg 0x00 mask 0x3E → `0x24` indoor / `0x1C` outdoor.
+4. `disturberEn()` (reg 0x03 `MASK_DIST`), `setIrqOutputSource(0)`, wait 500 ms.
+5. **Antenna tuning** `setTuningCaps(120)` (reg 0x08, 120 pF default; scope-tune only if strikes read
+   wrong — the reference leaves the LCO-on-IRQ tuning path commented).
+6. `setNoiseFloorLv1(0)` start, `setWatchdogThreshold(2)`, `setSpikeRejection(0)`.
+
+**IRQ reason** (reg 0x03 low nibble, read ≥3 ms after the edge; the read clears it): `0x08` =
+lightning, `0x04` = disturber, `0x01` = noise-too-high.
+On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x1F)<<16 | 0x05<<8 |
+0x04`, then `/16777` for the "intensity" figure). **Score = intensity / max(distance, 0.1 km)**.
+
+> **IRQ handling in Rust:** keep the GPIO ISR minimal — it only **notifies** (flag / `Notification` /
+> channel). The **main task** does the ≥3 ms wait, the I2C register reads, and event batching. (The
+> MicroPython reference does I2C inside the callback; that pattern must not be copied on esp-idf.)
+
+---
+
+## 4. Behaviour
+
+### 4.1 Indoor/outdoor
+Set the AFE gain at startup (`0x24` indoor / `0x1C` outdoor). Selectable via config.
+
+### 4.2 Noise-floor auto-tune (`NF_LEV`, clamped [0, 7])
+Asymmetric, per the reference: **any** disturber/noise IRQ in the ~1 s processing batch → **+1
+immediately**; **60 s with no events** → **−1**. Quick to defend, slow to relax.
+
+### 4.3 Storm tracking
+Per lightning strike collect `distance`, `intensity`, `score`. Estimate the situation from the trend:
+coming in (distance ↓), moving out (distance ↑), stronger (same distance, higher intensity), weaker,
+**aggravating** (closer *and* higher score), **fading** (farther, lower score).
+
+- **Thresholds are placeholders to calibrate in the final enclosure** — breadboard vs. enclosed
+  sensitivity differs, so expose the band/hysteresis limits as config constants and tune on-site
+  (the auto noise-floor helps absorb some of this).
+- A single strike is noisy — declare a trend only over a small **window of the last N strikes**
+  (N tunable), not strike-to-strike.
+- Reference-data scale (for chart bounds): observed distance ~6 km, intensity ~3–7, score ~0.5–1.2;
+  score rises sharply as distance → 0, so the **score chart should auto-scale** (or clamp/log the top).
+
+### 4.4 ETA
+Start with a **linear** estimate from the distance trend over the recent window (Δdistance/Δtime).
+Refine later from the logged database once enough storms are recorded.
+
+---
+
+## 5. Data logging (CSV) + time
+
+- **Format: a single CSV file** on the on-flash filesystem (LittleFS/FAT via `esp-idf-svc`) — simpler
+  than a binary store and directly inspectable. **Fields: `timestamp, distance_km, intensity`**
+  (score is derived, not stored). A header row denotes an empty (0-record) file.
+- **Capacity / retention:** ~2 MB filesystem. At ~30 bytes/record that's **~70 000 records** —
+  effectively unbounded for this use. Track the record count (from a maintained counter or
+  `file_size − header`), and estimate remaining capacity as `free_bytes / record_bytes`. When near
+  full, rotate (rename/archive) or overwrite oldest — policy TBD.
+- **On boot**, reload recent records to rebuild the score chart and storm trend; the CSV is the
+  source of truth, the in-RAM chart buffer is the live working copy.
+- **Time = "fake NTP": persisted epoch + uptime.** Keep the last-known wall-clock (epoch) in NVS; on
+  boot `now = nvs_epoch + uptime`, so time is monotonic from the last known point with **no hard
+  network dependency**. When a real **SNTP** sync succeeds (brief WiFi up → sync → WiFi down),
+  correct `now` and **rewrite the NVS epoch**. Drift between syncs is fine for strike logging.
+- **WiFi credentials in NVS** (SSID/password). Provision either by a **first-boot USB-serial console
+  prompt** (esp-idf std can read stdin over USB-serial-JTAG) writing to NVS, or by pre-seeding NVS.
+  Keep creds out of the source and out of the published CSV.
+
+---
+
+## 6. Display (UC8179, 7.5" V2)
+
+- Rust driver: **`epd-waveshare`** `Epd7in5_V2` (UC8179, 800×480) + `embedded-graphics`. Mind the
+  board's **inverted BUSY**. The [micropython-waveshare 7.5-V2 driver](https://github.com/mcauser/micropython-waveshare-epaper/pull/12/changes/b5d20249d858a0a84629b9b3004a9779b746e76f)
+  is a useful command-sequence reference if the crate needs coaxing.
+- **Refresh policy:** spec cadence is **5 s**, but gate on the panel: never refresh while **BUSY**,
+  and only when a value actually **changed**. A full 800×480 refresh is ~2–5 s; use **partial
+  refresh if this panel/driver supports it reliably** (uncertain on 7.5" V2 — verify), otherwise a
+  change-gated full refresh, plus a periodic (e.g. hourly) full refresh as a baseline / de-ghost.
+- 800×480×1bpp = 48 KB framebuffer — fits the C3's SRAM easily.
+### Layout (three zones, top → bottom)
+
+1. **Status bar** — clock, **recorded flashes / capacity** (e.g. `1 234 / ~70 000`), and battery
+   (voltage · % · time-to-discharge) from the **MAX17048** (§2.1). Time-to-discharge = `SOC / |CRATE|`;
+   if a MAX17043 is fitted instead, it comes from the firmware SOC-slope estimator (§2.1).
+2. **Situation zone** — the storm state (calm / coming in / moving out / stronger / weaker /
+   aggravating / fading) with a mood **icon** (🙂 / 🙁 / ⚡). Reserve space for later stats
+   (nearest & strongest strike; counts per day / week / month).
+3. **Score chart** — **last 12 h**, bucketed every **15 min** → **48 buckets** across the 800 px
+   width (~16 px each). Auto-scale the y-axis (score spikes as distance → 0).
+
+---
+
+## 7. Power
+
+Usually **USB-powered**, occasionally portable (2000 mAh). Power saving is a *nice-to-have*, not a
+primary goal. Model: mostly-on when on USB; **light-sleep between events with IRQ + timer wake** when
+on battery; the e-paper holds its image with no power, so the screen can persist while the MCU
+sleeps. Keep WiFi off except for the brief NTP sync.
+
+---
+
+## 8. Reference implementation
+
+`DFRobot_AS3935_Lib.py` (register driver) and `deep_demo.py` (address auto-detect, reworked IRQ
+handler, 1 s event batching + stats, score reporting, asymmetric noise-tune) are the behavioural
+spec for §3–§4. The display/UI is designed fresh (no port from the MicroPython UI).
+
+---
+
+## 9. Open items to verify
+
+1. **Battery** — *resolved:* **MAX17048 fuel gauge** on the shared I2C bus (§2.1); no ADC needed.
+   Only open bit: locate `BAT+`/`BAT-` on the schematic to tap the raw cell.
+2. **Confirm display pins + BUSY polarity** against the schematic / Seeed_GFX before first bring-up.
+3. **Partial-refresh support** on this 7.5" V2 panel — decide full-only vs. partial.
+4. **WiFi provisioning flow** (USB-console vs. pre-seeded NVS) and NTP sync cadence.
+5. **DB retention policy** at capacity (rotate vs. overwrite-oldest).
+
+---
+
+## 10. Build order
+
+1. `esp-idf-template` C3 project → blink + serial over USB-C.
+2. I2C on GPIO6/7 → scan → confirm AS3935 @ 0x03; port the register driver.
+3. Wire IRQ on GPIO20 (ISR-notifies pattern); decode reason → distance/intensity on lightning.
+4. Port storm logic + noise-floor auto-tune (pure logic, no HW).
+5. CSV logging on the filesystem; WiFi + SNTP time; reload-on-boot.
+6. e-paper bring-up (`epd-waveshare` 7.5-V2) → UI, change-gated refresh.
+7. Battery gauge **if** the schematic allows; light-sleep on battery.
+
+---
+
+## Appendix A — Rust toolchain setup for the ESP32-C3
+
+The C3 is RISC-V, so you use **stock Rust** — **no `espup`/Xtensa toolchain**. (Linux/Debian shown;
+macOS notes inline.)
+
+**1. System dependencies** (bindgen needs clang; the ESP-IDF build needs the rest):
+```bash
+sudo apt update && sudo apt install -y git wget flex bison gperf \
+  python3 python3-pip python3-venv cmake ninja-build ccache \
+  libffi-dev libssl-dev dfu-util libusb-1.0-0 clang libclang-dev pkg-config
+# macOS:  xcode-select --install ; brew install cmake ninja dfu-util libusb
+```
+
+**2. Rust + build tools:**
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # install rustup
+. "$HOME/.cargo/env"
+cargo install cargo-generate ldproxy espflash cargo-espflash     # scaffolder, linker shim, flasher
+```
+`espflash` flashes and opens the serial monitor; `ldproxy` is the linker wrapper the build calls.
+
+**3. Serial access (Linux):**
+```bash
+sudo usermod -aG dialout $USER    # then log out / back in
+```
+
+**4. Scaffold the project** (interactive prompts):
+```bash
+cargo generate esp-rs/esp-idf-template cargo
+#   name : lightning-terminal
+#   MCU  : esp32c3
+#   std  : yes (default)      ESP-IDF : v5.x
+```
+This writes the correct `.cargo/config.toml` (target **`riscv32imc-esp-espidf`**, runner
+`espflash flash --monitor`), a `rust-toolchain.toml` that pins the right channel automatically,
+`sdkconfig.defaults`, and a hello-world `main.rs`. You do **not** need your existing ESP-IDF —
+`esp-idf-sys` manages its own copy.
+
+**5. Build, flash, monitor** (C3 plugged in via USB-C):
+```bash
+cd lightning-terminal
+cargo run          # = build + flash + serial monitor
+```
+The **first build is slow** — it downloads and builds ESP-IDF once (several minutes); subsequent
+builds are quick. If the port isn't auto-detected, add `--port /dev/ttyACM0`.
+
+**6. Crates you'll pull in as you go** (check crates.io for current versions — pin what the template
+suggests):
+```toml
+esp-idf-hal       = "0.44"   # I2C, GPIO, SPI, interrupts, sleep
+esp-idf-svc       = "0.49"   # WiFi, SNTP, NVS, filesystem (LittleFS/FAT)
+embedded-graphics = "0.8"
+epd-waveshare     = "0.6"    # 7.5" V2 (UC8179)
+```
+
+The whole loop is: `cargo generate` once, then `cargo run` to iterate — same rhythm as
+`arduino-cli compile/upload`, just `cargo run` does both.
