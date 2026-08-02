@@ -4,10 +4,12 @@
 //! the I2C bus, then bring the AS3935 up and decode its interrupts.
 
 mod as3935;
+mod display;
 mod defence;
 mod i2c_scan;
 mod settings;
 mod storage;
+mod ui;
 
 use std::num::NonZeroU32;
 
@@ -60,6 +62,22 @@ const BATCH_MS: u32 = 1000;
 
 /// Quiet time before the noise floor relaxes by one (§4.2).
 const NOISE_DECAY_S: u32 = 60;
+
+/// Shortest gap between panel refreshes.
+///
+/// **A full 800×480 refresh measured 3.9 s on this panel.** §6's nominal 5 s
+/// cadence would leave it busy roughly 80 % of the time — the device would
+/// spend its life redrawing, and during a storm every refresh would be stale
+/// before it finished. So the screen is change-gated with a floor under it,
+/// and this is the floor.
+const REDRAW_MIN_GAP_S: u32 = 30;
+
+/// Redraw even if nothing tracked has changed, at most this often.
+///
+/// The backstop for everything the change test deliberately ignores — the
+/// disturber count, and later the clock and battery. Without it those fields
+/// would be correct only at boot.
+const REDRAW_BASELINE_S: u32 = 15 * 60;
 
 fn main() {
     esp_idf_hal::sys::link_patches();
@@ -240,11 +258,36 @@ fn main() {
     }
 
     // Prove the wire before trusting silence. See `antenna_self_test`.
-    antenna_self_test(&sensor, &mut i2c, &irq);
+    let (irq_confirmed, antenna_khz) = antenna_self_test(&sensor, &mut i2c, &irq);
 
     println!("irq:  GPIO21 (D6), rising edge, pulldown");
     println!("btn:  GPIO9 (BOOT), press to switch indoor/outdoor");
     println!("as:   running {}", location.label());
+
+    // --- the panel --------------------------------------------------------
+    let mut panel = match display::Panel::new(display::Pins {
+        spi: peripherals.spi2,
+        sclk: peripherals.pins.gpio8,
+        mosi: peripherals.pins.gpio10,
+        cs: peripherals.pins.gpio3,
+        dc: peripherals.pins.gpio5,
+        rst: peripherals.pins.gpio2,
+        busy: peripherals.pins.gpio4,
+    }) {
+        Ok(panel) => {
+            println!("epd:  UC8179 800x480 up");
+            println!("epd:  BUSY pad (GPIO4) is {}", display::Panel::busy_verdict());
+            Some(panel)
+        }
+        Err(e) => {
+            // Not fatal. A detector with no screen still detects, still logs,
+            // and still reports over the console -- and saying so is more use
+            // than halting.
+            println!("epd:  INIT FAILED -- {e} (carrying on without a screen)");
+            None
+        }
+    };
+
     println!("--- listening ---");
 
     listen(
@@ -254,6 +297,9 @@ fn main() {
         &mut button,
         &notification,
         &mut location,
+        panel.as_mut(),
+        antenna_khz,
+        irq_confirmed,
     );
 }
 
@@ -336,12 +382,21 @@ fn listen(
     button: &mut PinDriver<'_, esp_idf_hal::gpio::Input>,
     notification: &Notification,
     location: &mut Location,
+    mut panel: Option<&mut display::Panel<'_>>,
+    antenna_khz: u32,
+    irq_confirmed: bool,
 ) {
     let mut level: u8 = 0;
     let mut quiet_ms: u32 = 0;
     let mut button_blanked_ms: u32 = 0;
     let mut batch = Batch::default();
     let mut batch_started = now_ms();
+
+    // Running totals, and what the glass currently shows. The screen is redrawn
+    // when the two disagree -- never on a timer alone.
+    let mut totals = Totals::default();
+    let mut drawn: Option<Drawn> = None;
+    let mut last_draw_ms: u32 = 0;
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -374,7 +429,7 @@ fn listen(
                 // in the notifier than a real third source, and dropping it
                 // silently would lose a strike.
                 let _ = NOTIFY_STRIKE;
-                collect(sensor, i2c, &mut batch);
+                collect(sensor, i2c, &mut batch, &mut totals);
             }
         }
 
@@ -404,8 +459,85 @@ fn listen(
             }
         }
 
+        // --- the screen ---------------------------------------------------
+        //
+        // Change-gated, with a floor and a backstop. The panel takes ~3.9 s per
+        // refresh, so "redraw when anything might have changed" is not an option
+        // -- it would be busy most of the time and every image would be stale
+        // before it finished.
+        if let Some(panel) = panel.as_deref_mut() {
+            let want = Drawn {
+                strikes: totals.strikes,
+                defence: level,
+                last_strike: totals.last_strike.map(|(d, i)| (d, i)),
+            };
+            let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
+            let changed = drawn.as_ref() != Some(&want);
+            let stale = since_draw_s >= REDRAW_BASELINE_S;
+
+            if (changed || stale) && since_draw_s >= REDRAW_MIN_GAP_S {
+                redraw(
+                    panel,
+                    &ui::Status {
+                        location: *location,
+                        antenna_khz,
+                        irq_confirmed,
+                        defence_level: level,
+                        defence_max: defence::MAX_LEVEL,
+                        defence_rung: defence::rung(level),
+                        strikes_total: totals.strikes,
+                        last_strike: totals.last_strike,
+                        disturbers_total: totals.disturbers,
+                    },
+                    if changed { "content changed" } else { "baseline" },
+                );
+                drawn = Some(want);
+                last_draw_ms = now_ms();
+            }
+        }
+
         batch = Batch::default();
         batch_started = now_ms();
+    }
+}
+
+/// Everything counted since boot.
+#[derive(Default)]
+struct Totals {
+    strikes: u32,
+    disturbers: u32,
+    last_strike: Option<(as3935::Distance, u32)>,
+}
+
+/// The subset of state the screen is redrawn for.
+///
+/// **The disturber count is deliberately absent.** In a noisy room it changes
+/// every second, and including it would mean a 3.9 s refresh every 30 s
+/// forever — the panel would never rest and the count would still be wrong by
+/// the time it appeared. It rides the baseline redraw instead, which is the
+/// same reasoning that kept the pack voltage out of the moisture project's
+/// refresh decision.
+#[derive(PartialEq)]
+struct Drawn {
+    strikes: u32,
+    defence: u8,
+    last_strike: Option<(as3935::Distance, u32)>,
+}
+
+/// Render and push one status screen.
+fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status<'_>, why: &str) {
+    let mut frame = display::Panel::frame();
+    ui::status(&mut frame, status);
+
+    let started = now_ms();
+    match panel.show(&frame) {
+        Ok(0) => println!("epd:  *** sent, but BUSY never fell -- nothing was drawn ***"),
+        Ok(busy_ms) => println!(
+            "epd:  redrawn ({why}) -- {} ms total, panel busy {} ms",
+            now_ms().saturating_sub(started),
+            busy_ms
+        ),
+        Err(e) => println!("epd:  draw FAILED -- {e}"),
     }
 }
 
@@ -415,7 +547,12 @@ fn now_ms() -> u32 {
 }
 
 /// Read one interrupt and fold it into the batch.
-fn collect(sensor: &As3935, i2c: &mut I2cDriver<'_>, batch: &mut Batch) {
+fn collect(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    batch: &mut Batch,
+    totals: &mut Totals,
+) {
     // The datasheet's settle time, and the reason this is in the main task
     // rather than the ISR (§3).
     FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
@@ -431,21 +568,28 @@ fn collect(sensor: &As3935, i2c: &mut I2cDriver<'_>, batch: &mut Batch) {
     match reason {
         Interrupt::Lightning => {
             batch.strikes += 1;
+            totals.strikes += 1;
             // Strikes are reported individually and immediately. They are the
             // point of the device, they are rare, and a summary line would hide
             // the distance and energy that §4.3 needs.
             match sensor.strike(i2c) {
-                Ok(strike) => println!(
-                    "STRIKE  {:?}  energy {} (intensity {}.{:03})",
-                    strike.distance,
-                    strike.energy_raw,
-                    strike.intensity_milli() / 1000,
-                    strike.intensity_milli() % 1000
-                ),
+                Ok(strike) => {
+                    totals.last_strike = Some((strike.distance, strike.intensity_milli()));
+                    println!(
+                        "STRIKE  {:?}  energy {} (intensity {}.{:03})",
+                        strike.distance,
+                        strike.energy_raw,
+                        strike.intensity_milli() / 1000,
+                        strike.intensity_milli() % 1000
+                    )
+                }
                 Err(e) => println!("STRIKE  -- but the detail read failed: {e}"),
             }
         }
-        Interrupt::Disturber => batch.disturbers += 1,
+        Interrupt::Disturber => {
+            batch.disturbers += 1;
+            totals.disturbers += 1;
+        }
         Interrupt::NoiseTooHigh => batch.noise += 1,
         Interrupt::Unknown(_) => batch.unknown += 1,
     }
@@ -530,12 +674,12 @@ fn antenna_self_test(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     irq: &PinDriver<'_, esp_idf_hal::gpio::Input>,
-) {
+) -> (bool, u32) {
     const WINDOW_MS: u32 = 100;
 
     if let Err(e) = sensor.set_irq_display_lco(i2c) {
         println!("self: could not enable LCO output -- {e}");
-        return;
+        return (false, 0);
     }
 
     // Settle: the pin has just changed function, and the first transitions
@@ -564,7 +708,7 @@ fn antenna_self_test(
         println!("self:     The IRQ wire is not on GPIO21 (D6). The other candidate is");
         println!("self:     GPIO20 (D7), on the opposite side of the board.");
         println!("self:     Until this passes, 'no strikes' means nothing.");
-        return;
+        return (false, 0);
     }
 
     // edges over WINDOW_MS -> Hz on the pin -> x16 for the antenna, in kHz.
@@ -584,4 +728,5 @@ fn antenna_self_test(
         println!("self: IRQ wire confirmed, but antenna is OUT OF TUNE");
         println!("self:     wanted {low}-{high} kHz -- adjust TUNING_CAPS_PF (§3 step 5)");
     }
+    (true, antenna_khz)
 }

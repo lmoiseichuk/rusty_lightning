@@ -1,0 +1,248 @@
+//! Screen layout (§6).
+//!
+//! Draws into a plain framebuffer and never touches SPI — `display` owns the
+//! hardware. That split is what lets a layout be reasoned about, and eventually
+//! tested, without a panel anywhere near it.
+//!
+//! ## What the panel size changes
+//!
+//! 800×480 is nineteen times the area of the moisture project's 200×200, and
+//! the temptation is to fill it. The constraint that stops that is unchanged:
+//! **every refresh is full**, and a full refresh on a UC8179 takes seconds. So
+//! the layout is built to be read at a glance from across a room, not to be
+//! dense — the extra area buys *size*, not *more*.
+
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_9X15};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text};
+use epd_waveshare::epd7in5_v2::Display7in5;
+use u8g2_fonts::types::{FontColor, VerticalPosition};
+use u8g2_fonts::{fonts, FontRenderer};
+
+use crate::as3935::{Distance, Location};
+use crate::display::{HEIGHT, INK, PAPER, WIDTH};
+
+/// The number meant to be read from across the room.
+const HEADLINE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub42_tr>();
+/// Section headings and gauge labels.
+const LABEL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub14_tr>();
+
+type Text16 = heapless::String<16>;
+type Text32 = heapless::String<32>;
+
+/// Everything the status screen shows.
+pub struct Status<'a> {
+    pub location: Location,
+    /// Measured antenna resonance, kHz — from the LCO self-test.
+    pub antenna_khz: u32,
+    pub irq_confirmed: bool,
+    /// §4.2's defence level and its ceiling.
+    pub defence_level: u8,
+    pub defence_max: u8,
+    pub defence_rung: &'a str,
+    pub strikes_total: u32,
+    /// The most recent strike, if there has been one.
+    pub last_strike: Option<(Distance, u32)>,
+    /// Disturbers counted since boot — the honest measure of how hostile the
+    /// location is, and the number that decides whether a quiet screen means
+    /// "no storms" or "this spot is unusable".
+    pub disturbers_total: u32,
+}
+
+/// Draw the status screen.
+pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
+    let _ = frame.clear(PAPER);
+    let black = PrimitiveStyle::with_stroke(INK, 1);
+
+    // --- header -----------------------------------------------------------
+    let _ = LABEL.render(
+        "LIGHTNING TERMINAL",
+        Point::new(16, 34),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
+    );
+    let mut version = Text32::new();
+    let _ = version.push_str("fw ");
+    let _ = version.push_str(env!("CARGO_PKG_VERSION"));
+    let _ = version.push_str(" · ");
+    let _ = version.push_str(s.location.label());
+    let _ = Text::with_alignment(
+        &version,
+        Point::new(WIDTH as i32 - 16, 30),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Alignment::Right,
+    )
+    .draw(frame);
+
+    let _ = Line::new(Point::new(16, 46), Point::new(WIDTH as i32 - 16, 46))
+        .into_styled(black)
+        .draw(frame);
+
+    // --- the headline: total strikes --------------------------------------
+    //
+    // The one number the device exists to report. Everything else on this
+    // screen is context for it.
+    let mut count = Text16::new();
+    let _ = write_u32(&mut count, s.strikes_total);
+    let _ = HEADLINE.render(
+        count.as_str(),
+        Point::new(16, 130),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
+    );
+    let _ = LABEL.render(
+        if s.strikes_total == 1 { "strike" } else { "strikes" },
+        Point::new(16, 162),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
+    );
+
+    // --- last strike ------------------------------------------------------
+    let mut last = Text32::new();
+    match s.last_strike {
+        Some((distance, intensity_milli)) => {
+            let _ = last.push_str(match distance {
+                Distance::Overhead => "overhead",
+                Distance::OutOfRange => "out of range",
+                Distance::Km(_) => "",
+            });
+            if let Distance::Km(km) = distance {
+                let _ = write_u32(&mut last, km as u32);
+                let _ = last.push_str(" km");
+            }
+            let _ = last.push_str("  ·  intensity ");
+            let _ = write_u32(&mut last, intensity_milli / 1000);
+        }
+        None => {
+            let _ = last.push_str("no strikes yet");
+        }
+    }
+    let _ = Text::with_baseline(
+        &last,
+        Point::new(320, 110),
+        MonoTextStyle::new(&FONT_10X20, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    // --- gauges -----------------------------------------------------------
+    gauge(
+        frame,
+        Point::new(16, 220),
+        "noise defence",
+        s.defence_level as u32,
+        s.defence_max as u32,
+        s.defence_rung,
+    );
+
+    // --- the bring-up facts, small, at the foot ---------------------------
+    //
+    // Small because they matter once — but they matter a lot then, and a sealed
+    // device with no console has nowhere else to say them.
+    let mut antenna = Text32::new();
+    let _ = antenna.push_str("antenna ");
+    let _ = write_u32(&mut antenna, s.antenna_khz);
+    let _ = antenna.push_str(" kHz · IRQ ");
+    let _ = antenna.push_str(if s.irq_confirmed { "OK" } else { "NOT CONFIRMED" });
+    let _ = antenna.push_str(" · disturbers ");
+    let _ = write_u32(&mut antenna, s.disturbers_total);
+
+    let _ = Line::new(
+        Point::new(16, HEIGHT as i32 - 40),
+        Point::new(WIDTH as i32 - 16, HEIGHT as i32 - 40),
+    )
+    .into_styled(black)
+    .draw(frame);
+    let _ = Text::with_baseline(
+        &antenna,
+        Point::new(16, HEIGHT as i32 - 32),
+        MonoTextStyle::new(&FONT_6X10, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+}
+
+/// A labelled horizontal bar.
+///
+/// Deliberately a bar rather than a number: the question these answer is "how
+/// close to the limit", which a filled proportion says at a glance and a
+/// figure makes you compute.
+fn gauge(
+    frame: &mut Display7in5,
+    at: Point,
+    label: &str,
+    value: u32,
+    max: u32,
+    detail: &str,
+) {
+    const BAR_WIDTH: u32 = 360;
+    const BAR_HEIGHT: u32 = 28;
+
+    let _ = LABEL.render(
+        label,
+        Point::new(at.x, at.y),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
+    );
+
+    let bar = Rectangle::new(
+        Point::new(at.x, at.y + 12),
+        Size::new(BAR_WIDTH, BAR_HEIGHT),
+    );
+    let _ = bar
+        .into_styled(PrimitiveStyle::with_stroke(INK, 2))
+        .draw(frame);
+
+    if max > 0 && value > 0 {
+        // Inset by the stroke so the fill does not sit on the border.
+        let filled = (BAR_WIDTH - 4) * value.min(max) / max;
+        let _ = Rectangle::new(
+            Point::new(at.x + 2, at.y + 14),
+            Size::new(filled, BAR_HEIGHT - 4),
+        )
+        .into_styled(PrimitiveStyle::with_fill(INK))
+        .draw(frame);
+    }
+
+    let mut caption = Text32::new();
+    let _ = write_u32(&mut caption, value);
+    let _ = caption.push('/');
+    let _ = write_u32(&mut caption, max);
+    let _ = caption.push_str("  ");
+    let _ = caption.push_str(detail);
+    let _ = Text::with_baseline(
+        &caption,
+        Point::new(at.x + BAR_WIDTH as i32 + 12, at.y + 14),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+}
+
+/// Append a decimal `u32` without `format!`.
+///
+/// The render path runs on a device that is meant to stay up for weeks;
+/// `format!` allocates, and the allocation is avoidable here for the sake of
+/// four lines.
+fn write_u32<const N: usize>(out: &mut heapless::String<N>, mut value: u32) -> Result<(), ()> {
+    if value == 0 {
+        return out.push('0').map_err(|_| ());
+    }
+    let mut digits = [0u8; 10];
+    let mut used = 0;
+    while value > 0 {
+        digits[used] = b'0' + (value % 10) as u8;
+        value /= 10;
+        used += 1;
+    }
+    for i in (0..used).rev() {
+        out.push(digits[i] as char).map_err(|_| ())?;
+    }
+    Ok(())
+}

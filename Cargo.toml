@@ -17,8 +17,32 @@ harness = false
 # IDF bindings as `sys`, which is enough for NVS and the filesystem.
 esp-idf-hal = "0.46"
 
-# Stack-allocated strings for the console and, later, the render path.
+# Stack-allocated strings for the console and the render path.
 heapless = "0.8"
+
+# Display stack (§6). The panel is a UC8179 7.5" V2, 800x480 mono.
+#
+# `epd2in13_v3` is NOT a display we have. The crate gates its shared `type_a`
+# LUT constants behind those features and errors out without one of them:
+#
+#   error: One of feature "epd2in13_v2" and feature "epd2in13_v3" needs to be
+#          enabled as a feature
+#
+# An upstream feature-gating bug, not a choice. The moisture project hit the
+# same thing. Worth knowing before someone tidies it away and breaks the build.
+epd-waveshare = { version = "0.6", default-features = false, features = [
+    "graphics",
+    "epd2in13_v3",
+] }
+embedded-graphics = "0.8"
+# Needed directly, not just transitively: the inverted-BUSY adapter in
+# `display.rs` implements `embedded_hal::digital::InputPin` itself, because that
+# is the trait epd-waveshare consumes and the only place the inversion can be
+# hidden from it.
+embedded-hal = "1.0"
+# Larger fonts than embedded-graphics' built-ins, which top out at 10x20 -- on
+# an 800x480 panel meant to be read across a room that is not enough.
+u8g2-fonts = "0.8"
 
 [build-dependencies]
 embuild = "0.33"
