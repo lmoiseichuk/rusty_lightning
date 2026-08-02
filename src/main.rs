@@ -311,6 +311,20 @@ fn main() {
         }
     };
 
+    // The splash goes up before anything else visible. It is the only sign the
+    // device gives that it started, and the first status screen is gated behind
+    // a batch window -- so without this the panel holds whatever was on it from
+    // the last run, which reads exactly like a board that did not boot.
+    if let Some(panel) = panel.as_mut() {
+        let mut frame = display::Panel::frame();
+        ui::logo(&mut frame);
+        match panel.show(&frame) {
+            Ok(0) => println!("epd:  logo sent, but BUSY never fell -- nothing was drawn"),
+            Ok(busy_ms) => println!("epd:  logo drawn, panel busy {busy_ms} ms"),
+            Err(e) => println!("epd:  logo FAILED -- {e}"),
+        }
+    }
+
     println!("--- listening ---");
 
     listen(
