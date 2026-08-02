@@ -133,3 +133,45 @@ pub fn config() -> Option<(u32, u32, bool)> {
         config.light_sleep_enable,
     ))
 }
+
+
+/// Is a USB **host** talking to us right now?
+///
+/// `usb_serial_jtag_is_connected` reports whether the peripheral is seeing
+/// start-of-frame packets — so it is exact and instant when the device is
+/// plugged into a computer, which is the case that matters on a bench.
+///
+/// **It is not a VBUS sense**, and the difference shows up in two places:
+///
+/// * a **power-only charger** sends no SOF, so this reads *disconnected* on a
+///   device that is very much plugged in. The gauge's discharge sign covers
+///   that case — slowly, but correctly;
+/// * once light sleep is running, the **USB PHY is powered down**, so plugging
+///   a cable into a sleeping device will not be noticed here either. The gauge
+///   covers that too, within a few minutes of `CRATE` turning positive.
+///
+/// So neither signal is sufficient alone, and the two fail in opposite
+/// directions: this one is fast and misses chargers, the gauge is slow and
+/// misses nothing.
+pub fn usb_host_present() -> bool {
+    // SAFETY: a read-only query with no preconditions.
+    unsafe { sys::usb_serial_jtag_is_connected() }
+}
+
+/// Decide the policy from both signals.
+///
+/// `discharging` comes from the fuel gauge and may be `None` when there is no
+/// gauge or it did not answer — in which case a USB host is the only evidence
+/// available, and its absence is not enough to conclude anything. Defaulting to
+/// `Usb` there costs power on a device that turns out to be on battery;
+/// defaulting to `Battery` would cost the console on one that is plugged in,
+/// and that is the worse failure while anyone is still developing this.
+pub fn decide(discharging: Option<bool>) -> Policy {
+    if usb_host_present() {
+        return Policy::Usb;
+    }
+    match discharging {
+        Some(true) => Policy::Battery,
+        _ => Policy::Usb,
+    }
+}

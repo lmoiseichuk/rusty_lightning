@@ -152,6 +152,9 @@ pub struct Status {
     pub last_hour: crate::history::Bucket,
     /// The learned cell range, low/high mV (§2.1).
     pub battery_range: (u16, u16),
+    /// Whether `esp_pm` is actually light-sleeping, read back rather than
+    /// assumed (§7).
+    pub light_sleep: bool,
 }
 
 /// Draw the status screen.
@@ -401,9 +404,16 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
     let _ = write_u32(&mut left, s.uptime_minutes % 60);
     let _ = left.push_str("m");
 
+    // The live clock, and whether light sleep is running. Both come from what
+    // the chip reports rather than from what the policy asked for — and this is
+    // the only witness there is once USB is cut, because cutting USB also cuts
+    // the console. Unplug, press BOOT, read the line.
     let _ = left.push_str("   ");
     let _ = write_u32(&mut left, s.health.cpu_mhz);
     let _ = left.push_str(" MHz");
+    if s.light_sleep {
+        let _ = left.push_str(" +sleep");
+    }
 
     if let Some(tenths) = s.health.die_temp_tenths {
         let _ = left.push_str("   die ");

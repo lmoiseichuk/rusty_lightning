@@ -73,6 +73,14 @@ const BATCH_MS: u32 = 1000;
 /// Quiet time before the noise floor relaxes by one (§4.2).
 const NOISE_DECAY_S: u32 = 60;
 
+/// How often to read the fuel gauge.
+///
+/// Slower than the batch loop because it is an I2C transaction for values that
+/// move over hours — but far faster than the screen, because the *clock policy*
+/// depends on it and a device that has been unplugged should not stay at
+/// 160 MHz waiting for a redraw.
+const GAUGE_POLL_S: u32 = 10;
+
 /// Shortest gap between panel refreshes.
 ///
 /// **A full 800×480 refresh measured 3.9 s on this panel.** §6's nominal 5 s
@@ -463,6 +471,8 @@ fn listen(
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.
     let mut policy = power::Policy::Usb;
+    let mut reading: Option<battery::Reading> = None;
+    let mut last_gauge_ms: u32 = 0;
     match power::apply(policy) {
         Ok(()) => match power::config() {
             Some((max, min, sleep)) => println!(
@@ -529,6 +539,47 @@ fn listen(
         // during quiet weather shows the quiet rather than the last storm shoved
         // against its right edge.
         history.tick(now_ms() / 60_000);
+
+        // --- supply and clock policy (§7) -----------------------------------
+        //
+        // Evaluated every batch rather than on the redraw path, which is where
+        // this lived and was wrong: the screen can go fifteen minutes without a
+        // redraw, so cutting USB left the device at 160 MHz for a quarter of an
+        // hour. The USB query is free; the gauge is I2C, so it is polled on its
+        // own slower cadence and cached.
+        if now_ms().saturating_sub(last_gauge_ms) >= GAUGE_POLL_S * 1000 {
+            last_gauge_ms = now_ms();
+            reading = gauge.and_then(|g| g.read(i2c).ok());
+            if let Some(reading) = reading {
+                println!(
+                    "bat:  {} mV, {}%, rate {}.{:02} %/hr",
+                    reading.millivolts,
+                    reading.percent,
+                    reading.crate_centi_per_hour / 100,
+                    (reading.crate_centi_per_hour % 100).abs()
+                );
+            }
+        }
+
+        let want = power::decide(reading.map(|r| r.crate_centi_per_hour < 0));
+        if want != policy {
+            match power::apply(want) {
+                Ok(()) => {
+                    policy = want;
+                    match power::config() {
+                        Some((max, min, sleep)) => println!(
+                            "pm:   -> {} -- {}/{} MHz, light sleep {}",
+                            policy.label(),
+                            min,
+                            max,
+                            if sleep { "on" } else { "off" }
+                        ),
+                        None => println!("pm:   -> {} (read-back failed)", policy.label()),
+                    }
+                }
+                Err(e) => println!("pm:   could not switch to {} -- {e}", want.label()),
+            }
+        }
 
         // §4.2, and the asymmetry is the whole design: up by one per BATCH that
         // heard anything -- not per event, which saturates the ladder in a
@@ -654,6 +705,7 @@ fn listen(
                         disturbers_total: totals.disturbers,
                         last_hour: history.last_hour(),
                         battery_range: range,
+                        light_sleep: power::config().map(|(_, _, ls)| ls).unwrap_or(false),
                     },
                     if changed { "content changed" } else { "baseline" },
                 );
