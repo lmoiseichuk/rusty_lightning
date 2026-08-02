@@ -1,0 +1,48 @@
+[build]
+target = "riscv32imc-esp-espidf"
+
+[target.riscv32imc-esp-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32c3"
+
+# Reuse the IDF tools espup already put in ~/.espressif rather than installing a
+# second copy under .embuild/ in this workspace.
+ESP_IDF_TOOLS_INSTALL_DIR = "global"
+
+# Pinned, and the ceiling is not arbitrary. Carried over from the moisture
+# project, where it was established the hard way:
+#
+#   tag     RMT TX flags   esp-idf-hal 0.46.2
+#   v5.3.4       4         builds
+#   v5.3.5       5         E0061 inside the HAL's rmt/tx_channel.rs
+#   v5.4.4       6         ditto
+#
+# esp-idf-sys warns that anything below v5.3.0 is deprecated, so the usable
+# window is v5.3.0 ..= v5.3.4.
+#
+# ⚠ This project does not currently use RMT, so the ceiling is inherited caution
+# rather than a live constraint here. Do not raise it without checking the HAL
+# release notes -- the failure is a compile error inside the HAL, which no care
+# in our own code avoids.
+ESP_IDF_VERSION = "v5.3.4"
+
+# --- Getting partitions.csv to where the IDF will look for it ---------------
+#
+# esp-idf-sys does not build our crate directory as a CMake project. It
+# *generates* one under target/.../esp-idf-sys-<hash>/out/ and builds that, so
+# IDF resolves CONFIG_PARTITION_TABLE_CUSTOM_FILENAME relative to the generated
+# project -- where our file is not. The escape hatch is a glob pair: every match
+# is copied into the generated project preserving its relative path.
+#
+# `relative = true` resolves the value against the directory holding `.cargo/`,
+# i.e. the repo root, rather than against esp-idf-sys' own source folder down in
+# the registry cache.
+ESP_IDF_GLOB_PARTITIONS_BASE = { value = ".", relative = true }
+ESP_IDF_GLOB_PARTITIONS_CSV = "partitions.csv"

@@ -1,0 +1,5 @@
+[toolchain]
+# The `esp` toolchain (installed by espup) is nightly-based, which is what
+# `build-std` needs -- riscv32imc-esp-espidf is a tier-3 target, so std is
+# compiled from source rather than shipped by rustup.
+channel = "esp"

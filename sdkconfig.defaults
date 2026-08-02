@@ -1,0 +1,33 @@
+# Console on the C3's native USB-serial-JTAG. UART0 (GPIO20/21) stays free,
+# which matters here: GPIO20 or GPIO21 carries the AS3935 IRQ (§2).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The IDF's own logging off. Ours goes through `say!`, and IDF chatter
+# interleaves into any table being dumped over the console.
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+
+# Reboot on panic rather than halt. Unlike moisture, this device is usually
+# USB-powered and mostly-awake (§7), so a silent halt would be a dead terminal
+# rather than a missed wake.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# No Bluetooth. WiFi is deferred (§5) but left buildable.
+CONFIG_BT_ENABLED=n
+
+# Light sleep between events when on battery (§7).
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# 800x480x1bpp = 48000 bytes of framebuffer. That is nearly 10x moisture's
+# 200x200, and it does NOT go on the stack -- but the render path around it
+# still wants room, and the default 3584 bytes does not have it.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768

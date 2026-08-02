@@ -1,0 +1,10 @@
+# 4 MB flash on the XIAO ESP32-C3.
+#
+# `storage` holds the strike CSV (§5). Sized at ~1.9 MB, which at ~30 bytes a
+# record is roughly 65 000 strikes -- the spec's "effectively unbounded" figure.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+phy_init,   data, phy,      0xf000,   0x1000,
+factory,    app,  factory,  0x10000,  0x200000,
+storage,    data, spiffs,   0x210000, 0x1f0000,

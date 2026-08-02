@@ -1,0 +1,31 @@
+[package]
+name = "lightning"
+version = "0.1.0"
+authors = ["LM"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+
+[[bin]]
+name = "lightning"
+harness = false
+
+[dependencies]
+# esp-idf-svc is deliberately not here yet. It links the WiFi and BLE stacks
+# behind it, and §5's WiFi/SNTP is deferred -- so until there is a network to
+# talk to, the radio stacks are pure binary size. esp-idf-hal re-exports the raw
+# IDF bindings as `sys`, which is enough for NVS and the filesystem.
+esp-idf-hal = "0.46"
+
+# Stack-allocated strings for the console and, later, the render path.
+heapless = "0.8"
+
+[build-dependencies]
+embuild = "0.33"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[profile.release]
+opt-level = "s"
