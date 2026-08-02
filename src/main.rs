@@ -7,6 +7,7 @@ mod as3935;
 mod battery;
 mod display;
 mod defence;
+mod history;
 mod i2c_scan;
 mod settings;
 mod storage;
@@ -443,6 +444,12 @@ fn listen(
     // Running totals, and what the glass currently shows. The screen is redrawn
     // when the two disagree -- never on a timer alone.
     let mut totals = Totals::default();
+    let mut history = history::History::new();
+
+    // §2.1's learned range. Seeded rather than empty, so the first reading has
+    // something to widen from -- and `None` from NVS is a virgin device, not an
+    // error.
+    let mut range = settings::battery_range().unwrap_or(battery::SEED_RANGE);
     let mut drawn: Option<Drawn> = None;
     let mut last_draw_ms: u32 = 0;
 
@@ -477,7 +484,7 @@ fn listen(
                 // in the notifier than a real third source, and dropping it
                 // silently would lose a strike.
                 let _ = NOTIFY_STRIKE;
-                collect(sensor, i2c, &mut batch, &mut totals);
+                collect(sensor, i2c, &mut batch, &mut totals, &mut history, now_ms() / 60_000);
             }
         }
 
@@ -488,6 +495,11 @@ fn listen(
 
         button_blanked_ms = button_blanked_ms.saturating_sub(BATCH_MS);
         report(&batch);
+
+        // Keep the rings' idea of "now" current even in a lull, so a chart drawn
+        // during quiet weather shows the quiet rather than the last storm shoved
+        // against its right edge.
+        history.tick(now_ms() / 60_000);
 
         // §4.2, and the asymmetry is the whole design: up by one per BATCH that
         // heard anything -- not per event, which saturates the ladder in a
@@ -528,6 +540,25 @@ fn listen(
                 // minutes is bus traffic bought for nothing.
                 let reading = gauge.and_then(|g| g.read(i2c).ok());
 
+                // Widen the learned range on the way past. Written to NVS only
+                // when an endpoint actually moves, which the midpoint rule makes
+                // rare: it takes a NEW extreme, and new extrema in a noisy
+                // series get rarer the longer it runs.
+                if let Some(reading) = reading {
+                    if let Some(moved) = battery::widened(range, reading.millivolts) {
+                        match settings::store_battery_range(moved.0, moved.1) {
+                            Ok(()) => {
+                                println!(
+                                    "bat:  range {}-{} -> {}-{} mV",
+                                    range.0, range.1, moved.0, moved.1
+                                );
+                                range = moved;
+                            }
+                            Err(e) => println!("bat:  range moved but NOT saved -- {e}"),
+                        }
+                    }
+                }
+
                 redraw(
                     panel,
                     &ui::Status {
@@ -543,6 +574,8 @@ fn listen(
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,
                         disturbers_total: totals.disturbers,
+                        last_hour: history.last_hour(),
+                        battery_range: range,
                     },
                     if changed { "content changed" } else { "baseline" },
                 );
@@ -614,6 +647,8 @@ fn collect(
     i2c: &mut I2cDriver<'_>,
     batch: &mut Batch,
     totals: &mut Totals,
+    history: &mut history::History,
+    minute: u32,
 ) {
     // The datasheet's settle time, and the reason this is in the main task
     // rather than the ISR (§3).
@@ -637,6 +672,7 @@ fn collect(
             match sensor.strike(i2c) {
                 Ok(strike) => {
                     totals.last_strike = Some((strike.distance, strike.intensity_milli()));
+                    history.record(minute, &strike);
                     println!(
                         "STRIKE  {:?}  energy {} (intensity {}.{:03})",
                         strike.distance,

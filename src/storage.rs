@@ -58,6 +58,17 @@ impl Namespace {
         check(unsafe { sys::nvs_set_u8(self.handle, key.as_ptr() as *const c_char, value) })
     }
 
+    pub fn get_u16(&self, key: &[u8]) -> Option<u16> {
+        let mut value = 0u16;
+        let err =
+            unsafe { sys::nvs_get_u16(self.handle, key.as_ptr() as *const c_char, &mut value) };
+        (err == ESP_OK).then_some(value)
+    }
+
+    pub fn set_u16(&self, key: &[u8], value: u16) -> Result<(), EspError> {
+        check(unsafe { sys::nvs_set_u16(self.handle, key.as_ptr() as *const c_char, value) })
+    }
+
     /// Make pending writes durable. Nothing is visible to a later boot until
     /// this returns.
     pub fn commit(&self) -> Result<(), EspError> {

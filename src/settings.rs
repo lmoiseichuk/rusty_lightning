@@ -13,6 +13,8 @@ use crate::storage::Namespace;
 
 const NAMESPACE: &[u8] = b"settings\0";
 const KEY_LOCATION: &[u8] = b"location\0";
+const KEY_BATTERY_MIN: &[u8] = b"bat_min\0";
+const KEY_BATTERY_MAX: &[u8] = b"bat_max\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -47,5 +49,28 @@ pub fn store_location(location: Location) -> Result<(), EspError> {
     };
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u8(KEY_LOCATION, value)?;
+    nvs.commit()
+}
+
+
+/// The lowest and highest cell voltage this unit has actually seen, in mV.
+///
+/// `None` until the device has observed anything — the caller seeds from
+/// [`crate::battery::SEED_RANGE`], and the difference between "never observed"
+/// and "observed, and it happens to equal the seed" is worth keeping.
+pub fn battery_range() -> Option<(u16, u16)> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    let low = nvs.get_u16(KEY_BATTERY_MIN)?;
+    let high = nvs.get_u16(KEY_BATTERY_MAX)?;
+    // A pair where the low is not below the high is not a range; treat it as
+    // unset rather than reasoning from it.
+    (low < high).then_some((low, high))
+}
+
+/// Persist an observed range. Written only when an endpoint actually moves.
+pub fn store_battery_range(low: u16, high: u16) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u16(KEY_BATTERY_MIN, low)?;
+    nvs.set_u16(KEY_BATTERY_MAX, high)?;
     nvs.commit()
 }

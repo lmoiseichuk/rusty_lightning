@@ -124,3 +124,109 @@ fn read_u16(i2c: &mut I2cDriver<'_>, register: u8) -> Result<u16, EspError> {
     i2c.write_read(ADDRESS, &[register], &mut bytes, TIMEOUT_MS)?;
     Ok(u16::from_be_bytes(bytes))
 }
+
+// === The learned range =====================================================
+//
+// The gauge reports a percentage from its own ModelGauge curve, which is better
+// than anything a linear voltage map could do — a LiPo's discharge curve is
+// famously flat in the middle and a cliff at both ends. So the learned range
+// below **does not replace** that percentage. It answers two different
+// questions the gauge cannot:
+//
+// * **How long will it run?** Runtime needs the span this particular cell
+//   actually works over, on this particular load. The datasheet's 3.0–4.2 V is
+//   a chemistry figure; what matters is where *this* device browns out and
+//   where *this* charger stops.
+// * **Is the cell ageing?** A pack whose observed maximum has fallen from 4.20
+//   to 4.05 V has lost capacity, and nothing else on the device would say so.
+
+/// Where the range starts before anything has been observed.
+///
+/// Deliberately narrow rather than the chemistry's full 3.0–4.2 V: a range that
+/// starts wide can only ever be confirmed, never learned, and would report a
+/// confident span this unit has never actually reached.
+pub const SEED_RANGE: (u16, u16) = (3600, 4100);
+
+/// Readings outside this are not the cell, whatever they say.
+///
+/// A LiPo below 2.5 V is damaged or absent, and above 4.5 V is a measurement
+/// fault. Widening to either would poison the range permanently, and the range
+/// is the one thing here that survives a reboot.
+const SANE_MV: (u16, u16) = (2500, 4500);
+
+/// Move a range to admit `mv`, halfway.
+///
+/// **The same midpoint rule the moisture project settled on**, and for the same
+/// reason: moving an endpoint straight to a new extreme makes the range a
+/// one-way ratchet driven by the single worst reading the device ever takes —
+/// and here that reading is a sag under a panel refresh, or the moment a
+/// charger is unplugged. Halving turns it into a low-pass filter: a one-off
+/// event moves the endpoint half way and stops, while a genuine change keeps
+/// producing out-of-range readings and converges in about five.
+///
+/// Returns `None` when nothing moves, which is the normal answer and the reason
+/// this writes flash so rarely.
+pub fn widened(range: (u16, u16), mv: u16) -> Option<(u16, u16)> {
+    if mv < SANE_MV.0 || mv > SANE_MV.1 {
+        return None;
+    }
+
+    let (mut low, mut high) = range;
+    if mv < low {
+        low = midpoint(low, mv);
+    } else if mv > high {
+        high = midpoint(high, mv);
+    }
+
+    // Integer division returns the same endpoint for a 1 mV excess, which is
+    // also what stops ADC noise generating a flash write on every reading.
+    ((low, high) != range).then_some((low, high))
+}
+
+/// Halfway between two values, without overflowing on the way.
+fn midpoint(from: u16, to: u16) -> u16 {
+    if to > from {
+        from + (to - from) / 2
+    } else {
+        from - (from - to) / 2
+    }
+}
+
+/// Hours of runtime left, predicted from the learned range and the measured
+/// discharge rate.
+///
+/// This is the **second** of the two predictions, and it differs from
+/// [`Reading::hours_remaining`] in what it trusts. That one divides the gauge's
+/// own percentage by the gauge's own rate — self-consistent, and wrong in the
+/// same direction as the gauge whenever the gauge is wrong about this cell.
+/// This one asks how much of the *observed* voltage span is left and how fast
+/// the cell is crossing it.
+///
+/// They disagree most where it matters: near empty, where a LiPo's curve falls
+/// off a cliff and a percentage flatters the remaining time.
+///
+/// `None` when the range has not been learned widely enough to divide by, when
+/// charging, or when the reading is already at or below the learned floor.
+pub fn hours_from_range(range: (u16, u16), reading: &Reading) -> Option<u32> {
+    let (low, high) = range;
+    let span = high.checked_sub(low)?;
+    // Under 200 mV of observed span, this has seen a fraction of one discharge
+    // and any figure derived from it is invented.
+    if span < 200 || reading.crate_centi_per_hour >= 0 {
+        return None;
+    }
+
+    let above_floor = reading.millivolts.saturating_sub(low);
+    if above_floor == 0 {
+        return None;
+    }
+
+    // Fraction of the span remaining, as a percentage, then the same division
+    // the gauge does -- but over a span this device has actually measured.
+    let percent_of_span = above_floor as u32 * 100 / span as u32;
+    let rate = reading.crate_centi_per_hour.unsigned_abs();
+    if rate < 5 {
+        return None;
+    }
+    Some(percent_of_span * 100 / rate)
+}

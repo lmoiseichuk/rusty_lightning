@@ -131,6 +131,10 @@ pub struct Status<'a> {
     pub battery: Option<crate::battery::Reading>,
     /// Minutes since boot, for the uptime readout.
     pub uptime_minutes: u32,
+    /// Everything seen in the last hour (§4.3).
+    pub last_hour: crate::history::Bucket,
+    /// The learned cell range, low/high mV (§2.1).
+    pub battery_range: (u16, u16),
 }
 
 /// Draw the status screen.
@@ -151,28 +155,35 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
         .into_styled(black)
         .draw(frame);
 
-    // --- header -----------------------------------------------------------
+    // --- mode and noise defence -------------------------------------------
+    //
+    // This row used to read "LIGHTNING TERMINAL", which is the one fact anyone
+    // looking at the device already knows. It now carries the two settings that
+    // change how the sensor behaves and that nothing else on screen reveals:
+    // which AFE gain is selected, and how hard the receiver is currently
+    // fighting noise.
+    let mut mode = Text32::new();
+    let _ = mode.push_str("Mode: ");
+    let _ = mode.push_str(s.location.label());
     let _ = LABEL.render(
-        "LIGHTNING TERMINAL",
+        mode.as_str(),
         Point::new(16, 62),
         VerticalPosition::Baseline,
         FontColor::Transparent(INK),
         frame,
     );
-    let mut version = Text32::new();
-    let _ = version.push_str("fw ");
-    let _ = version.push_str(env!("CARGO_PKG_VERSION"));
-    let _ = version.push_str(" · ");
-    let _ = version.push_str(s.location.label());
-    let _ = Text::with_alignment(
-        &version,
-        Point::new(WIDTH as i32 - 16, 50),
-        MonoTextStyle::new(&FONT_9X15, INK),
-        Alignment::Right,
-    )
-    .draw(frame);
 
-    let _ = Line::new(Point::new(16, 74), Point::new(WIDTH as i32 - 16, 74))
+    // The gauge sits on this row rather than in the middle of the screen: it is
+    // a setting, not a measurement, and it belongs beside the other one.
+    gauge(
+        frame,
+        Point::new(230, 62),
+        s.defence_level as u32,
+        s.defence_max as u32,
+        s.defence_rung,
+    );
+
+    let _ = Line::new(Point::new(16, 84), Point::new(WIDTH as i32 - 16, 84))
         .into_styled(black)
         .draw(frame);
 
@@ -196,6 +207,15 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
         FontColor::Transparent(INK),
         frame,
     );
+
+    // --- the last hour ----------------------------------------------------
+    //
+    // §4.3's three figures. Count says how *busy*, mean score says how *severe*,
+    // and distance says how *close* -- and none of the three substitutes for
+    // another. One violent overhead strike and a hundred distant ones produce
+    // the same count and wildly different scores; the reverse is true of the
+    // mean.
+    stats(frame, s);
 
     // --- last strike ------------------------------------------------------
     let mut last = Text32::new();
@@ -225,16 +245,6 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     )
     .draw(frame);
 
-    // --- gauges -----------------------------------------------------------
-    gauge(
-        frame,
-        Point::new(16, 248),
-        "noise defence",
-        s.defence_level as u32,
-        s.defence_max as u32,
-        s.defence_rung,
-    );
-
     // --- the bring-up facts, small, at the foot ---------------------------
     //
     // Small because they matter once — but they matter a lot then, and a sealed
@@ -246,6 +256,15 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     let _ = antenna.push_str(if s.irq_confirmed { "OK" } else { "NOT CONFIRMED" });
     let _ = antenna.push_str(" · disturbers ");
     let _ = write_u32(&mut antenna, s.disturbers_total);
+    // The learned cell range, small and at the foot. It is a slow-moving
+    // diagnostic rather than a reading — but it is the number that says whether
+    // the runtime prediction above it has anything behind it, and a pack whose
+    // observed maximum has fallen is a cell that is ageing.
+    let _ = antenna.push_str(" · cell ");
+    let _ = write_u32(&mut antenna, s.battery_range.0 as u32);
+    let _ = antenna.push('-');
+    let _ = write_u32(&mut antenna, s.battery_range.1 as u32);
+    let _ = antenna.push_str(" mV");
 
     let _ = Line::new(
         Point::new(16, HEIGHT as i32 - 40),
@@ -267,19 +286,12 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
 /// Deliberately a bar rather than a number: the question these answer is "how
 /// close to the limit", which a filled proportion says at a glance and a
 /// figure makes you compute.
-fn gauge(
-    frame: &mut Display7in5,
-    at: Point,
-    label: &str,
-    value: u32,
-    max: u32,
-    detail: &str,
-) {
-    const BAR_WIDTH: u32 = 360;
-    const BAR_HEIGHT: u32 = 28;
+fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32, detail: &str) {
+    const BAR_WIDTH: u32 = 260;
+    const BAR_HEIGHT: u32 = 22;
 
     let _ = LABEL.render(
-        label,
+        "noise",
         Point::new(at.x, at.y),
         VerticalPosition::Baseline,
         FontColor::Transparent(INK),
@@ -287,7 +299,7 @@ fn gauge(
     );
 
     let bar = Rectangle::new(
-        Point::new(at.x, at.y + 12),
+        Point::new(at.x + 70, at.y - 16),
         Size::new(BAR_WIDTH, BAR_HEIGHT),
     );
     let _ = bar
@@ -298,7 +310,7 @@ fn gauge(
         // Inset by the stroke so the fill does not sit on the border.
         let filled = (BAR_WIDTH - 4) * value.min(max) / max;
         let _ = Rectangle::new(
-            Point::new(at.x + 2, at.y + 14),
+            Point::new(at.x + 72, at.y - 14),
             Size::new(filled, BAR_HEIGHT - 4),
         )
         .into_styled(PrimitiveStyle::with_fill(INK))
@@ -313,7 +325,7 @@ fn gauge(
     let _ = caption.push_str(detail);
     let _ = Text::with_baseline(
         &caption,
-        Point::new(at.x + BAR_WIDTH as i32 + 12, at.y + 14),
+        Point::new(at.x + 70 + BAR_WIDTH as i32 + 12, at.y - 14),
         MonoTextStyle::new(&FONT_9X15, INK),
         Baseline::Top,
     )
@@ -399,20 +411,37 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
 
             if reading.is_charging() {
                 let _ = right.push_str("  charging");
-            } else if let Some(hours) = reading.hours_remaining() {
-                let _ = right.push_str("  ");
-                if hours >= 48 {
-                    let _ = write_u32(&mut right, hours / 24);
-                    let _ = right.push_str("d left");
-                } else {
-                    let _ = write_u32(&mut right, hours);
-                    let _ = right.push_str("h left");
+            } else {
+                // **Two predictions, and the learned one wins where it exists.**
+                //
+                // The gauge divides its own percentage by its own rate — self-
+                // consistent, and wrong in the same direction as the gauge
+                // whenever the gauge is wrong about this cell. The learned
+                // figure asks how much of the range *this unit has actually
+                // observed* is left, and how fast it is being crossed.
+                //
+                // They part company near empty, where a LiPo falls off a cliff
+                // and a percentage flatters the time remaining. The learned one
+                // is preferred once the observed span is wide enough to divide
+                // by; until then there is nothing to prefer and the gauge's
+                // model is the better guess.
+                let hours = crate::battery::hours_from_range(s.battery_range, &reading)
+                    .or_else(|| reading.hours_remaining());
+                if let Some(hours) = hours {
+                    let _ = right.push_str("  ");
+                    if hours >= 48 {
+                        let _ = write_u32(&mut right, hours / 24);
+                        let _ = right.push_str("d left");
+                    } else {
+                        let _ = write_u32(&mut right, hours);
+                        let _ = right.push_str("h left");
+                    }
                 }
+                // No figure at all when neither can answer. §2.1's CRATE is a
+                // real measurement, and a device that has just woken has not
+                // discharged measurably yet — a number there would be a
+                // division by nearly zero wearing a hat.
             }
-            // No "left" figure at all when the rate is too small to divide by.
-            // §2.1's CRATE is a real measurement, and a device that has just
-            // woken has not discharged measurably yet -- printing a number
-            // there would be a division by nearly zero wearing a hat.
         }
         None => {
             let _ = right.push_str("Battery -- no gauge");
@@ -434,6 +463,78 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
         Point::new(WIDTH as i32 - 16, STATUS_TOP),
         style,
         right_style,
+    )
+    .draw(frame);
+}
+
+
+/// The last hour's three figures, in a row under the headline.
+fn stats(frame: &mut Display7in5, s: &Status<'_>) {
+    const TOP: i32 = 232;
+    const COLUMN: i32 = 190;
+
+    let hour = &s.last_hour;
+
+    let mut count = Text16::new();
+    let _ = write_u32(&mut count, hour.strikes as u32);
+    stat(frame, Point::new(16, TOP), "strikes / hour", &count);
+
+    let mut score = Text16::new();
+    match hour.mean_score_milli() {
+        Some(milli) => {
+            let _ = write_u32(&mut score, milli / 1000);
+            let _ = score.push('.');
+            let hundredths = (milli % 1000) / 10;
+            if hundredths < 10 {
+                let _ = score.push('0');
+            }
+            let _ = write_u32(&mut score, hundredths);
+        }
+        // A dash, not a zero. Zero is a score, and an hour with no strikes did
+        // not score zero -- it has no score at all, and the two mean opposite
+        // things about the weather.
+        None => {
+            let _ = score.push('-');
+        }
+    }
+    stat(frame, Point::new(16 + COLUMN, TOP), "mean score", &score);
+
+    let mut distance = Text16::new();
+    match hour.mean_distance_km() {
+        Some(km) => {
+            let _ = write_u32(&mut distance, km);
+            let _ = distance.push_str(" km");
+        }
+        None => {
+            let _ = distance.push('-');
+        }
+    }
+    stat(frame, Point::new(16 + COLUMN * 2, TOP), "mean distance", &distance);
+
+    let mut closest = Text16::new();
+    if hour.distance_km_min == u8::MAX {
+        let _ = closest.push('-');
+    } else {
+        let _ = write_u32(&mut closest, hour.distance_km_min as u32);
+        let _ = closest.push_str(" km");
+    }
+    stat(frame, Point::new(16 + COLUMN * 3, TOP), "closest", &closest);
+}
+
+/// One labelled figure: value large, label small beneath it.
+fn stat(frame: &mut Display7in5, at: Point, label: &str, value: &str) {
+    let _ = LABEL.render(
+        value,
+        Point::new(at.x, at.y),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
+    );
+    let _ = Text::with_baseline(
+        label,
+        Point::new(at.x, at.y + 8),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
     )
     .draw(frame);
 }
