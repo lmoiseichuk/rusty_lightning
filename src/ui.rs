@@ -127,7 +127,7 @@ type Text64 = heapless::String<64>;
 const STATUS_TOP: i32 = 6;
 
 /// Everything the status screen shows.
-pub struct Status<'a> {
+pub struct Status {
     pub location: Location,
     /// Measured antenna resonance, kHz — from the LCO self-test.
     pub antenna_khz: u32,
@@ -135,7 +135,6 @@ pub struct Status<'a> {
     /// §4.2's defence level and its ceiling.
     pub defence_level: u8,
     pub defence_max: u8,
-    pub defence_rung: &'a str,
     pub strikes_total: u32,
     /// The most recent strike, if there has been one.
     pub last_strike: Option<(Distance, u32)>,
@@ -156,7 +155,7 @@ pub struct Status<'a> {
 }
 
 /// Draw the status screen.
-pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
+pub fn status(frame: &mut Display7in5, s: &Status) {
     let _ = frame.clear(PAPER);
     let black = PrimitiveStyle::with_stroke(INK, 1);
 
@@ -190,6 +189,16 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
         FontColor::Transparent(INK),
         frame,
     );
+    // What changes it, said on the glass. There is exactly one button and no
+    // other label anywhere on the device, so a sealed box otherwise gives no
+    // clue that pressing it does anything at all.
+    let _ = Text::with_baseline(
+        "BOOT switches",
+        Point::new(16, 70),
+        MonoTextStyle::new(&FONT_6X10, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
 
     // The gauge sits on this row rather than in the middle of the screen: it is
     // a setting, not a measurement, and it belongs beside the other one.
@@ -198,7 +207,6 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
         Point::new(230, 62),
         s.defence_level as u32,
         s.defence_max as u32,
-        s.defence_rung,
     );
 
     let _ = Line::new(Point::new(16, 84), Point::new(WIDTH as i32 - 16, 84))
@@ -304,20 +312,22 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
 /// Deliberately a bar rather than a number: the question these answer is "how
 /// close to the limit", which a filled proportion says at a glance and a
 /// figure makes you compute.
-fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32, detail: &str) {
+fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
     const BAR_WIDTH: u32 = 260;
     const BAR_HEIGHT: u32 = 22;
 
     let _ = LABEL.render(
-        "noise",
+        "Noise level",
         Point::new(at.x, at.y),
         VerticalPosition::Baseline,
         FontColor::Transparent(INK),
         frame,
     );
 
+    // Cleared to the right of the label, which is wider than "noise" was.
+    const LABEL_WIDTH: i32 = 130;
     let bar = Rectangle::new(
-        Point::new(at.x + 70, at.y - 16),
+        Point::new(at.x + LABEL_WIDTH, at.y - 16),
         Size::new(BAR_WIDTH, BAR_HEIGHT),
     );
     let _ = bar
@@ -328,22 +338,24 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32, detail: &str)
         // Inset by the stroke so the fill does not sit on the border.
         let filled = (BAR_WIDTH - 4) * value.min(max) / max;
         let _ = Rectangle::new(
-            Point::new(at.x + 72, at.y - 14),
+            Point::new(at.x + LABEL_WIDTH + 2, at.y - 14),
             Size::new(filled, BAR_HEIGHT - 4),
         )
         .into_styled(PrimitiveStyle::with_fill(INK))
         .draw(frame);
     }
 
+    // The number alone. The rung name -- "noise floor", "watchdog", "spike
+    // rejection" -- is which register the ladder happens to be working on, and
+    // that is a fact about the implementation rather than about the weather. It
+    // stays on the console, where it is a debugging aid.
     let mut caption = Text32::new();
     let _ = write_u32(&mut caption, value);
     let _ = caption.push('/');
     let _ = write_u32(&mut caption, max);
-    let _ = caption.push_str("  ");
-    let _ = caption.push_str(detail);
     let _ = Text::with_baseline(
         &caption,
-        Point::new(at.x + 70 + BAR_WIDTH as i32 + 12, at.y - 14),
+        Point::new(at.x + LABEL_WIDTH + BAR_WIDTH as i32 + 12, at.y - 14),
         MonoTextStyle::new(&FONT_9X15, INK),
         Baseline::Top,
     )
@@ -374,7 +386,7 @@ fn write_u32<const N: usize>(out: &mut heapless::String<N>, mut value: u32) -> R
 
 
 /// The device's own vital signs, as one line.
-fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
+fn status_line(frame: &mut Display7in5, s: &Status) {
     let style = MonoTextStyle::new(&FONT_9X15, INK);
     let mut left = Text64::new();
 
@@ -487,7 +499,7 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
 
 
 /// The last hour's three figures, in a row under the headline.
-fn stats(frame: &mut Display7in5, s: &Status<'_>) {
+fn stats(frame: &mut Display7in5, s: &Status) {
     const TOP: i32 = 232;
     const COLUMN: i32 = 190;
 

@@ -305,7 +305,17 @@ The display/UI was designed fresh — there was no MicroPython UI to port.
 1. **Battery** — *resolved:* **MAX17048 fuel gauge** on the shared I2C bus (§2.1); no ADC needed.
    Only open bit: locate `BAT+`/`BAT-` on the schematic to tap the raw cell.
 2. **Confirm display pins + BUSY polarity** against the schematic / Seeed_GFX before first bring-up.
-3. **Partial-refresh support** on this 7.5" V2 panel — decide full-only vs. partial.
+3. **Partial-refresh support** on this 7.5" V2 panel — *resolved, and the answer is no.*
+   `epd-waveshare` 0.6's `Epd7in5` implements `update_partial_frame` as a literal
+   `unimplemented!()`, so calling it does not degrade to a full refresh — it **panics**.
+   Full-only, therefore, and that sets the whole refresh policy: a measured **3.8 s** of
+   panel-busy per redraw, which is why §6's nominal 5 s cadence is unusable and why the
+   screen is change-gated with a 30 s floor.
+
+   If partial is wanted later it means writing UC8179 support rather than configuring it —
+   the controller does support it, the crate does not. Worth it only if something needs to
+   update faster than every 30 s, and so far nothing does: strikes and the mode button are
+   the only things that redraw on demand, and neither is a fast-moving quantity.
 4. **WiFi provisioning flow** (USB-console vs. pre-seeded NVS) and NTP sync cadence.
 5. **DB retention policy** at capacity (rotate vs. overwrite-oldest).
 

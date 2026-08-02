@@ -547,6 +547,7 @@ fn listen(
             let want = Drawn {
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
+                location: *location,
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
@@ -557,6 +558,15 @@ fn listen(
                 // Polling a fuel gauge every second to display it every fifteen
                 // minutes is bus traffic bought for nothing.
                 let reading = gauge.and_then(|g| g.read(i2c).ok());
+                if let Some(reading) = reading {
+                    println!(
+                        "bat:  {} mV, {}%, rate {}.{:02} %/hr",
+                        reading.millivolts,
+                        reading.percent,
+                        reading.crate_centi_per_hour / 100,
+                        (reading.crate_centi_per_hour % 100).abs()
+                    );
+                }
 
                 // Widen the learned range on the way past. Written to NVS only
                 // when an endpoint actually moves, which the midpoint rule makes
@@ -616,7 +626,6 @@ fn listen(
                         irq_confirmed,
                         defence_level: level,
                         defence_max: defence::MAX_LEVEL,
-                        defence_rung: defence::rung(level),
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,
                         disturbers_total: totals.disturbers,
@@ -645,7 +654,8 @@ struct Totals {
 
 /// The subset of state the screen is redrawn for.
 ///
-/// **Only strikes vote.** Everything else on the screen rides the baseline
+/// **Strikes and the mode button vote. Nothing else.** Everything else rides
+/// the baseline
 /// redraw, and that is a deliberate narrowing rather than an oversight:
 ///
 /// * the **disturber count** moves every second in a noisy room;
@@ -659,14 +669,21 @@ struct Totals {
 /// one thing worth spending four seconds of panel time on the moment it
 /// happens. Same conclusion the moisture project reached about its pack
 /// voltage, arrived at from the opposite direction.
+///
+/// **The mode is here for the opposite reason.** It cannot churn — it changes
+/// only when somebody deliberately presses the one button on the device — and
+/// that press is exactly when a person is standing in front of the glass
+/// waiting to see whether it worked. A setting that takes fifteen minutes to
+/// appear reads as a button that does not work.
 #[derive(PartialEq)]
 struct Drawn {
     strikes: u32,
     last_strike: Option<(as3935::Distance, u32)>,
+    location: Location,
 }
 
 /// Render and push one status screen.
-fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status<'_>, why: &str) {
+fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status, why: &str) {
     let mut frame = display::Panel::frame();
     ui::status(&mut frame, status);
 
