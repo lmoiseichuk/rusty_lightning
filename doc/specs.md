@@ -276,9 +276,27 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 
 ## 8. Reference implementation
 
-`DFRobot_AS3935_Lib.py` (register driver) and `deep_demo.py` (address auto-detect, reworked IRQ
-handler, 1 s event batching + stats, score reporting, asymmetric noise-tune) are the behavioural
-spec for §3–§4. The display/UI is designed fresh (no port from the MicroPython UI).
+**Retired.** `DFRobot_AS3935_Lib.py` and `deep_demo.py` were the behavioural spec for §3–§4 and
+have been deleted now that the port is complete and verified on hardware — the antenna self-test
+reads 499–500 kHz through the ported registers, and disturber decoding drives the §4.2 auto-tune.
+
+`src/as3935.rs` is the record. It carries the register map, the init sequence, and every operation
+the reference had, including the ones not yet on the wake path (`set_min_strikes`,
+`clear_statistics`, `power_down`) — ported before deletion precisely so that nothing lived only in
+a file about to be removed.
+
+Four things were deliberately **not** carried across, each noted at its call site:
+
+1. **I2C reads inside the IRQ callback.** Fine in MicroPython, not allowed on esp-idf — an ISR may
+   not block, and the handler has to wait ≥3 ms first. The ISR here only notifies.
+2. **Distance as a raw 6-bit field.** `0x01` means *overhead* and `0x3F` means *out of range*;
+   charting either as kilometres poisons every average built on it.
+3. **Energy as a float.** `raw / 16777` on a `riscv32imc` core with no FPU is a software routine on
+   every strike. Intensity is fixed-point here.
+4. **The interrupt reason as 1/2/3.** The register holds `0x08`/`0x04`/`0x01`; both numbering
+   schemes appear in this document, and mixing them turns lightning into "unknown".
+
+The display/UI was designed fresh — there was no MicroPython UI to port.
 
 ---
 

@@ -1,7 +1,15 @@
 //! AS3935 franklin lightning sensor — register driver (§3).
 //!
-//! Ported from DFRobot's MicroPython library, which §8 makes the behavioural
-//! spec. Where this differs from it, the difference is deliberate and noted.
+//! Ported from DFRobot's MicroPython library (`DFRobot_AS3935_Lib.py` +
+//! `deep_demo.py`), which §8 made the behavioural spec.
+//!
+//! **Those files have been deleted, and this module is now the record.** The
+//! port is complete and verified on hardware — the antenna self-test reads
+//! 499–500 kHz through the same registers, and disturber decoding drives the
+//! §4.2 auto-tune. Everything the reference knew is either implemented below or
+//! written down here; nothing was left behind in a file that was going to rot.
+//! Where this deliberately differs from the reference, the difference is noted
+//! at the item.
 //!
 //! ## The one pattern not carried over
 //!
@@ -54,6 +62,8 @@ const MASK_AFE_GAIN: u8 = 0x3E;
 const MASK_NOISE_FLOOR: u8 = 0x70;
 const MASK_WATCHDOG: u8 = 0x0F;
 const MASK_SPIKE_REJECT: u8 = 0x0F;
+const MASK_MIN_STRIKES: u8 = 0x30;
+const MASK_CLEAR_STATS: u8 = 0x40;
 const MASK_DISTURBER: u8 = 0x20;
 const MASK_INTERRUPT: u8 = 0x0F;
 const MASK_DISPLAY_SRCO: u8 = 0x20;
@@ -343,6 +353,57 @@ impl As3935 {
     /// Spike rejection, 0–15. Same trade as the watchdog, on a different stage.
     pub fn set_spike_rejection(&self, i2c: &mut I2cDriver<'_>, level: u8) -> Result<(), EspError> {
         self.modify(i2c, REG_CONFIG2, MASK_SPIKE_REJECT, level & 0x0F)
+    }
+
+    /// How many strikes must be detected before the sensor raises an interrupt.
+    ///
+    /// The chip offers 1, 5, 9 or 16 and rounds down to the nearest, so the
+    /// value actually set is returned rather than assumed.
+    ///
+    /// **A disturber-rejection tool that costs latency, not sensitivity**, which
+    /// makes it different in kind from the §4.2 ladder. At 1 the first strike
+    /// reports immediately; at 5 the sensor waits for a pattern before saying
+    /// anything, which a storm produces and a passing motor usually does not.
+    /// The cost is that the first four strikes of a real storm are silent —
+    /// unacceptable for a device whose job is early warning, which is why this
+    /// is exposed but left at 1.
+    pub fn set_min_strikes(&self, i2c: &mut I2cDriver<'_>, strikes: u8) -> Result<u8, EspError> {
+        let (bits, actual) = match strikes {
+            0..=4 => (0x00, 1),
+            5..=8 => (0x10, 5),
+            9..=15 => (0x20, 9),
+            _ => (0x30, 16),
+        };
+        self.modify(i2c, REG_CONFIG2, MASK_MIN_STRIKES, bits)?;
+        Ok(actual)
+    }
+
+    /// Discard the accumulated distance estimate.
+    ///
+    /// The AS3935 estimates distance from statistics gathered over a *storm*,
+    /// not from a single strike — so the figure is only meaningful while the
+    /// strikes it was built from belong to the same weather. When a storm has
+    /// clearly ended, those statistics describe weather that is no longer there
+    /// and will bias the first strike of the next one.
+    ///
+    /// Cleared by toggling `CL_STAT` high–low–high, which is the datasheet's
+    /// sequence and not a mistake in the reference: the bit is edge-triggered,
+    /// so writing it once does nothing.
+    pub fn clear_statistics(&self, i2c: &mut I2cDriver<'_>) -> Result<(), EspError> {
+        self.modify(i2c, REG_CONFIG2, MASK_CLEAR_STATS, MASK_CLEAR_STATS)?;
+        self.modify(i2c, REG_CONFIG2, MASK_CLEAR_STATS, 0x00)?;
+        self.modify(i2c, REG_CONFIG2, MASK_CLEAR_STATS, MASK_CLEAR_STATS)
+    }
+
+    /// Put the analogue front end to sleep.
+    ///
+    /// Kept for §7's battery mode. Note the wake path is not symmetric:
+    /// [`As3935::power_up`] re-runs the RCO calibration, and skipping that
+    /// leaves the chip timing-uncalibrated and its idea of a strike waveform
+    /// wrong.
+    #[allow(dead_code)]
+    pub fn power_down(&self, i2c: &mut I2cDriver<'_>) -> Result<(), EspError> {
+        self.modify(i2c, REG_CONFIG0, MASK_POWER_DOWN, MASK_POWER_DOWN)
     }
 
     /// Why the IRQ fired. **Reading this clears it**, which is what re-arms the
