@@ -20,17 +20,26 @@
 # any single attempt is a coin toss. Hence retrying — but a bounded number of
 # times, so a real problem surfaces instead of scrolling past.
 #
-# ## Two traps this script exists to avoid
+# ## Use esptool to get in, espflash to write
 #
-# * `espflash` defaults to `--before default-reset`, which asserts DTR/RTS — and
-#   on the C3 those drive the reset and boot straps. A retry loop on the default
-#   can knock the board out of a download mode it had already entered, then fail
-#   next time for a reason it caused itself. So `no-reset` is tried first.
+# **This is the whole lesson of a long evening.** `espflash` 4.5.0 could not
+# connect to this board at all — dozens of attempts across every combination of
+# `--before`, with and without the stub, hanging or failing instantly. A bare
 #
-# * `espflash erase-flash` defaults to `--after hard-reset`, which reboots the
-#   chip out of the bootloader the moment the erase finishes — so the write that
-#   follows talks to a device that has already left. A successful erase followed
-#   by a guaranteed failed write, every time. Hence `--after no-reset`.
+#     esptool erase-flash
+#
+# with no arguments connected first time and erased the chip in 1.8 seconds.
+#
+# The difference is the reset sequence. This chip talks USB-Serial/JTAG, and
+# entering the downloader over it means driving the host's CDC control lines in
+# a particular order; esptool implements that correctly and espflash evidently
+# does not, on this chip and this version. Every `--before` variation here was
+# working around the wrong tool.
+#
+# So: **esptool erases, and the erase is what makes the board reachable** — an
+# erased flash has no app, so the ROM falls back to the downloader and stays
+# there, with no button and no timing. espflash then writes, because it is what
+# turns our ELF into a flashable image without a separate conversion step.
 set -uo pipefail
 
 PORT="${1:-/dev/ttyACM0}"
@@ -75,36 +84,37 @@ while (( attempt < MAX_ATTEMPTS )); do
     attempt=$((attempt + 1))
     echo
 
-    for before in no-reset default-reset; do
-        echo "[$(stamp)] attempt $attempt/$MAX_ATTEMPTS ($before): ERASING -- do not power-cycle"
-        erase_out=$(timeout 20 espflash erase-flash --port "$PORT" --chip esp32c3 \
-                        --before "$before" --after no-reset 2>&1)
-        if [[ $? -ne 0 ]]; then
-            last_error=$(grep -iE 'error|╰─▶|exception' <<<"$erase_out" | head -2 | tr '\n' ' ')
-            [[ -z "$last_error" ]] && last_error="erase timed out with no output (port vanished mid-attempt)"
-            echo "           erase failed: $last_error"
-            continue
-        fi
+    echo "[$(stamp)] attempt $attempt/$MAX_ATTEMPTS: ERASING with esptool -- do not power-cycle"
+    # Deliberately bare. esptool's own defaults handle USB-Serial/JTAG; every
+    # override tried here made it worse, and espflash could not connect at all.
+    if ! erase_out=$(timeout 40 esptool --port "$PORT" erase-flash 2>&1); then
+        last_error=$(grep -iE 'error|exception|failed' <<<"$erase_out" | head -2 | tr '\n' ' ')
+        [[ -z "$last_error" ]] && last_error="erase timed out with no output (port vanished mid-attempt)"
+        echo "           erase failed: $last_error"
+        continue
+    fi
+    echo "           $(grep -i 'erased successfully' <<<"$erase_out" | head -1)"
 
-        echo "[$(stamp)] erased OK. WRITING -- do not power-cycle"
-        write_out=$(timeout 60 espflash flash --port "$PORT" --non-interactive \
-                        --chip esp32c3 --before no-reset \
-                        --bootloader "$DIR/bootloader.bin" \
-                        --partition-table "$DIR/partition-table.bin" \
-                        "$DIR/lightning" 2>&1)
-        if grep -q 'Flashing has completed' <<<"$write_out"; then
-            echo
-            echo "=============================================="
-            echo " RECOVERED on attempt $attempt (--before $before)"
-            echo " Flash erased and rewritten. Safe to power-cycle."
-            echo "=============================================="
-            exit 0
-        fi
+    # The chip now has no app, so it sits in the ROM downloader -- which is the
+    # easy case, and why the write below needs no coaxing.
+    echo "[$(stamp)] WRITING -- do not power-cycle"
+    write_out=$(timeout 90 espflash flash --port "$PORT" --non-interactive \
+                    --chip esp32c3 \
+                    --bootloader "$DIR/bootloader.bin" \
+                    --partition-table "$DIR/partition-table.bin" \
+                    "$DIR/lightning" 2>&1)
+    if grep -q 'Flashing has completed' <<<"$write_out"; then
+        echo
+        echo "=============================================="
+        echo " RECOVERED on attempt $attempt"
+        echo " Flash erased and rewritten. Safe to power-cycle."
+        echo "=============================================="
+        exit 0
+    fi
 
-        last_error=$(grep -iE 'error|╰─▶|exception' <<<"$write_out" | head -2 | tr '\n' ' ')
-        [[ -z "$last_error" ]] && last_error="write produced no completion message"
-        echo "           write failed: $last_error"
-    done
+    last_error=$(grep -iE 'error|╰─▶|exception' <<<"$write_out" | head -2 | tr '\n' ' ')
+    [[ -z "$last_error" ]] && last_error="write produced no completion message"
+    echo "           write failed: $last_error"
 done
 
 echo
