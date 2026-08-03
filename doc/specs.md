@@ -317,6 +317,18 @@ With the board powered, the sequence that works is:
 2. while holding, press and release **RESET**;
 3. release BOOT.
 
+**The reliable way out, when the board will not answer at all:** flash a
+known-good firmware that never sleeps — **MicroPython for the ESP32-C3** is what
+worked here — and come back afterwards. It holds the USB PHY up permanently, so
+the port goes stable and the whole timing race disappears; `esptool erase-flash`
+then has all the time it needs. This beats any amount of retrying against a
+board whose USB windows are a few seconds long.
+
+Note also that **`espflash` could not connect to this board at all** across
+dozens of attempts and every `--before` combination, while a bare
+`esptool erase-flash` connected first time. Use esptool to get in; espflash is
+fine for writing once the chip is in the downloader.
+
 Easier on this build: the shield board carries a **battery ON/OFF switch**.
 Switch the cell OFF, unplug USB, then plug USB back in while holding BOOT — with
 the cell disconnected the chip genuinely loses power, so the strap is sampled on

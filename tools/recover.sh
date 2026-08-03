@@ -146,6 +146,16 @@ Things to try, in order:
 
   3. If the board is stuck in a reboot loop, its USB windows are short
      and irregular. Run this again -- catching one is partly luck.
+
+  4. **Flash something that never sleeps, then come back.** Any known-good
+     always-awake firmware will do -- MicroPython for the ESP32-C3 is the
+     one that worked here. It holds the USB PHY up permanently, so the
+     port goes stable and the timing race disappears entirely. Once it is
+     running, `esptool erase-flash` has all the time it needs, and this
+     script will then work first try.
+
+     That is the reliable way out of a light-sleep lockout, and it beats
+     any amount of retrying.
 EOF
 fi
 exit 1
