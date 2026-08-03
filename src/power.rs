@@ -160,18 +160,31 @@ pub fn usb_host_present() -> bool {
 
 /// Decide the policy from both signals.
 ///
-/// `discharging` comes from the fuel gauge and may be `None` when there is no
-/// gauge or it did not answer — in which case a USB host is the only evidence
-/// available, and its absence is not enough to conclude anything. Defaulting to
-/// `Usb` there costs power on a device that turns out to be on battery;
-/// defaulting to `Battery` would cost the console on one that is plugged in,
-/// and that is the worse failure while anyone is still developing this.
-pub fn decide(discharging: Option<bool>) -> Policy {
+/// **A USB host is the only reason to stay fast.** That is the whole rule, and
+/// the first version got it backwards by asking "is it discharging?" and
+/// defaulting to `Usb` when unsure.
+///
+/// The measurement that killed that version: a cell sitting at 3976 mV reports
+/// `CRATE` of **exactly 0.00 %/hr**, not a negative number. The gauge averages
+/// over minutes, so for the first few after unplugging it says nothing at all —
+/// and "not discharging" was being read as "plugged in", leaving the device at
+/// 160 MHz on battery precisely when it had just been unplugged.
+///
+/// Inverting the default costs nothing, which is what makes it obviously right:
+/// **no USB host means no console**, so there is nothing left to protect by
+/// keeping the clock up. The only case worth an exception is the gauge actively
+/// reporting a charge, where mains power is evidently present and there is no
+/// reason to be frugal.
+///
+/// `rate` is `None` when there is no gauge or it did not answer. With no gauge
+/// and no host, battery is both the safe assumption and the likely one.
+pub fn decide(centi_per_hour: Option<i32>) -> Policy {
     if usb_host_present() {
         return Policy::Usb;
     }
-    match discharging {
-        Some(true) => Policy::Battery,
-        _ => Policy::Usb,
+    match centi_per_hour {
+        // Actively charging: mains is there, so spend freely.
+        Some(rate) if rate > 0 => Policy::Usb,
+        _ => Policy::Battery,
     }
 }

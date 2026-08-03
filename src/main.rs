@@ -562,7 +562,7 @@ fn listen(
             }
         }
 
-        let want = power::decide(reading.map(|r| r.crate_centi_per_hour < 0));
+        let want = power::decide(reading.map(|r| r.crate_centi_per_hour));
         if want != policy {
             match power::apply(want) {
                 Ok(()) => {
