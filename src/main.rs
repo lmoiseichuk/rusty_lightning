@@ -471,9 +471,15 @@ fn listen(
 
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.
-    let mut policy = power::Policy::Usb;
-    let mut reading: Option<battery::Reading> = None;
-    let mut last_gauge_ms: u32 = 0;
+    let policy = power::Policy::Normal;
+    // The most recent gauge reading, or None until the first poll or if the
+    // gauge is absent. Cached because the screen wants it far less often than
+    // the loop runs, and it is an I2C transaction.
+    let mut reading: Option<battery::Reading>;
+    // Read once up front rather than waiting out the first poll interval, so
+    // the very first screen carries a real battery figure instead of "no gauge".
+    reading = gauge.and_then(|g| g.read(i2c).ok());
+    let mut last_gauge_ms: u32 = now_ms();
     match power::apply(policy) {
         Ok(()) => match power::config() {
             Some((max, min, sleep)) => println!(
@@ -541,13 +547,8 @@ fn listen(
         // against its right edge.
         history.tick(now_ms() / 60_000);
 
-        // --- supply and clock policy (§7) -----------------------------------
-        //
-        // Evaluated every batch rather than on the redraw path, which is where
-        // this lived and was wrong: the screen can go fifteen minutes without a
-        // redraw, so cutting USB left the device at 160 MHz for a quarter of an
-        // hour. The USB query is free; the gauge is I2C, so it is polled on its
-        // own slower cadence and cached.
+        // The fuel gauge, on its own slow cadence -- it is an I2C transaction
+        // for values that move over hours.
         if now_ms().saturating_sub(last_gauge_ms) >= GAUGE_POLL_S * 1000 {
             last_gauge_ms = now_ms();
             reading = gauge.and_then(|g| g.read(i2c).ok());
@@ -562,29 +563,15 @@ fn listen(
             }
         }
 
-        let want = power::decide(reading.map(|r| r.crate_centi_per_hour));
-        if want != policy {
-            match power::apply(want) {
-                Ok(()) => {
-                    policy = want;
-                    match power::config() {
-                        Some((max, min, sleep)) => println!(
-                            "pm:   -> {} -- {}/{} MHz, light sleep {}",
-                            policy.label(),
-                            min,
-                            max,
-                            if sleep { "on" } else { "off" }
-                        ),
-                        None => println!("pm:   -> {} (read-back failed)", policy.label()),
-                    }
-                }
-                Err(e) => println!("pm:   could not switch to {} -- {e}", want.label()),
-            }
-        }
-
-        // §4.2, and the asymmetry is the whole design: up by one per BATCH that
-        // heard anything -- not per event, which saturates the ladder in a
-        // second and is a counter racing the interrupt rate, not tuning.
+        // --- §4.2's noise auto-tune ----------------------------------------
+        //
+        // The asymmetry is the whole design: up by one per BATCH that heard
+        // anything -- not per event, which saturates the ladder in a second and
+        // is a counter racing the interrupt rate rather than tuning -- and down
+        // by one only after a full minute of silence. Quick to defend, slow to
+        // relax: a storm's first strike should not arrive into a receiver that
+        // spent the afternoon relaxing toward a floor it will have to climb
+        // straight back up.
         if batch.heard_interference() {
             quiet_ms = 0;
             if level < defence::MAX_LEVEL {
@@ -611,7 +598,6 @@ fn listen(
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
                 location: *location,
-                policy,
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
@@ -630,52 +616,19 @@ fn listen(
             let allowed = user_acted || since_draw_s >= REDRAW_MIN_GAP_S;
 
             if (changed || stale) && allowed {
-                // Read the slow-moving values only when about to draw them.
-                // Polling a fuel gauge every second to display it every fifteen
-                // minutes is bus traffic bought for nothing.
-                let reading = gauge.and_then(|g| g.read(i2c).ok());
-                if let Some(reading) = reading {
-                    println!(
-                        "bat:  {} mV, {}%, rate {}.{:02} %/hr",
-                        reading.millivolts,
-                        reading.percent,
-                        reading.crate_centi_per_hour / 100,
-                        (reading.crate_centi_per_hour % 100).abs()
-                    );
-                }
+                // Uses the cached reading from the poll above rather than
+                // taking a second one: it is at most GAUGE_POLL_S old, against a
+                // value that moves over hours.
+                //
+                // Shadowing it with a fresh read here was also what made the
+                // outer binding look unused to the compiler -- the warning was
+                // pointing at a real duplicate transaction, not at a style
+                // preference.
 
                 // Widen the learned range on the way past. Written to NVS only
                 // when an endpoint actually moves, which the midpoint rule makes
                 // rare: it takes a NEW extreme, and new extrema in a noisy
                 // series get rarer the longer it runs.
-                // §7: follow the supply. `is_charging` is the only signal on
-                // this board -- there is no VBUS sense -- so "not discharging"
-                // stands in for "plugged in". It is right in the case that
-                // matters and harmless in the one it is not: a full cell on USB
-                // reads flat rather than charging, and treating flat as USB
-                // merely keeps the clock up on a device that is plugged in.
-                if let Some(reading) = reading {
-                    let want = if reading.crate_centi_per_hour < 0 {
-                        power::Policy::Battery
-                    } else {
-                        power::Policy::Usb
-                    };
-                    if want != policy {
-                        match power::apply(want) {
-                            Ok(()) => {
-                                policy = want;
-                                let actual = power::config();
-                                println!(
-                                    "pm:   -> {} {:?}",
-                                    policy.label(),
-                                    actual
-                                );
-                            }
-                            Err(e) => println!("pm:   could not switch to {} -- {e}", want.label()),
-                        }
-                    }
-                }
-
                 if let Some(reading) = reading {
                     if let Some(moved) = battery::widened(range, reading.millivolts) {
                         match settings::store_battery_range(moved.0, moved.1) {
@@ -758,12 +711,6 @@ struct Drawn {
     strikes: u32,
     last_strike: Option<(as3935::Distance, u32)>,
     location: Location,
-    /// The supply, for the same reason as the mode: it changes only when
-    /// somebody plugs or unplugs a cable, so it cannot churn — and it is the
-    /// one moment when the clock readout on the status line becomes wrong.
-    /// Without this, unplugging USB left the old figure on the glass until the
-    /// fifteen-minute baseline, and the device looked like it had not noticed.
-    policy: power::Policy,
 }
 
 /// Render and push one status screen.

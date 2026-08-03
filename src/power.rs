@@ -5,14 +5,31 @@
 //! matters: on the 2000 mAh cell, the difference between the default policy and
 //! a considered one is roughly four days against eighty.
 //!
-//! ## Why the policy switches at runtime rather than at build time
+//! ## One policy, not three
 //!
-//! The moisture project gated this behind a cargo feature, because that device
-//! is either on a bench with a console or sealed in a box on batteries, and
-//! never both. This one is the same device in both roles — plugged in at a desk
-//! and carried outside on the same firmware — so the policy follows the
-//! **charging state** the fuel gauge already reports. Nothing to remember at
-//! flash time, and no build that is fast but flat.
+//! This started out switching between a fast USB policy and a frugal battery
+//! one, on whatever signal could distinguish them. Three signals were tried and
+//! all three were wrong in some case that actually happens:
+//!
+//! | Signal | How it failed |
+//! |---|---|
+//! | Evaluated on the redraw path | up to fifteen minutes late |
+//! | `CRATE < 0` | reads exactly `0.00 %/hr` for minutes after unplugging |
+//! | `usb_serial_jtag_is_connected()` | never reports a disconnect at all |
+//!
+//! So the switching is gone. **The device runs the frugal policy always**, and
+//! raises the clock only for the one thing that genuinely cannot work without
+//! it — the radio.
+//!
+//! What makes that affordable rather than a compromise is that `esp_pm` already
+//! solves the problem properly: drivers take **frequency locks** when they need
+//! them. The USB Serial/JTAG driver holds one while the console is in use, so
+//! plugging into a host raises the clock for exactly as long as it is needed,
+//! with no supply detection anywhere. Confirmed on hardware — the console keeps
+//! printing under a 40 MHz cap with light sleep enabled.
+//!
+//! Simpler, and correct in the cases three separate detection schemes each got
+//! wrong.
 //!
 //! ## The three settings, in order of what they are worth
 //!
@@ -47,21 +64,19 @@
 
 use esp_idf_hal::sys::{self, EspError};
 
-/// What the device is running from, and what it is doing.
+/// What the device is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
-    /// Charging, or at least not discharging — treat as mains. Console alive.
-    Usb,
-    /// On the cell, radio off. The frugal one.
-    Battery,
-    /// A radio window, on either supply. **80 MHz is the floor for WiFi**, not
-    /// a preference — see the module comment.
+    /// The normal policy, on any supply: 40 MHz ceiling, 10 MHz floor, light
+    /// sleep on. `esp_pm`'s own locks raise it when a driver needs more.
+    Normal,
+    /// A radio window. **80 MHz is the floor for WiFi**, not a preference —
+    /// below it the radio cannot operate at all.
     ///
-    /// Not constructed yet: §5's WiFi is deferred. It exists now rather than
-    /// later because it is the constraint that decided the *other* two — the
-    /// battery policy is 40 MHz precisely because this one can raise it to 80
-    /// for the window that needs it, instead of the whole design paying 80 all
-    /// the time for a radio that is off.
+    /// Not constructed yet: §5's WiFi is deferred. It exists now because it is
+    /// the reason the normal policy can afford to sit at 40 — the one workload
+    /// that truly needs more asks for it explicitly, instead of the whole
+    /// design paying 80 all the time for a radio that is off.
     #[allow(dead_code)]
     Wifi,
 }
@@ -69,8 +84,7 @@ pub enum Policy {
 impl Policy {
     pub fn label(self) -> &'static str {
         match self {
-            Policy::Usb => "USB",
-            Policy::Battery => "battery",
+            Policy::Normal => "normal",
             Policy::Wifi => "wifi window",
         }
     }
@@ -84,14 +98,7 @@ impl Policy {
 /// values would be work bought for nothing.
 pub fn apply(policy: Policy) -> Result<(), EspError> {
     let config = match policy {
-        // Leave everything alone. The console needs the PLL for its 48 MHz, and
-        // on USB there is no reason to trade it away.
-        Policy::Usb => sys::esp_pm_config_t {
-            max_freq_mhz: 160,
-            min_freq_mhz: 160,
-            light_sleep_enable: false,
-        },
-        Policy::Battery => sys::esp_pm_config_t {
+        Policy::Normal => sys::esp_pm_config_t {
             max_freq_mhz: 40,
             min_freq_mhz: 10,
             light_sleep_enable: true,
@@ -132,53 +139,4 @@ pub fn config() -> Option<(u32, u32, bool)> {
         config.min_freq_mhz as u32,
         config.light_sleep_enable,
     ))
-}
-
-
-/// Decide the policy from the fuel gauge's discharge rate.
-///
-/// ## Why the USB peripheral is not consulted
-///
-/// An earlier version asked `usb_serial_jtag_is_connected()` first, reasoning
-/// that it is exact and instant where the gauge is slow. **Measured on
-/// hardware, it does not report a disconnect**: cutting USB left the device
-/// claiming a host and sitting at 160 MHz indefinitely. Whatever that function
-/// answers on this chip, it is not "is a cable attached" — so it is gone rather
-/// than left in place looking authoritative.
-///
-/// ## What is left is enough
-///
-/// The gauge is the one signal proven to work all session: it reported
-/// `0.00 %/hr` on a static cell and tracked voltage to the millivolt.
-///
-/// ```text
-/// CRATE < 0   discharging       -> Battery
-/// CRATE > 0   charging          -> Usb
-/// CRATE = 0   neither, or full  -> Usb
-/// ```
-///
-/// **`CRATE = 0` means Usb deliberately.** A fully charged cell on a desk
-/// reports exactly zero, and reading that as "on battery" would drop the clock
-/// and take the console with it — a board going silent because its battery
-/// finished charging.
-///
-/// ## The cost: minutes, not milliseconds
-///
-/// `CRATE` is averaged over minutes, so after unplugging the device holds
-/// 160 MHz until that average turns negative. Roughly 22 mA for a few minutes
-/// out of 2000 mAh — under a tenth of a percent of the cell, once per unplug.
-/// Correct and late beats instant and wrong.
-///
-/// The reverse transition needs no detection at all: **plugging USB in reboots
-/// the board** — the C3 maps the host's DTR/RTS onto its reset straps — and a
-/// fresh boot starts on the Usb policy.
-///
-/// `None` — no gauge, or it did not answer — is battery: with no evidence
-/// either way, the frugal assumption is the safe one.
-pub fn decide(centi_per_hour: Option<i32>) -> Policy {
-    match centi_per_hour {
-        Some(rate) if rate < 0 => Policy::Battery,
-        Some(_) => Policy::Usb,
-        None => Policy::Battery,
-    }
 }
