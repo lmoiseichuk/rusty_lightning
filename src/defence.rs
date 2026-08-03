@@ -36,6 +36,10 @@
 //! saturated the whole ladder in under two seconds, which is not tuning — it is
 //! a counter racing the interrupt rate.
 
+use esp_idf_hal::i2c::I2cDriver;
+
+use crate::as3935::As3935;
+
 /// Where each rung starts, from §3 step 6.
 pub const NOISE_FLOOR_BASE: u8 = 0;
 pub const WATCHDOG_BASE: u8 = 2;
@@ -111,3 +115,21 @@ pub fn rung(level: u8) -> &'static str {
         _ => "spike rejection",
     }
 }
+
+/// Push one defence level into the sensor's three registers.
+///
+/// Lives here rather than in `main` because it is the other half of
+/// [`settings`] — that turns a level into three numbers, this puts them on the
+/// chip, and splitting them across modules meant a rung change had to be
+/// followed through two files.
+pub fn apply(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    level: u8,
+) -> Result<(), esp_idf_hal::sys::EspError> {
+    let settings = settings(level);
+    sensor.set_noise_floor(i2c, settings.noise_floor)?;
+    sensor.set_watchdog_threshold(i2c, settings.watchdog)?;
+    sensor.set_spike_rejection(i2c, settings.spike_reject)
+}
+

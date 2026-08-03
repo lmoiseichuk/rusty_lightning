@@ -6,6 +6,7 @@
 mod as3935;
 mod battery;
 mod clock;
+mod commands;
 mod console;
 mod display;
 mod defence;
@@ -13,6 +14,7 @@ mod history;
 mod i2c_scan;
 mod log;
 mod power;
+mod session;
 mod settings;
 mod storage;
 mod system;
@@ -27,7 +29,8 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::units::Hertz;
 
-use as3935::{As3935, Interrupt, Location};
+use as3935::{As3935, Location};
+use session::{collect, report, toggle_location, tune, Batch, Drawn, Totals};
 
 /// I2C bus speed.
 ///
@@ -142,12 +145,9 @@ const LOGO_DWELL_MS: u32 = 5000;
 fn main() {
     esp_idf_hal::sys::link_patches();
 
-    let peripherals = match Peripherals::take() {
-        Ok(peripherals) => peripherals,
-        Err(e) => {
-            println!("FATAL: peripherals unavailable -- {e}");
-            return;
-        }
+    let Ok(peripherals) = Peripherals::take() else {
+        println!("FATAL: peripherals unavailable");
+        return;
     };
 
     // === Claim the IRQ pad FIRST, before the console delay ==================
@@ -184,12 +184,9 @@ fn main() {
         esp_idf_hal::sys::gpio_reset_pin(21);
     }
 
-    let mut irq = match PinDriver::input(peripherals.pins.gpio21, Pull::Down) {
-        Ok(pin) => pin,
-        Err(e) => {
-            println!("FATAL: GPIO21 would not become an input -- {e}");
-            return;
-        }
+    let Ok(mut irq) = PinDriver::input(peripherals.pins.gpio21, Pull::Down) else {
+        println!("FATAL: GPIO21 would not become an input");
+        return;
     };
 
     // The USB-serial-JTAG console enumerates when the host opens the port, a
@@ -218,17 +215,14 @@ fn main() {
     // §2: the display consumes GPIO 2, 3, 4, 5, 8 and 10, which leaves the
     // XIAO's native I2C pads free. These are fixed by that, not chosen.
     let config = I2cConfig::new().baudrate(Hertz(I2C_HZ));
-    let mut i2c = match I2cDriver::new(
+    let Ok(mut i2c) = I2cDriver::new(
         peripherals.i2c0,
         peripherals.pins.gpio6,
         peripherals.pins.gpio7,
         &config,
-    ) {
-        Ok(i2c) => i2c,
-        Err(e) => {
-            println!("FATAL: I2C0 would not initialise -- {e}");
-            return;
-        }
+    ) else {
+        println!("FATAL: I2C0 would not initialise");
+        return;
     };
     println!("i2c:  SDA=GPIO6 SCL=GPIO7 @ {} kHz", I2C_HZ / 1000);
 
@@ -246,12 +240,9 @@ fn main() {
     println!("      => {}", i2c_scan::verdict(&found));
 
     // --- the sensor ------------------------------------------------------
-    let sensor = match As3935::find(&mut i2c) {
-        Some(sensor) => sensor,
-        None => {
-            println!("FATAL: no AS3935 answered a reset at 0x01/0x02/0x03");
-            return;
-        }
+    let Some(sensor) = As3935::find(&mut i2c) else {
+        println!("FATAL: no AS3935 answered a reset at 0x01/0x02/0x03");
+        return;
     };
     println!("as:   found at 0x{:02x}", sensor.address());
 
@@ -347,12 +338,9 @@ fn main() {
     // silently stateful -- a power blip, a watchdog reset or a knocked cable
     // flips the mode with no intent behind it, and after two of those nobody
     // knows which mode the device is in without waiting for a strike.
-    let mut button = match PinDriver::input(peripherals.pins.gpio9, Pull::Up) {
-        Ok(pin) => pin,
-        Err(e) => {
-            println!("FATAL: GPIO9 would not become an input -- {e}");
-            return;
-        }
+    let Ok(mut button) = PinDriver::input(peripherals.pins.gpio9, Pull::Up) else {
+        println!("FATAL: GPIO9 would not become an input");
+        return;
     };
     // The button shorts to ground, so the press is the falling edge.
     if let Err(e) = button.set_interrupt_type(InterruptType::NegEdge) {
@@ -451,7 +439,7 @@ fn configure(
     FreeRtos::delay_ms(500);
 
     sensor.set_tuning_caps(i2c, TUNING_CAPS_PF)?;
-    apply_defence(sensor, i2c, 0)?;
+    defence::apply(sensor, i2c, 0)?;
 
     // Explicit rather than relying on the reset default. One strike reports
     // immediately; the alternatives make the sensor wait for a pattern before
@@ -479,37 +467,6 @@ fn configure(
         min_strikes
     );
     Ok(())
-}
-
-/// Push one defence level into the sensor's three registers.
-fn apply_defence(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    level: u8,
-) -> Result<(), esp_idf_hal::sys::EspError> {
-    let settings = defence::settings(level);
-    sensor.set_noise_floor(i2c, settings.noise_floor)?;
-    sensor.set_watchdog_threshold(i2c, settings.watchdog)?;
-    sensor.set_spike_rejection(i2c, settings.spike_reject)
-}
-
-/// What one batch window heard.
-#[derive(Default)]
-struct Batch {
-    strikes: u32,
-    disturbers: u32,
-    noise: u32,
-    unknown: u32,
-}
-
-impl Batch {
-    fn heard_interference(&self) -> bool {
-        self.disturbers > 0 || self.noise > 0
-    }
-
-    fn is_empty(&self) -> bool {
-        self.strikes == 0 && !self.heard_interference() && self.unknown == 0
-    }
 }
 
 /// The event loop: batch what arrives, then tune once per batch (§4.2).
@@ -690,195 +647,30 @@ fn listen(
         // not lied, because it is about a person rather than a cable.
         if let Some(command) = console.poll() {
             last_console_s = Some(now_ms() / 1000);
-            match command {
-                console::Command::Date(None) => match clock::now() {
-                    Some(epoch) => println!(
-                        "date: {} {}",
-                        clock::format_local(epoch),
-                        clock::tz_label()
-                    ),
-                    None => println!("date: not set -- use: date <unix-epoch>"),
+            let effects = commands::run(
+                command,
+                &mut commands::Ctx {
+                    location,
+                    totals: &mut totals,
+                    history: &mut history,
+                    strike_log: strike_log.as_deref_mut(),
+                    chart_period: &mut chart_period,
+                    reading,
+                    range,
+                    level,
+                    die_temperature,
+                    antenna_khz,
+                    irq_confirmed,
+                    minute: minute_now(),
+                    uptime_minutes: now_ms() / 60_000,
                 },
-                console::Command::Date(Some(epoch)) => match clock::set(epoch) {
-                    Ok(()) => {
-                        last_clock_save_s = now_ms() / 1000;
-                        println!(
-                            "date: {} {}",
-                            clock::format_local(epoch),
-                            clock::tz_label()
-                        );
-                    }
-                    Err(e) => println!("date: could not set -- {e}"),
-                },
-                console::Command::SetTz(minutes) => match clock::set_tz_minutes(minutes) {
-                    Ok(()) => println!(
-                        "time: local offset {} -- now {}",
-                        clock::tz_label(),
-                        clock::now()
-                            .map(clock::format_local)
-                            .unwrap_or_else(|| heapless::String::try_from("(clock not set)")
-                                .unwrap_or_default())
-                    ),
-                    Err(e) => println!("time: could not set offset -- {e}"),
-                },
-
-                // A synthetic strike, straight into the same path a real one
-                // takes. **This exists because a real one cannot be provoked.**
-                // The AS3935 validates a waveform against a lightning signature
-                // before classifying it, so a spark -- a piezo lighter, a relay
-                // -- raises a *disturber*, never a strike. Confirmed here: a
-                // lighter moved the disturber count and produced no strike, and
-                // that is the chip working correctly rather than failing.
-                //
-                // So everything downstream of `Interrupt::Lightning` -- the
-                // distance decode, the score, the rings, the CSV line -- would
-                // otherwise be unexercised until real weather arrives.
-                console::Command::Simulate(km, intensity_milli) => {
-                    let strike = as3935::Strike {
-                        distance: as3935::Distance::Km(km),
-                        // Invert `intensity_milli` so the synthetic strike
-                        // carries a plausible raw energy rather than a magic
-                        // number -- the same arithmetic a real one would have.
-                        energy_raw: intensity_milli * 16777 / 1000,
-                    };
-                    let epoch = clock::now();
-                    totals.strikes += 1;
-                    totals.last_strike =
-                        Some((strike.distance, strike.intensity_milli(), epoch));
-                    history.record(minute_now(), &strike);
-                    if let Some(log) = strike_log.as_deref_mut() {
-                        log.append(epoch.unwrap_or(0), &strike);
-                    }
-                    println!(
-                        "STRIKE  {}  {:?}  energy {} (intensity {}.{:03})  [SIMULATED]",
-                        epoch
-                            .map(clock::format_local)
-                            .unwrap_or_else(|| heapless::String::try_from("(no clock)")
-                                .unwrap_or_default()),
-                        strike.distance,
-                        strike.energy_raw,
-                        strike.intensity_milli() / 1000,
-                        strike.intensity_milli() % 1000
-                    );
-                }
-
-                console::Command::Clear => match strike_log.as_deref_mut() {
-                    // No confirmation prompt. The console is non-blocking and
-                    // line-based, so a prompt would mean holding state across
-                    // polls for a command whose damage is bounded and whose
-                    // main use is exactly this: wiping test data.
-                    Some(log) => match log.clear() {
-                        Ok(()) => {
-                            // The charts go with it. They are rebuilt from this
-                            // file at boot, so leaving them populated after
-                            // erasing it means the screen and the log disagree
-                            // until the next power cycle -- and the screen is
-                            // the one nobody thinks to doubt. Caught in
-                            // testing: `clear` then `status` reported eleven
-                            // strikes against four records.
-                            history = history::History::new();
-                            totals = Totals::default();
-                            drawn = None;
-                            user_acted = true;
-                            println!("log:  cleared -- charts and counters reset too");
-                        }
-                        Err(e) => println!("log:  could not clear -- {e}"),
-                    },
-                    None => println!("log:  no log to clear"),
-                },
-
-                console::Command::Scope(which) => {
-                    chart_period = match which {
-                        1 => ui::ChartPeriod::Week,
-                        2 => ui::ChartPeriod::Month,
-                        _ => ui::ChartPeriod::Day,
-                    };
-                    // Force the next redraw: the period is not in the change
-                    // test -- it is set by a person, like the mode button, so
-                    // it cannot churn and should not wait for the baseline.
-                    user_acted = true;
-                    println!("scope: showing the last {}", chart_period.label());
-                }
-
-                // The screen's top line, in text. Same figures, same order, so
-                // a reading taken over the console and a photograph of the
-                // panel can be compared without translating between them.
-                console::Command::Health => {
-                    let health = system::health(
-                        die_temperature,
-                        strike_log.as_deref().map(|l| (l.free_bytes(), l.used_bytes())),
-                    );
-                    match clock::now() {
-                        Some(epoch) => println!(
-                            "health: {} {}",
-                            clock::format_local(epoch),
-                            clock::tz_label()
-                        ),
-                        None => println!("health: clock not set, up {} min", now_ms() / 60_000),
-                    }
-                    println!("health: {} MHz, light sleep {}", health.cpu_mhz,
-                        if power::config().map(|(_, _, ls)| ls).unwrap_or(false) { "on" } else { "off" });
-                    match health.die_temp_tenths {
-                        Some(t) => println!("health: die {}.{} C", t / 10, (t % 10).abs()),
-                        None => println!("health: die temperature unavailable"),
-                    }
-                    println!("health: ram {} KB free, {} KB used", health.heap_kb.0, health.heap_kb.1);
-                    match health.flash_kb {
-                        Some((free, used)) => println!("health: flash {free} KB free, {used} KB used"),
-                        None => println!("health: no filesystem"),
-                    }
-                    match reading {
-                        Some(r) => println!(
-                            "health: batt {}% {} mV, rate {}.{:02} %/hr, learned range {}-{} mV",
-                            r.percent, r.millivolts,
-                            r.crate_centi_per_hour / 100, (r.crate_centi_per_hour % 100).abs(),
-                            range.0, range.1
-                        ),
-                        None => println!("health: no fuel gauge"),
-                    }
-                }
-
-                // The screen's second line, plus what it cannot fit.
-                console::Command::Status => {
-                    let settings = defence::settings(level);
-                    println!("status: mode {}", location.label());
-                    println!(
-                        "status: noise {}/{} ({}) -- nf {}, wdth {}, srej {}",
-                        level,
-                        defence::MAX_LEVEL,
-                        defence::rung(level),
-                        settings.noise_floor,
-                        settings.watchdog,
-                        settings.spike_reject
-                    );
-                    println!(
-                        "status: {} strike(s), {} disturber(s) this session",
-                        totals.strikes, totals.disturbers
-                    );
-                    let hour = history.last_hour();
-                    println!(
-                        "status: last hour -- {} strikes, mean score {}, closest {}",
-                        hour.strikes,
-                        hour.mean_score_milli()
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".into()),
-                        if hour.distance_km_min == u8::MAX {
-                            "-".to_string()
-                        } else {
-                            format!("{} km", hour.distance_km_min)
-                        }
-                    );
-                    println!("status: antenna {antenna_khz} kHz, IRQ {}",
-                        if irq_confirmed { "confirmed" } else { "NOT CONFIRMED" });
-                    println!("status: charts showing the last {}", chart_period.label());
-                }
-
-                console::Command::Dump => match strike_log.as_deref() {
-                    Some(log) => log::dump_csv(log),
-                    None => println!("dump: no log -- the storage partition is missing"),
-                },
-                console::Command::Help => console::print_help(),
-                console::Command::Unknown => println!("?  try: help"),
+            );
+            if effects.clock_saved {
+                last_clock_save_s = now_ms() / 1000;
+            }
+            if effects.redraw_now {
+                drawn = None;
+                user_acted = true;
             }
         }
 
@@ -1076,54 +868,6 @@ fn listen(
     }
 }
 
-/// Everything counted since boot.
-#[derive(Default)]
-struct Totals {
-    strikes: u32,
-    disturbers: u32,
-    last_strike: Option<(as3935::Distance, u32, Option<u64>)>,
-}
-
-/// The subset of state the screen is redrawn for.
-///
-/// **Strikes and the mode button vote. Nothing else.** Everything else rides
-/// the baseline
-/// redraw, and that is a deliberate narrowing rather than an oversight:
-///
-/// * the **disturber count** moves every second in a noisy room;
-/// * the **defence level** oscillates across a rung whenever the environment
-///   sits near a threshold — measured here, 0→1→0 inside ninety seconds, which
-///   at a 30 s floor is a 3.9 s refresh every half minute, forever;
-/// * **battery, temperature and heap** move far slower than the baseline.
-///
-/// Each of those would pin the panel busy to report something nobody is waiting
-/// on. A strike is the one event this device exists to announce, and it is the
-/// one thing worth spending four seconds of panel time on the moment it
-/// happens. Same conclusion the moisture project reached about its pack
-/// voltage, arrived at from the opposite direction.
-///
-/// **The mode is here for the opposite reason.** It cannot churn — it changes
-/// only when somebody deliberately presses the one button on the device — and
-/// that press is exactly when a person is standing in front of the glass
-/// waiting to see whether it worked. A setting that takes fifteen minutes to
-/// appear reads as a button that does not work.
-#[derive(PartialEq)]
-struct Drawn {
-    strikes: u32,
-    last_strike: Option<(as3935::Distance, u32, Option<u64>)>,
-    location: Location,
-    /// §4.2's level. **A change test, so 11 -> 11 cannot repaint** — only a
-    /// genuine move does, and the 30 s floor bounds how often that can happen.
-    ///
-    /// It was excluded for a while after it caused a refresh every half minute
-    /// in a marginal room, oscillating 0 -> 1 -> 0. That was the ladder sitting
-    /// exactly on a threshold, which is the one place it does not settle.
-    /// Everywhere else it **converges**: it climbs until the noise is rejected
-    /// and then stops, so the churn is a property of one environment rather
-    /// than of the value.
-    defence: u8,
-}
-
 /// Render and push one status screen.
 fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status<'_>, why: &str) {
     let mut frame = display::Panel::frame();
@@ -1145,136 +889,6 @@ fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status<'_>, why: &str) {
 fn now_ms() -> u32 {
     (unsafe { esp_idf_hal::sys::esp_timer_get_time() } / 1000) as u32
 }
-
-/// Read one interrupt and fold it into the batch.
-fn collect(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    batch: &mut Batch,
-    totals: &mut Totals,
-    history: &mut history::History,
-    minute: u32,
-    mut strike_log: Option<&mut log::Log>,
-) {
-    // The datasheet's settle time, and the reason this is in the main task
-    // rather than the ISR (§3).
-    FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
-
-    let reason = match sensor.interrupt_reason(i2c) {
-        Ok(reason) => reason,
-        Err(e) => {
-            println!("irq:  reason read failed -- {e}");
-            return;
-        }
-    };
-
-    match reason {
-        Interrupt::Lightning => {
-            batch.strikes += 1;
-            totals.strikes += 1;
-            // Strikes are reported individually and immediately. They are the
-            // point of the device, they are rare, and a summary line would hide
-            // the distance and energy that §4.3 needs.
-            match sensor.strike(i2c) {
-                Ok(strike) => {
-                    let epoch = crate::clock::now();
-                    totals.last_strike =
-                        Some((strike.distance, strike.intensity_milli(), epoch));
-                    history.record(minute, &strike);
-
-                    // To flash, with the wall-clock time if there is one. An
-                    // unset clock does not suppress the record -- the strike
-                    // happened either way, and a stamp of 0 is honest about
-                    // what is not known. §5's periodic save keeps the window
-                    // where that can happen down to the first few minutes after
-                    // a fresh device is powered on.
-                    if let Some(log) = strike_log.as_deref_mut() {
-                        log.append(epoch.unwrap_or(0), &strike);
-                    }
-                    // Stamped on the console too, not only in the CSV: a
-                    // strike watched live and the same strike read back later
-                    // should be identifiable as one event.
-                    let when = match epoch {
-                        Some(epoch) => crate::clock::format_local(epoch),
-                        None => heapless::String::try_from("(no clock)").unwrap_or_default(),
-                    };
-                    println!(
-                        "STRIKE  {}  {:?}  energy {} (intensity {}.{:03})",
-                        when,
-                        strike.distance,
-                        strike.energy_raw,
-                        strike.intensity_milli() / 1000,
-                        strike.intensity_milli() % 1000
-                    )
-                }
-                Err(e) => println!("STRIKE  -- but the detail read failed: {e}"),
-            }
-        }
-        Interrupt::Disturber => {
-            batch.disturbers += 1;
-            totals.disturbers += 1;
-        }
-        Interrupt::NoiseTooHigh => batch.noise += 1,
-        Interrupt::Unknown(_) => batch.unknown += 1,
-    }
-}
-
-/// One line per batch that heard interference. Silent otherwise — a quiet
-/// device should be quiet, and the earlier per-event printing made the console
-/// unreadable in a noisy room.
-fn report(batch: &Batch) {
-    if !batch.heard_interference() && batch.unknown == 0 {
-        return;
-    }
-    println!(
-        "batch: {} disturber(s), {} noise, {} unknown",
-        batch.disturbers, batch.noise, batch.unknown
-    );
-}
-
-/// Move the defence level and say what it did in terms of the knob it is on.
-fn tune(sensor: &As3935, i2c: &mut I2cDriver<'_>, level: u8, direction: &str) {
-    let settings = defence::settings(level);
-    match apply_defence(sensor, i2c, level) {
-        Ok(()) => println!(
-            "tune: {direction} to {level}/{} -- {} (nf {}, wdth {}, srej {})",
-            defence::MAX_LEVEL,
-            defence::rung(level),
-            settings.noise_floor,
-            settings.watchdog,
-            settings.spike_reject
-        ),
-        Err(e) => println!("tune: could not move to level {level} -- {e}"),
-    }
-}
-
-/// Switch indoor/outdoor, apply it to the sensor, and remember it.
-///
-/// The order matters: the sensor is told first, and NVS is written only if that
-/// succeeded. The reverse would leave a device that reports one mode on screen
-/// and runs the other -- and the stored value would survive the reboot that
-/// would otherwise have fixed it.
-fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut Location) {
-    let next = match location {
-        Location::Indoor => Location::Outdoor,
-        Location::Outdoor => Location::Indoor,
-    };
-
-    if let Err(e) = sensor.set_location(i2c, next) {
-        println!("btn:  could not switch to {} -- {e}", next.label());
-        return;
-    }
-    *location = next;
-
-    match settings::store_location(next) {
-        Ok(()) => println!("btn:  switched to {} (saved)", next.label()),
-        // Worth saying out loud rather than swallowing: the device is running
-        // the new mode but will forget it, which is the sort of thing that
-        // wastes an afternoon the next time it is power-cycled.
-        Err(e) => println!("btn:  switched to {} but NOT saved -- {e}", next.label()),
-    }
-}
-
 
 /// Drive the IRQ pin from the antenna oscillator and count the edges.
 ///
@@ -1395,34 +1009,28 @@ fn fill_chart(
     counts: &mut [u16],
     scores: &mut [u32],
 ) -> (usize, usize) {
+    // One generic helper rather than three arms differing only in a const: the
+    // rings have different lengths but a chart does the same thing to all of
+    // them, and three near-identical blocks is three places to fix a bug.
+    fn flatten<const N: usize>(
+        ring: &history::Ring<N>,
+        counts: &mut [u16],
+        scores: &mut [u32],
+    ) -> (usize, usize) {
+        let mut c = [0u16; N];
+        let mut s = [0u32; N];
+        let live = history::series_of(ring, &mut c, &mut s);
+        counts[..N].copy_from_slice(&c);
+        scores[..N].copy_from_slice(&s);
+        (live, N)
+    }
+
     match period {
-        ui::ChartPeriod::Day => {
-            let mut c = [0u16; history::FINE_LEN];
-            let mut s = [0u32; history::FINE_LEN];
-            let live = history::series_of(&history.day, &mut c, &mut s);
-            counts[..history::FINE_LEN].copy_from_slice(&c);
-            scores[..history::FINE_LEN].copy_from_slice(&s);
-            (live, history::FINE_LEN)
-        }
-        ui::ChartPeriod::Week => {
-            let mut c = [0u16; history::MEDIUM_LEN];
-            let mut s = [0u32; history::MEDIUM_LEN];
-            let live = history::series_of(&history.week, &mut c, &mut s);
-            counts[..history::MEDIUM_LEN].copy_from_slice(&c);
-            scores[..history::MEDIUM_LEN].copy_from_slice(&s);
-            (live, history::MEDIUM_LEN)
-        }
-        ui::ChartPeriod::Month => {
-            let mut c = [0u16; history::COARSE_LEN];
-            let mut s = [0u32; history::COARSE_LEN];
-            let live = history::series_of(&history.month, &mut c, &mut s);
-            counts[..history::COARSE_LEN].copy_from_slice(&c);
-            scores[..history::COARSE_LEN].copy_from_slice(&s);
-            (live, history::COARSE_LEN)
-        }
+        ui::ChartPeriod::Day => flatten(&history.day, counts, scores),
+        ui::ChartPeriod::Week => flatten(&history.week, counts, scores),
+        ui::ChartPeriod::Month => flatten(&history.month, counts, scores),
     }
 }
-
 
 /// The current bucket index for the history rings: minutes since the Unix
 /// epoch.

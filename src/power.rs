@@ -139,10 +139,6 @@ pub fn config() -> Option<(u32, u32, bool)> {
 }
 
 
-/// Which policy the gauge's discharge rate calls for.
-///
-/// See the module comment for the table and for why every case except "actively
-/// discharging" resolves to [`Policy::Usb`].
 /// How long after boot the awake policy is held, whatever else is true.
 ///
 /// Light sleep powers down the USB PHY, so a board running it is reachable only
