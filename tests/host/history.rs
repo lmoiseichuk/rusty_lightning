@@ -14,6 +14,8 @@
 //! function, and functions and modules live in different namespaces, so the two
 //! names coexist.)
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 #[path = "../../src/strike.rs"]
 mod strike;
 #[path = "../../src/history.rs"]
@@ -21,13 +23,18 @@ mod history;
 use history::*;
 use strike::*;
 
-static mut PASS: u32 = 0;
-static mut FAIL: u32 = 0;
+// Atomics rather than `static mut`. Two counters in a single-threaded test
+// binary are the textbook case where `static mut` looks harmless, but taking a
+// reference to one — which `println!("{PASS}")` does implicitly — is undefined
+// behaviour, and Rust 2024 makes it a hard error rather than a warning.
+// `AtomicU32` costs nothing here and is the idiomatic replacement.
+static PASS: AtomicU32 = AtomicU32::new(0);
+static FAIL: AtomicU32 = AtomicU32::new(0);
+
 fn check(name: &str, ok: bool) {
-    unsafe {
-        if ok { PASS += 1; println!("  ok   {name}"); }
-        else { FAIL += 1; println!("  FAIL {name}"); }
-    }
+    let counter = if ok { &PASS } else { &FAIL };
+    counter.fetch_add(1, Ordering::Relaxed);
+    println!("  {:<4} {name}", if ok { "ok" } else { "FAIL" });
 }
 
 /// A strike whose intensity_milli is `intensity`, at `distance`.
@@ -136,8 +143,10 @@ fn main() {
     check("mean score averages the two", (820..=840).contains(&mean));
     check("an empty bucket has no mean", Bucket::default().mean_score_milli().is_none());
 
-    unsafe {
-        println!("\n{PASS} passed, {FAIL} failed");
-        std::process::exit(if FAIL == 0 { 0 } else { 1 });
-    }
+    println!(
+        "\n{} passed, {} failed",
+        PASS.load(Ordering::Relaxed),
+        FAIL.load(Ordering::Relaxed)
+    );
+    std::process::exit(if FAIL.load(Ordering::Relaxed) == 0 { 0 } else { 1 });
 }

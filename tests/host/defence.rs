@@ -12,18 +12,24 @@
 //! possible, and it means a change to the ladder that breaks these checks fails
 //! here rather than silently drifting away from what ships.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 #[path = "../../src/defence.rs"]
 mod defence;
 use defence::*;
 
-static mut PASS: u32 = 0;
-static mut FAIL: u32 = 0;
+// Atomics rather than `static mut`. Two counters in a single-threaded test
+// binary are the textbook case where `static mut` looks harmless, but taking a
+// reference to one — which `println!("{PASS}")` does implicitly — is undefined
+// behaviour, and Rust 2024 makes it a hard error rather than a warning.
+// `AtomicU32` costs nothing here and is the idiomatic replacement.
+static PASS: AtomicU32 = AtomicU32::new(0);
+static FAIL: AtomicU32 = AtomicU32::new(0);
 
 fn check(name: &str, ok: bool) {
-    unsafe {
-        if ok { PASS += 1; println!("  ok   {name}"); }
-        else { FAIL += 1; println!("  FAIL {name}"); }
-    }
+    let counter = if ok { &PASS } else { &FAIL };
+    counter.fetch_add(1, Ordering::Relaxed);
+    println!("  {:<4} {name}", if ok { "ok" } else { "FAIL" });
 }
 
 fn main() {
@@ -84,8 +90,10 @@ fn main() {
         && rung(20) == "watchdog" && rung(21) == "spike rejection"
         && rung(MAX_LEVEL) == "spike rejection");
 
-    unsafe {
-        println!("\n{PASS} passed, {FAIL} failed");
-        std::process::exit(if FAIL == 0 { 0 } else { 1 });
-    }
+    println!(
+        "\n{} passed, {} failed",
+        PASS.load(Ordering::Relaxed),
+        FAIL.load(Ordering::Relaxed)
+    );
+    std::process::exit(if FAIL.load(Ordering::Relaxed) == 0 { 0 } else { 1 });
 }
