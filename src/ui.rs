@@ -450,13 +450,17 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
         let _ = left.push_str("KB");
     }
 
+    // The two halves are drawn independently and could in principle collide, so
+    // the left one is kept short deliberately -- abbreviations here are not
+    // terseness for its own sake, they are what keeps the battery readout from
+    // running into the flash figures at the widest values.
     let _ = Text::with_baseline(&left, Point::new(16, STATUS_TOP), style, Baseline::Top).draw(frame);
 
     // Battery on the right, because it is the one field a passer-by looks for.
     let mut right = Text64::new();
     match s.battery {
         Some(reading) => {
-            let _ = right.push_str("battery ");
+            let _ = right.push_str("batt ");
             let _ = write_u32(&mut right, reading.percent as u32);
             let _ = right.push_str("%  ");
             let _ = write_u32(&mut right, reading.millivolts as u32 / 1000);
@@ -503,7 +507,7 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
             }
         }
         None => {
-            let _ = right.push_str("battery -- no gauge");
+            let _ = right.push_str("batt -- no gauge");
         }
     }
 
