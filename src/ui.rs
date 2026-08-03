@@ -114,6 +114,11 @@ pub fn logo(frame: &mut Display7in5) {
 const HEADLINE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub42_tr>();
 /// Section headings and gauge labels.
 const LABEL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub14_tr>();
+/// Row-2 labels — regular weight, because a label is not the information.
+const FIELD_LABEL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvR14_tr>();
+/// Row-2 values — bold, same size, so the eye lands on the number rather than
+/// on the word introducing it.
+const FIELD_VALUE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB14_tr>();
 
 type Text16 = heapless::String<16>;
 type Text32 = heapless::String<32>;
@@ -182,16 +187,7 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
     // change how the sensor behaves and that nothing else on screen reveals:
     // which AFE gain is selected, and how hard the receiver is currently
     // fighting noise.
-    let mut mode = Text32::new();
-    let _ = mode.push_str("Mode: ");
-    let _ = mode.push_str(s.location.label());
-    let _ = LABEL.render(
-        mode.as_str(),
-        Point::new(16, 62),
-        VerticalPosition::Baseline,
-        FontColor::Transparent(INK),
-        frame,
-    );
+    field(frame, Point::new(16, 62), "Mode: ", s.location.label());
     // What changes it, said on the glass. There is exactly one button and no
     // other label anywhere on the device, so a sealed box otherwise gives no
     // clue that pressing it does anything at all.
@@ -207,10 +203,18 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
     // a setting, not a measurement, and it belongs beside the other one.
     gauge(
         frame,
-        Point::new(230, 62),
+        Point::new(180, 62),
         s.defence_level as u32,
         s.defence_max as u32,
     );
+
+    // Disturbers for this session. It belongs beside the noise gauge because it
+    // is what the gauge is *responding to* -- a high level with few disturbers
+    // means a quiet spot the ladder has not relaxed from yet, and a low level
+    // with thousands means the auto-tune is losing.
+    let mut count = Text16::new();
+    let _ = write_u32(&mut count, s.disturbers_total);
+    field(frame, Point::new(600, 62), "Disturbers: ", &count);
 
     let _ = Line::new(Point::new(16, 84), Point::new(WIDTH as i32 - 16, 84))
         .into_styled(black)
@@ -316,19 +320,18 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
 /// close to the limit", which a filled proportion says at a glance and a
 /// figure makes you compute.
 fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
-    const BAR_WIDTH: u32 = 260;
+    const BAR_WIDTH: u32 = 200;
     const BAR_HEIGHT: u32 = 22;
 
-    let _ = LABEL.render(
-        "Noise level",
+    let _ = FIELD_LABEL.render(
+        "Noise ",
         Point::new(at.x, at.y),
         VerticalPosition::Baseline,
         FontColor::Transparent(INK),
         frame,
     );
 
-    // Cleared to the right of the label, which is wider than "noise" was.
-    const LABEL_WIDTH: i32 = 130;
+    const LABEL_WIDTH: i32 = 48;
     let bar = Rectangle::new(
         Point::new(at.x + LABEL_WIDTH, at.y - 16),
         Size::new(BAR_WIDTH, BAR_HEIGHT),
@@ -593,4 +596,38 @@ fn stat(frame: &mut Display7in5, at: Point, label: &str, value: &str) {
         Baseline::Top,
     )
     .draw(frame);
+}
+
+
+/// A regular-weight label followed by a bold value.
+///
+/// The split is the point: a label is not the information, it is the word that
+/// says what the information is. Setting both in bold — which is what the old
+/// row did — makes the eye work to find the part that changes.
+///
+/// Returns the x the value ended at, so callers can pack a line by hand.
+fn field(frame: &mut Display7in5, at: Point, label: &str, value: &str) -> i32 {
+    let advance = FIELD_LABEL
+        .render(
+            label,
+            at,
+            VerticalPosition::Baseline,
+            FontColor::Transparent(INK),
+            frame,
+        )
+        .map(|dims| dims.advance.x)
+        .unwrap_or(0);
+
+    let after = FIELD_VALUE
+        .render(
+            value,
+            Point::new(at.x + advance, at.y),
+            VerticalPosition::Baseline,
+            FontColor::Transparent(INK),
+            frame,
+        )
+        .map(|dims| dims.advance.x)
+        .unwrap_or(0);
+
+    at.x + advance + after
 }
