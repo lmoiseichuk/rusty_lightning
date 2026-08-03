@@ -58,6 +58,23 @@ default = []
 # the battery savings; buys a board that can always be talked to.
 no-light-sleep = []
 
+# LittleFS, from the IDF component registry.
+#
+# LittleFS rather than SPIFFS, and the reason is specific to this board: it has
+# a battery ON/OFF switch, so power is removed abruptly and often. SPIFFS is not
+# power-loss resilient — a cut mid-write can corrupt the *filesystem*, taking
+# the whole strike log with it rather than just the record being written.
+# LittleFS is designed around exactly that failure and recovers to its last
+# consistent state.
+#
+# `bindings_module` puts its bindings in their own module rather than merging
+# them into the ESP-IDF ones, which avoids duplicating every IDF header the two
+# share.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "joltwallet/littlefs", version = "^1.14" }
+bindings_header = "littlefs_bindings.h"
+bindings_module = "littlefs"
+
 [build-dependencies]
 embuild = "0.33"
 

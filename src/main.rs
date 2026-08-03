@@ -11,6 +11,7 @@ mod display;
 mod defence;
 mod history;
 mod i2c_scan;
+mod log;
 mod power;
 mod settings;
 mod storage;
@@ -266,6 +267,23 @@ fn main() {
 
     // Held open rather than installed per read: enabling the sensor takes time
     // to settle, and this value moves slowly.
+    // §5's strike log, on raw flash. Absence is not fatal: the device still
+    // detects and still shows, it just forgets across power cuts.
+    let mut strike_log = match log::Log::open() {
+        Some(log) => {
+            println!(
+                "log:  {} records on the storage partition ({} KB used)",
+                log.len(),
+                log.used_bytes() / 1024
+            );
+            Some(log)
+        }
+        None => {
+            println!("log:  no `storage` partition -- strikes will not be recorded");
+            None
+        }
+    };
+
     let die_temperature = system::DieTemperature::new();
     if die_temperature.is_none() {
         println!("sys:  die temperature sensor unavailable");
@@ -407,6 +425,7 @@ fn main() {
         irq_confirmed,
         gauge.as_ref(),
         die_temperature.as_ref(),
+        strike_log.as_mut(),
     );
 }
 
@@ -501,6 +520,7 @@ fn listen(
     irq_confirmed: bool,
     gauge: Option<&battery::Max17048>,
     die_temperature: Option<&system::DieTemperature>,
+    mut strike_log: Option<&mut log::Log>,
 ) {
     let mut level: u8 = 0;
     let mut quiet_ms: u32 = 0;
@@ -611,7 +631,15 @@ fn listen(
             // likely to be a bug in a notifier than a real third source, and
             // dropping it silently would lose a strike.
             if bits & !NOTIFY_BUTTON != 0 {
-                collect(sensor, i2c, &mut batch, &mut totals, &mut history, now_ms() / 60_000);
+                collect(
+                    sensor,
+                    i2c,
+                    &mut batch,
+                    &mut totals,
+                    &mut history,
+                    now_ms() / 60_000,
+                    strike_log.as_deref_mut(),
+                );
             }
         }
 
@@ -642,7 +670,10 @@ fn listen(
                     }
                     Err(e) => println!("time: could not set -- {e}"),
                 },
-                console::Command::Dump => println!("dump: not implemented yet (§5)"),
+                console::Command::Dump => match strike_log.as_deref() {
+                    Some(log) => log::dump_csv(log),
+                    None => println!("dump: no log -- the storage partition is missing"),
+                },
                 console::Command::Help => console::print_help(),
                 console::Command::Unknown => println!("?  try: help"),
             }
@@ -782,7 +813,7 @@ fn listen(
                     panel,
                     &ui::Status {
                         location: *location,
-                        health: system::health(die_temperature, 0),
+                        health: system::health(die_temperature, strike_log.as_deref().map(|l| l.used_bytes()).unwrap_or(0)),
                         battery: reading,
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
@@ -887,6 +918,7 @@ fn collect(
     totals: &mut Totals,
     history: &mut history::History,
     minute: u32,
+    mut strike_log: Option<&mut log::Log>,
 ) {
     // The datasheet's settle time, and the reason this is in the main task
     // rather than the ISR (§3).
@@ -911,6 +943,23 @@ fn collect(
                 Ok(strike) => {
                     totals.last_strike = Some((strike.distance, strike.intensity_milli()));
                     history.record(minute, &strike);
+
+                    // To flash, with the wall-clock time if there is one. An
+                    // unset clock does not suppress the record -- the strike
+                    // happened either way, and a stamp of 0 is honest about
+                    // what is not known. §5's periodic save keeps the window
+                    // where that can happen down to the first few minutes after
+                    // a fresh device is powered on.
+                    if let Some(log) = strike_log.as_deref_mut() {
+                        let record = log::Record {
+                            epoch: crate::clock::now().unwrap_or(0),
+                            distance: strike.distance,
+                            energy_raw: strike.energy_raw,
+                        };
+                        if let Err(e) = log.append(&record) {
+                            println!("log:  could not append -- {e}");
+                        }
+                    }
                     println!(
                         "STRIKE  {:?}  energy {} (intensity {}.{:03})",
                         strike.distance,
