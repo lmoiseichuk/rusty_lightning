@@ -513,17 +513,16 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
     let mut right = Text64::new();
     match s.battery {
         Some(reading) => {
-            let _ = right.push_str("batt ");
-            let _ = write!(right, "{}", reading.percent as u32);
-            let _ = right.push_str("%  ");
-            let _ = write!(right, "{}", reading.millivolts as u32 / 1000);
-            let _ = right.push('.');
-            let hundredths = (reading.millivolts % 1000) / 10;
-            if hundredths < 10 {
-                let _ = right.push('0');
-            }
-            let _ = write!(right, "{}", hundredths as u32);
-            let _ = right.push_str(" V");
+            // Fixed point by hand: `{:02}` on the hundredths is what keeps
+            // 3.05 V from rendering as "3.5 V". No float anywhere -- the C3 has
+            // no FPU, and `{:.2}` on an f32 would pull in a software routine.
+            let _ = write!(
+                right,
+                "batt {}%  {}.{:02} V",
+                reading.percent as u32,
+                reading.millivolts as u32 / 1000,
+                (reading.millivolts % 1000) / 10
+            );
 
             // **Every state says something.** The first version had two
             // branches -- charging, or an estimate -- and a cell sitting at
@@ -618,13 +617,7 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     let mut score = Text16::new();
     match hour.mean_score_milli() {
         Some(milli) => {
-            let _ = write!(score, "{}", milli / 1000);
-            let _ = score.push('.');
-            let hundredths = (milli % 1000) / 10;
-            if hundredths < 10 {
-                let _ = score.push('0');
-            }
-            let _ = write!(score, "{}", hundredths);
+            let _ = write!(score, "{}.{:02}", milli / 1000, (milli % 1000) / 10);
         }
         // A dash, not a zero. Zero is a score, and an hour with no strikes did
         // not score zero -- it has no score at all, and the two mean opposite
