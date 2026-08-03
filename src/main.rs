@@ -539,6 +539,14 @@ fn listen(
     // when the two disagree -- never on a timer alone.
     let mut totals = Totals::default();
     let mut history = history::History::new();
+    // Scratch for the chart series. Held here rather than built per redraw:
+    // the day ring alone is 96 buckets, and a redraw already costs 3.8 s of
+    // panel time without allocating on the way in.
+    // Sized for the longest ring, so one buffer serves all three periods; the
+    // shorter ones simply use a prefix.
+    let mut chart_counts = [0u16; history::MEDIUM_LEN];
+    let mut chart_scores = [0u32; history::MEDIUM_LEN];
+    let mut chart_period = ui::ChartPeriod::Day;
 
     // §2.1's learned range. Seeded rather than empty, so the first reading has
     // something to widen from -- and `None` from NVS is a virgin device, not an
@@ -744,6 +752,19 @@ fn listen(
                     None => println!("log:  no log to clear"),
                 },
 
+                console::Command::SetChart(which) => {
+                    chart_period = match which {
+                        1 => ui::ChartPeriod::Week,
+                        2 => ui::ChartPeriod::Month,
+                        _ => ui::ChartPeriod::Day,
+                    };
+                    // Force the next redraw: the period is not in the change
+                    // test -- it is set by a person, like the mode button, so
+                    // it cannot churn and should not wait for the baseline.
+                    user_acted = true;
+                    println!("chart: showing the last {}", chart_period.label());
+                }
+
                 console::Command::Dump => match strike_log.as_deref() {
                     Some(log) => log::dump_csv(log),
                     None => println!("dump: no log -- the storage partition is missing"),
@@ -899,6 +920,15 @@ fn listen(
                     }
                 }
 
+                // Flatten the ring just before drawing it, so the chart shows
+                // the state at draw time rather than whenever it last changed.
+                let chart_len = fill_chart(
+                    &history,
+                    chart_period,
+                    &mut chart_counts,
+                    &mut chart_scores,
+                );
+
                 redraw(
                     panel,
                     &ui::Status {
@@ -919,6 +949,9 @@ fn listen(
                         disturbers_total: totals.disturbers,
                         last_hour: history.last_hour(),
                         battery_range: range,
+                        chart_period,
+                        chart_counts: &chart_counts[..chart_len],
+                        chart_scores: &chart_scores[..chart_len],
                         light_sleep: power::config().map(|(_, _, ls)| ls).unwrap_or(false),
                     },
                     if changed { "content changed" } else { "baseline" },
@@ -983,7 +1016,7 @@ struct Drawn {
 }
 
 /// Render and push one status screen.
-fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status, why: &str) {
+fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status<'_>, why: &str) {
     let mut frame = display::Panel::frame();
     ui::status(&mut frame, status);
 
@@ -1232,4 +1265,45 @@ fn button_held(button: &PinDriver<'_, esp_idf_hal::gpio::Input>) -> bool {
         held_ms += BUTTON_POLL_MS;
     }
     button.is_low()
+}
+
+
+/// Flatten whichever ring the chart period selects, returning how many buckets
+/// were written.
+///
+/// One buffer sized for the longest ring rather than three: the rings differ in
+/// length but not in what a chart does with them, and a prefix is cheaper than
+/// three allocations that are each idle two thirds of the time.
+fn fill_chart(
+    history: &history::History,
+    period: ui::ChartPeriod,
+    counts: &mut [u16],
+    scores: &mut [u32],
+) -> usize {
+    match period {
+        ui::ChartPeriod::Day => {
+            let mut c = [0u16; history::FINE_LEN];
+            let mut s = [0u32; history::FINE_LEN];
+            history::series_of(&history.day, &mut c, &mut s);
+            counts[..history::FINE_LEN].copy_from_slice(&c);
+            scores[..history::FINE_LEN].copy_from_slice(&s);
+            history::FINE_LEN
+        }
+        ui::ChartPeriod::Week => {
+            let mut c = [0u16; history::MEDIUM_LEN];
+            let mut s = [0u32; history::MEDIUM_LEN];
+            history::series_of(&history.week, &mut c, &mut s);
+            counts[..history::MEDIUM_LEN].copy_from_slice(&c);
+            scores[..history::MEDIUM_LEN].copy_from_slice(&s);
+            history::MEDIUM_LEN
+        }
+        ui::ChartPeriod::Month => {
+            let mut c = [0u16; history::COARSE_LEN];
+            let mut s = [0u32; history::COARSE_LEN];
+            history::series_of(&history.month, &mut c, &mut s);
+            counts[..history::COARSE_LEN].copy_from_slice(&c);
+            scores[..history::COARSE_LEN].copy_from_slice(&s);
+            history::COARSE_LEN
+        }
+    }
 }

@@ -132,7 +132,7 @@ type Text64 = heapless::String<64>;
 const STATUS_TOP: i32 = 6;
 
 /// Everything the status screen shows.
-pub struct Status {
+pub struct Status<'a> {
     pub location: Location,
     /// Measured antenna resonance, kHz — from the LCO self-test.
     pub antenna_khz: u32,
@@ -166,13 +166,20 @@ pub struct Status {
     pub last_hour: crate::history::Bucket,
     /// The learned cell range, low/high mV (§2.1).
     pub battery_range: (u16, u16),
+    /// Which period the charts show.
+    pub chart_period: ChartPeriod,
+    /// Strikes per bucket, oldest first — the count chart.
+    pub chart_counts: &'a [u16],
+    /// Mean score per bucket in thousandths, oldest first, `0` for an empty
+    /// bucket. The severity chart.
+    pub chart_scores: &'a [u32],
     /// Whether `esp_pm` is actually light-sleeping, read back rather than
     /// assumed (§7).
     pub light_sleep: bool,
 }
 
 /// Draw the status screen.
-pub fn status(frame: &mut Display7in5, s: &Status) {
+pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     let _ = frame.clear(PAPER);
     let black = PrimitiveStyle::with_stroke(INK, 1);
 
@@ -294,6 +301,9 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
         Baseline::Top,
     )
     .draw(frame);
+
+    // --- the charts -------------------------------------------------------
+    charts(frame, s);
 
     // --- the bring-up facts, small, at the foot ---------------------------
     //
@@ -417,7 +427,7 @@ fn write_u32<const N: usize>(out: &mut heapless::String<N>, mut value: u32) -> R
 
 
 /// The device's own vital signs, as one line.
-fn status_line(frame: &mut Display7in5, s: &Status) {
+fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
     let style = MonoTextStyle::new(&FONT_9X15, INK);
     let mut left = Text64::new();
 
@@ -571,7 +581,7 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
 
 
 /// The last hour's three figures, in a row under the headline.
-fn stats(frame: &mut Display7in5, s: &Status) {
+fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     const TOP: i32 = 232;
     const COLUMN: i32 = 190;
 
@@ -673,4 +683,139 @@ fn field(frame: &mut Display7in5, at: Point, label: &str, value: &str) -> i32 {
         .unwrap_or(0);
 
     at.x + advance + after
+}
+
+
+/// Which span the charts cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartPeriod {
+    Day,
+    Week,
+    Month,
+}
+
+impl ChartPeriod {
+    pub fn label(self) -> &'static str {
+        match self {
+            ChartPeriod::Day => "24 hours",
+            ChartPeriod::Week => "7 days",
+            ChartPeriod::Month => "30 days",
+        }
+    }
+}
+
+/// Two stacked charts across the foot of the screen: how many, and how severe.
+///
+/// **Both, because neither answers the other's question.** A count says how
+/// busy the sky was; a mean score says how dangerous. One violent overhead
+/// strike and a hundred distant ones give the same count and wildly different
+/// scores, and the reverse is true of the mean — so §4.3 keeps both and this
+/// draws both, one above the other on a shared time axis.
+fn charts(frame: &mut Display7in5, s: &Status<'_>) {
+    const TOP: i32 = 290;
+    const HEIGHT: u32 = 60;
+    const GAP: i32 = 26;
+    let left = 16;
+    let width = WIDTH as i32 - 32;
+
+    let mut title = Text32::new();
+    let _ = title.push_str("Last ");
+    let _ = title.push_str(s.chart_period.label());
+    let _ = FIELD_LABEL.render(
+        title.as_str(),
+        Point::new(left, TOP - 6),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
+    );
+
+    chart(
+        frame,
+        Point::new(left, TOP),
+        width,
+        HEIGHT,
+        "strikes",
+        s.chart_counts.iter().map(|v| *v as u32),
+        s.chart_counts.len(),
+    );
+    chart(
+        frame,
+        Point::new(left, TOP + HEIGHT as i32 + GAP),
+        width,
+        HEIGHT,
+        "mean score",
+        s.chart_scores.iter().copied(),
+        s.chart_scores.len(),
+    );
+}
+
+/// One auto-scaled bar chart.
+///
+/// **Auto-scaled, as §4.3 requires**, because score rises sharply as a storm
+/// closes — a fixed ceiling would either clip an overhead strike or flatten
+/// everything else into the baseline. The peak is printed beside the label, so
+/// the scale is never a mystery: two charts drawn on different days are not
+/// comparable by height alone, and the number is what makes them comparable.
+fn chart<I>(
+    frame: &mut Display7in5,
+    at: Point,
+    width: i32,
+    height: u32,
+    label: &str,
+    values: I,
+    count: usize,
+) where
+    I: Iterator<Item = u32> + Clone,
+{
+    // Baseline first, so an empty chart still reads as a chart rather than as a
+    // rendering failure.
+    let _ = Line::new(
+        Point::new(at.x, at.y + height as i32),
+        Point::new(at.x + width, at.y + height as i32),
+    )
+    .into_styled(PrimitiveStyle::with_stroke(INK, 1))
+    .draw(frame);
+
+    let peak = values.clone().max().unwrap_or(0);
+
+    let mut caption = Text32::new();
+    let _ = caption.push_str(label);
+    if peak > 0 {
+        let _ = caption.push_str("  peak ");
+        let _ = write_u32(&mut caption, peak);
+    } else {
+        let _ = caption.push_str("  none");
+    }
+    let _ = Text::with_baseline(
+        &caption,
+        Point::new(at.x, at.y + height as i32 + 3),
+        MonoTextStyle::new(&FONT_6X10, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    if peak == 0 || count == 0 {
+        return;
+    }
+
+    // One column per bucket, as wide as the space allows. Buckets outnumber
+    // pixels on the month chart and vice versa on the day chart, so the width
+    // is computed rather than assumed.
+    let column = (width / count as i32).max(1);
+    for (index, value) in values.enumerate() {
+        if value == 0 {
+            continue;
+        }
+        // At least one pixel for any non-zero bucket: a quiet hour that saw a
+        // single distant strike must not render identically to one that saw
+        // nothing, which is the difference between "calm" and "no data".
+        let bar = ((value as u64 * height as u64 / peak as u64) as u32).max(1);
+        let x = at.x + index as i32 * column;
+        let _ = Rectangle::new(
+            Point::new(x, at.y + height as i32 - bar as i32),
+            Size::new(column.max(1) as u32, bar),
+        )
+        .into_styled(PrimitiveStyle::with_fill(INK))
+        .draw(frame);
+    }
 }

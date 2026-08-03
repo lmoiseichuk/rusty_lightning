@@ -31,6 +31,8 @@ pub enum Command {
     Dump,
     /// `clear` — erase the strike log and start a fresh file.
     Clear,
+    /// `chart day|week|month` — which span the charts cover.
+    SetChart(u8),
     /// `help`
     Help,
     /// Something was typed, but it was not a command. Still counts as activity.
@@ -148,6 +150,12 @@ fn parse(line: &str) -> Command {
         }
         Some("dump") => Command::Dump,
         Some("clear") => Command::Clear,
+        Some("chart") => match parts.next() {
+            Some("day") => Command::SetChart(0),
+            Some("week") => Command::SetChart(1),
+            Some("month") => Command::SetChart(2),
+            _ => Command::Unknown,
+        },
         Some("help") | Some("?") => Command::Help,
         _ => Command::Unknown,
     }
@@ -162,6 +170,7 @@ pub fn print_help() {
     println!("  strike [km] [int]   inject a synthetic strike (defaults 8 km, 4.0)");
     println!("  dump                write the strike log as CSV");
     println!("  clear               erase the strike log (no confirmation)");
+    println!("  chart day|week|month  which span the charts cover");
     println!("  help                this");
     println!();
     println!("typing anything also keeps the device awake for 10 minutes --");

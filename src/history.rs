@@ -248,3 +248,22 @@ impl History {
         self.day.recent(60 / FINE_MINUTES as usize)
     }
 }
+
+
+/// Flatten a ring into the two series the charts draw.
+///
+/// Two separate arrays rather than one of structs, because the renderer wants
+/// each as a contiguous run of numbers to scale and walk — and because the two
+/// scale independently: counts and mean scores share a time axis and nothing
+/// else.
+pub fn series_of<const N: usize>(ring: &Ring<N>, counts: &mut [u16; N], scores: &mut [u32; N]) {
+    let mut buckets = [Bucket::default(); N];
+    ring.series(&mut buckets);
+    for (index, bucket) in buckets.iter().enumerate() {
+        counts[index] = bucket.strikes;
+        // Zero for an empty bucket. The chart treats zero as "no bar", which is
+        // right: a bucket with no strikes has no mean score, and drawing it at
+        // the baseline says exactly that.
+        scores[index] = bucket.mean_score_milli().unwrap_or(0);
+    }
+}
