@@ -539,6 +539,20 @@ fn listen(
     // when the two disagree -- never on a timer alone.
     let mut totals = Totals::default();
     let mut history = history::History::new();
+
+    // Rebuild the rings from the file (§5). The charts are RAM and die with a
+    // power cut; the CSV does not -- so without this every reboot would show a
+    // device that had never seen a storm.
+    if strike_log.is_some() {
+        let mut replayed = 0u32;
+        log::for_each(|epoch, strike| {
+            history.record((epoch / 60) as u32, &strike);
+            replayed += 1;
+        });
+        if replayed > 0 {
+            println!("log:  replayed {replayed} record(s) into the charts");
+        }
+    }
     // Scratch for the chart series. Held here rather than built per redraw:
     // the day ring alone is 96 buckets, and a redraw already costs 3.8 s of
     // panel time without allocating on the way in.
@@ -651,7 +665,7 @@ fn listen(
                     &mut batch,
                     &mut totals,
                     &mut history,
-                    now_ms() / 60_000,
+                    minute_now(),
                     strike_log.as_deref_mut(),
                 );
             }
@@ -667,7 +681,7 @@ fn listen(
         // Keep the rings' idea of "now" current even in a lull, so a chart drawn
         // during quiet weather shows the quiet rather than the last storm shoved
         // against its right edge.
-        history.tick(now_ms() / 60_000);
+        history.tick(minute_now());
 
         // --- the console ----------------------------------------------------
         //
@@ -731,7 +745,7 @@ fn listen(
                     totals.strikes += 1;
                     totals.last_strike =
                         Some((strike.distance, strike.intensity_milli(), epoch));
-                    history.record(now_ms() / 60_000, &strike);
+                    history.record(minute_now(), &strike);
                     if let Some(log) = strike_log.as_deref_mut() {
                         log.append(epoch.unwrap_or(0), &strike);
                     }
@@ -754,7 +768,20 @@ fn listen(
                     // polls for a command whose damage is bounded and whose
                     // main use is exactly this: wiping test data.
                     Some(log) => match log.clear() {
-                        Ok(()) => println!("log:  cleared"),
+                        Ok(()) => {
+                            // The charts go with it. They are rebuilt from this
+                            // file at boot, so leaving them populated after
+                            // erasing it means the screen and the log disagree
+                            // until the next power cycle -- and the screen is
+                            // the one nobody thinks to doubt. Caught in
+                            // testing: `clear` then `status` reported eleven
+                            // strikes against four records.
+                            history = history::History::new();
+                            totals = Totals::default();
+                            drawn = None;
+                            user_acted = true;
+                            println!("log:  cleared -- charts and counters reset too");
+                        }
                         Err(e) => println!("log:  could not clear -- {e}"),
                     },
                     None => println!("log:  no log to clear"),
@@ -1393,5 +1420,21 @@ fn fill_chart(
             scores[..history::COARSE_LEN].copy_from_slice(&s);
             (live, history::COARSE_LEN)
         }
+    }
+}
+
+
+/// The current bucket index for the history rings: minutes since the Unix
+/// epoch.
+///
+/// Absolute rather than since-boot, so a record replayed from the CSV lands in
+/// the bucket it actually belongs to. Falls back to uptime when the clock has
+/// never been set — self-correcting, because setting the clock later jumps the
+/// index by decades and a jump larger than a ring clears it, which is right:
+/// nothing recorded before the device knew the time can be placed anyway.
+fn minute_now() -> u32 {
+    match clock::now() {
+        Some(epoch) => (epoch / 60) as u32,
+        None => now_ms() / 60_000,
     }
 }

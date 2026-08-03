@@ -277,3 +277,61 @@ pub fn dump_csv(log: &Log) {
     }
     println!("# end");
 }
+
+
+/// Walk the stored records, oldest first.
+///
+/// **This is what makes the charts survive a power cut.** The rings are RAM and
+/// die with it; the file does not. Replaying at boot rebuilds the last day,
+/// week and month from what actually happened rather than starting every reboot
+/// at zero — which, on a device whose whole purpose is a multi-day picture of
+/// the weather, is the difference between a chart and a demo.
+///
+/// Records with no timestamp are skipped: they cannot be placed on a time axis,
+/// and guessing where they go would corrupt the very history this rebuilds.
+/// They stay in the file, because the strike still happened.
+///
+/// Malformed lines are skipped rather than fatal. A power cut mid-append leaves
+/// a torn final line, and one bad row must not cost the other thousand.
+pub fn for_each<F>(mut visit: F)
+where
+    F: FnMut(u64, Strike),
+{
+    let Ok(file) = File::open(PATH) else {
+        return;
+    };
+    for line in BufReader::new(file).lines().map_while(Result::ok).skip(1) {
+        let mut fields = line.split(',');
+        let (Some(epoch), Some(_iso), Some(distance), Some(energy)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+
+        let Ok(epoch) = epoch.trim().parse::<u64>() else {
+            continue;
+        };
+        if epoch == 0 {
+            continue;
+        }
+        let Ok(energy_raw) = energy.trim().parse::<u32>() else {
+            continue;
+        };
+        let distance = match distance.trim() {
+            "overhead" => Distance::Overhead,
+            "far" => Distance::OutOfRange,
+            km => match km.parse::<u8>() {
+                Ok(km) => Distance::Km(km),
+                Err(_) => continue,
+            },
+        };
+
+        visit(
+            epoch,
+            Strike {
+                distance,
+                energy_raw,
+            },
+        );
+    }
+}

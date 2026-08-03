@@ -30,6 +30,19 @@
 //! Sums rather than averages, because a running average cannot absorb a new
 //! sample without also knowing the count, and keeping the count is what makes
 //! every other statistic derivable.
+//!
+//! ## Absolute minutes, not minutes since boot
+//!
+//! Buckets are indexed from the **Unix epoch**, not from power-on. That is what
+//! lets the rings be rebuilt from the CSV at startup: a record written last
+//! Tuesday has to land in last Tuesday's bucket, and a clock that restarts at
+//! zero on every boot cannot say where that is.
+//!
+//! A device whose clock has never been set falls back to uptime, which is
+//! self-correcting rather than merely tolerated: the indices jump by decades
+//! the moment the clock is set, and a jump larger than the ring clears it —
+//! which is exactly right, because everything recorded before the device knew
+//! the time is unplaceable anyway.
 
 use crate::as3935::{Distance, Strike};
 
