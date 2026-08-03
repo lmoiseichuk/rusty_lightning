@@ -551,9 +551,15 @@ fn listen(
     // gauge is absent. Cached because the screen wants it far less often than
     // the loop runs, and it is an I2C transaction.
     let mut reading: Option<battery::Reading>;
+    // Voltage over time, because `CRATE` cannot see a charger in taper -- see
+    // `battery::Trend`.
+    let mut trend: Option<battery::Trend> = None;
     // Read once up front rather than waiting out the first poll interval, so
     // the very first screen carries a real battery figure instead of "no gauge".
     reading = gauge.and_then(|g| g.read(i2c).ok());
+    if let Some(reading) = reading {
+        trend = Some(battery::Trend::new(reading.millivolts, now_ms() / 1000));
+    }
     let mut last_gauge_ms: u32 = now_ms();
     match power::apply(policy) {
         Ok(()) => match power::config() {
@@ -687,6 +693,50 @@ fn listen(
             if effects.redraw_now {
                 drawn = None;
                 user_acted = true;
+            }
+            if effects.read_battery {
+                match gauge {
+                    // One read, decoded and printed raw, so the two lines always
+                    // describe the same instant and can be checked against each
+                    // other. Also deliberately fresh rather than the main loop's
+                    // cached sample: `battery` is asked when somebody wants to
+                    // know *now*.
+                    Some(gauge) => match gauge.read_raw(i2c) {
+                        Ok((vcell, soc, crate_raw)) => {
+                            let now = battery::Reading::from_raw(vcell, soc, crate_raw);
+                            println!(
+                                "batt: {}% -- {}.{:02} V, {} mV",
+                                now.percent,
+                                now.millivolts / 1000,
+                                (now.millivolts % 1000) / 10,
+                                now.millivolts
+                            );
+                            println!(
+                                "batt: {} -- CRATE {}.{:02} %/hr",
+                                battery::flow(&now, trend.as_ref()).label(),
+                                now.crate_centi_per_hour / 100,
+                                (now.crate_centi_per_hour % 100).abs()
+                            );
+                            match trend.as_ref() {
+                                Some(t) if t.span_s() >= 60 => println!(
+                                    "batt: trend {:+} mV over {} min (>= {} mV counts)",
+                                    t.delta_mv(),
+                                    t.span_s() / 60,
+                                    battery::TREND_THRESHOLD_MV
+                                ),
+                                // Say so rather than printing a delta that has
+                                // had no time to mean anything.
+                                _ => println!("batt: trend -- not enough history yet"),
+                            }
+                            println!("batt: learned range {}-{} mV", range.0, range.1);
+                            println!(
+                                "batt: raw VCELL 0x{vcell:04X}  SOC 0x{soc:04X}  CRATE 0x{crate_raw:04X}"
+                            );
+                        }
+                        Err(e) => println!("batt: read failed -- {e}"),
+                    },
+                    None => println!("batt: no gauge found on the bus"),
+                }
             }
             if let Some(request) = effects.freq {
                 use crate::console::FreqRequest;
@@ -878,6 +928,13 @@ fn listen(
             last_gauge_ms = now_ms();
             reading = gauge.and_then(|g| g.read(i2c).ok());
             if let Some(reading) = reading {
+                let now_s = now_ms() / 1000;
+                match trend.as_mut() {
+                    Some(trend) => trend.observe(reading.millivolts, now_s),
+                    None => trend = Some(battery::Trend::new(reading.millivolts, now_s)),
+                }
+            }
+            if let Some(reading) = reading {
                 println!(
                     "bat:  {} mV, {}%, rate {}.{:02} %/hr",
                     reading.millivolts,
@@ -1017,6 +1074,10 @@ fn listen(
                             strike_log.as_deref().map(|l| (l.free_bytes(), l.used_bytes())),
                         ),
                         battery: reading,
+                        battery_flow: match reading {
+                            Some(reading) => battery::flow(&reading, trend.as_ref()),
+                            None => battery::Flow::Unknown,
+                        },
                         now: clock::now(),
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,

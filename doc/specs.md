@@ -168,6 +168,37 @@ Impact on this design:
 Rust drivers cover both: [`max170xx`](https://crates.io/crates/max170xx) exposes distinct `Max17043` /
 `Max17048` types, so the scaling is handled for you — just instantiate the right one.
 
+> #### ⚠⚠ AS BUILT: `CRATE` was scaled 100x low, and the constant looked right
+>
+> `crate_centi_per_hour` is *hundredths* of a percent per hour, so one LSB is 0.208 %/hr = **20.8**
+> of them = exactly `104/5`. The firmware used `26/125` — which is also exactly 0.208, the correct
+> constant for the **wrong unit**. It produced %/hr and stored it in a field whose name promises
+> centi.
+>
+> Nothing looked wrong at the site: the ratio is exact, defensibly derived, and matches the
+> datasheet figure quoted above. Two symptoms, neither pointing here:
+>
+> * **Charging displayed as `idle`.** A real 6.24 %/hr taper showed as `0.06 %/hr`, and a genuine
+>   0.208 %/hr trickle truncated to `0.00`. Noticed from the bench side first: a USB meter reading
+>   1.16 W against a board drawing ~0.17 W is ~200 mA going somewhere, and the screen said idle.
+> * **"Days left" almost never appeared.** The runtime estimate discards rates below 5 centi-%/hr as
+>   too small to divide by; under the old scale that threshold was really 5 **%/hr**, a rate this
+>   device never reaches, so the estimate was suppressed essentially always.
+>
+> Found by printing the raw register beside the decoded value — `CRATE 0x0001` decoding to
+> `0.00 %/hr` is not rounding. Reconciled against the bench: raw 30 is 6.24 %/hr, ~125 mA on a
+> 2000 mAh cell, consistent with the meter where 1.2 mA was not.
+>
+> **The `battery` console command exists because of this**, and prints raw registers beside decoded
+> values for exactly this reason. Its first version read them separately and the two lines disagreed
+> by a few hundredths — which defeats the purpose, since raw values are printed *so the arithmetic
+> can be checked against them*. One read now feeds both.
+>
+> Item 1 above is also now built, ahead of any MAX17043: `battery::Trend` tracks cell voltage
+> against a five-minute anchor, because `CRATE` is heavily filtered and takes minutes to respond to
+> a supply change — so a freshly plugged-in charger reads as `idle` even with correct scaling. On a
+> MAX17043 that trend would not be a fallback but the only answer.
+
 **Verdict:** stay on **MAX17048** (`CRATE` for free, lower draw, better ModelGauge). The
 MAX17043 is a fine fallback if one is already on hand — cost is ~15 lines of slope estimator. Note the
 Adafruit-board specifics above (JST power, `VIN` as pull-up reference) are **board**-specific, not

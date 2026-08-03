@@ -65,6 +65,8 @@ pub struct Effects {
     pub freq: Option<crate::console::FreqRequest>,
     /// Set by `sleep on|off`. Same reason as `freq`.
     pub light_sleep: Option<bool>,
+    /// Set by `battery`; the raw read needs the bus, which `Ctx` does not have.
+    pub read_battery: bool,
 }
 
 /// A short heapless string, for the "not set" cases.
@@ -268,6 +270,7 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         }
         Command::Freq(request) => effects.freq = Some(request),
         Command::Sleep(on) => effects.light_sleep = Some(on),
+        Command::Battery => effects.read_battery = true,
         Command::Regs => effects.dump_registers = true,
         Command::SetMode(indoor) => {
             effects.set_indoor = Some(indoor);

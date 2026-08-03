@@ -154,6 +154,10 @@ pub struct Status<'a> {
     pub health: Health,
     /// `None` when the gauge is absent or did not answer.
     pub battery: Option<crate::battery::Reading>,
+    /// Which way the charge is going, combining `CRATE` with the voltage trend.
+    /// Passed in rather than derived here because the trend is history, and the
+    /// renderer sees only a single instant.
+    pub battery_flow: crate::battery::Flow,
     /// Wall-clock time, or `None` if the clock has never been set (§5).
     ///
     /// `None` is not an error and is shown as such: a device that has not been
@@ -529,7 +533,11 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
             // exactly 0.00 %/hr matched neither, so a full battery on USB
             // showed a percentage and a voltage with nothing after it. That
             // reads as a missing feature rather than as a resting cell.
-            if reading.is_charging() {
+            // `CRATE` alone said `idle` for several minutes after a charger was
+            // plugged in -- it is filtered and slow to move. `battery_flow`
+            // falls back to the voltage trend during exactly that window; see
+            // `battery::Trend`.
+            if s.battery_flow == crate::battery::Flow::Charging {
                 let _ = right.push_str("  charging");
             } else if reading.crate_centi_per_hour == 0 {
                 // Neither direction. Distinguish a topped-up cell from one
@@ -537,6 +545,10 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
                 // different things about what happens next.
                 let _ = right.push_str(if reading.percent >= 97 {
                     "  full"
+                } else if s.battery_flow == crate::battery::Flow::Unknown {
+                    // Not yet enough history to claim anything. Saying "idle"
+                    // here is what made a charging cell look stationary.
+                    "  --"
                 } else {
                     "  idle"
                 });

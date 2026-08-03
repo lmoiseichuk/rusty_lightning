@@ -17,15 +17,6 @@
 
 use std::io::Read;
 
-/// What the console can be asked to do.
-///
-/// Deliberately a small, flat vocabulary: one word, at most two arguments, no
-/// modes and no state between lines. A device console is read by a person at a
-/// terminal *and* piped from a host script, and anything cleverer than this
-/// serves neither well.
-///
-/// The read side is non-blocking (see [`Console::new`]), so an idle console
-/// costs one failed `read` per loop and never stalls the sensor or the screen.
 /// What `freq` was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreqRequest {
@@ -37,6 +28,15 @@ pub enum FreqRequest {
     Pin(u32),
 }
 
+/// What the console can be asked to do.
+///
+/// Deliberately a small, flat vocabulary: one word, at most two arguments, no
+/// modes and no state between lines. A device console is read by a person at a
+/// terminal *and* piped from a host script, and anything cleverer than this
+/// serves neither well.
+///
+/// The read side is non-blocking (see [`Console::new`]), so an idle console
+/// costs one failed `read` per loop and never stalls the sensor or the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Help,
@@ -59,6 +59,8 @@ pub enum Command {
     Simulate(u8, u32),
     /// `freq` / `freq auto` / `freq <mhz>` — read or pin the CPU clock.
     Freq(FreqRequest),
+    /// `battery` — level, voltage, flow direction, and the raw gauge registers.
+    Battery,
     /// `sleep on|off` — light sleep alone, leaving the clock where it is.
     ///
     /// Separate from [`Command::Freq`] because they answer different questions:
@@ -211,6 +213,7 @@ fn parse(line: &str) -> Command {
                 Err(_) => Command::Unknown,
             },
         },
+        "battery" | "batt" => Command::Battery,
         "sleep" => match arg {
             Some("on") => Command::Sleep(true),
             Some("off") => Command::Sleep(false),
@@ -252,6 +255,7 @@ pub fn print_help() {
     println!();
     println!("diagnostics:");
     println!("  regs                  the sensor's registers, off the chip and decoded");
+    println!("  battery               level, voltage, charging/idle/discharging, raw gauge");
     println!("  sensitive on|off      every knob below the ladder's floor, ladder frozen");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");

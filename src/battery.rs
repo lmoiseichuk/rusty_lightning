@@ -34,10 +34,33 @@
 //! |---|---|---|
 //! | `VCELL` | 78.125 µV/LSB | `raw × 5 / 64` mV |
 //! | `SOC` | 1/256 %/LSB | `raw / 256` % |
-//! | `CRATE` | 0.208 %/hr/LSB | `raw × 26 / 125` %/hr |
+//! | `CRATE` | 0.208 %/hr/LSB | `raw × 104 / 5` **centi**-%/hr |
 //!
 //! The first is worth noting: 78.125 µV is 0.078125 mV, which is exactly 5/64.
 //! No rounding is lost.
+//!
+//! ## ⚠ The `CRATE` scale was wrong by 100x, and it hid in plain sight
+//!
+//! `crate_centi_per_hour` is *hundredths* of a percent per hour, so one LSB is
+//! 0.208 %/hr = **20.8** of them = exactly `104/5`. The code used `26/125`,
+//! which is also exactly 0.208 — the correct constant for the *wrong unit*. It
+//! produced %/hr and stored it in a field whose name promises centi.
+//!
+//! Nothing looked wrong. `26/125` is defensibly derived, exact, and matches the
+//! datasheet figure; the error was entirely in which unit it lands in. Two
+//! visible symptoms, neither of which pointed here:
+//!
+//! * **Charging read as `idle`.** A real 6.24 %/hr taper displayed as
+//!   `0.06 %/hr`, and a genuine 0.208 %/hr trickle truncated to `0.00`.
+//! * **"Days left" almost never appeared.** [`Reading::hours_remaining`]
+//!   discards rates below 5 centi-%/hr as too small to divide by. Under the old
+//!   scale that threshold was really 5 *%/hr* — a rate this device never
+//!   reaches — so the estimate was suppressed essentially always.
+//!
+//! Found by printing the raw register beside the decoded value and noticing
+//! that `CRATE 0x0001` came out as `0.00 %/hr`. Reconciled against the bench:
+//! raw 30 is 6.24 %/hr, which on a 2000 mAh cell is ~125 mA — consistent with
+//! the USB meter, where `0.06 %/hr` (1.2 mA) plainly was not.
 
 use esp_idf_hal::i2c::I2cDriver;
 use esp_idf_hal::sys::EspError;
@@ -65,6 +88,32 @@ pub struct Reading {
 }
 
 impl Reading {
+    /// Decode the three registers.
+    ///
+    /// Split out so the `battery` command can decode **the same read** it
+    /// prints raw. Reading twice made the two lines disagree by a few
+    /// hundredths, which defeats the purpose: raw values are printed so the
+    /// arithmetic can be checked against them, and that only works if they
+    /// describe the same instant.
+    pub fn from_raw(vcell: u16, soc: u16, crate_raw: u16) -> Self {
+        Reading {
+            // 78.125 µV/LSB == 5/64 mV/LSB, exactly.
+            millivolts: (vcell as u32 * 5 / 64) as u16,
+            // The low byte is the fraction; the UI has no use for 1/256ths.
+            percent: (soc >> 8).min(100) as u8,
+            // Signed: negative while discharging. Reading this as unsigned turns
+            // every discharge into an enormous positive rate.
+            //
+            // **This field is hundredths of a percent per hour**, so one LSB is
+            // 0.208 %/hr = 20.8 of them = exactly 104/5. It was `26/125` for a
+            // long time, which is 0.208 exactly — the right constant for the
+            // wrong unit, giving %/hr where the field's name promises centi.
+            // Everything downstream was therefore **100x low**; see the module
+            // comment for what that cost.
+            crate_centi_per_hour: crate_raw as i16 as i32 * 104 / 5,
+        }
+    }
+
     /// Hours until empty at the current rate, or `None` when that is not a
     /// meaningful question.
     ///
@@ -87,9 +136,6 @@ impl Reading {
         Some(self.percent as u32 * 100 / rate)
     }
 
-    pub fn is_charging(&self) -> bool {
-        self.crate_centi_per_hour > 0
-    }
 }
 
 pub struct Max17048;
@@ -109,19 +155,23 @@ impl Max17048 {
         Some((Max17048, version))
     }
 
-    pub fn read(&self, i2c: &mut I2cDriver<'_>) -> Result<Reading, EspError> {
-        let vcell = read_u16(i2c, REG_VCELL)?;
-        let soc = read_u16(i2c, REG_SOC)?;
-        let crate_raw = read_u16(i2c, REG_CRATE)? as i16;
+    /// The three registers unscaled, for the `battery` command.
+    ///
+    /// A diagnostic in the same spirit as `as3935::dump_registers`: when the
+    /// derived numbers look wrong, the question is whether the chip said
+    /// something different or whether we did the arithmetic wrong, and only the
+    /// raw values separate those.
+    pub fn read_raw(&self, i2c: &mut I2cDriver<'_>) -> Result<(u16, u16, u16), EspError> {
+        Ok((
+            read_u16(i2c, REG_VCELL)?,
+            read_u16(i2c, REG_SOC)?,
+            read_u16(i2c, REG_CRATE)?,
+        ))
+    }
 
-        Ok(Reading {
-            // 78.125 µV/LSB == 5/64 mV/LSB, exactly.
-            millivolts: (vcell as u32 * 5 / 64) as u16,
-            // The low byte is the fraction; the UI has no use for 1/256ths.
-            percent: (soc >> 8).min(100) as u8,
-            // 0.208 %/hr per LSB == 26/125, exactly, in hundredths of a percent.
-            crate_centi_per_hour: crate_raw as i32 * 26 / 125,
-        })
+    pub fn read(&self, i2c: &mut I2cDriver<'_>) -> Result<Reading, EspError> {
+        let (vcell, soc, crate_raw) = self.read_raw(i2c)?;
+        Ok(Reading::from_raw(vcell, soc, crate_raw))
     }
 }
 
@@ -240,4 +290,144 @@ pub fn hours_from_range(range: (u16, u16), reading: &Reading) -> Option<u32> {
         return None;
     }
     Some(percent_of_span * 100 / rate)
+}
+
+
+// === Which way the charge is going ==========================================
+
+/// What the cell is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Charging,
+    Discharging,
+    /// Neither, as far as we can tell — including "charging so gently that
+    /// nothing we can measure moves".
+    Idle,
+    /// Not enough history yet. Distinct from `Idle`, which is a conclusion.
+    Unknown,
+}
+
+impl Flow {
+    pub fn label(self) -> &'static str {
+        match self {
+            Flow::Charging => "charging",
+            Flow::Discharging => "discharging",
+            Flow::Idle => "idle",
+            Flow::Unknown => "unknown",
+        }
+    }
+}
+
+/// Cell voltage over time, so charging can be detected when `CRATE` cannot.
+///
+/// ## Why this exists
+///
+/// `CRATE` is the right answer eventually and the wrong one immediately. The
+/// MAX17048 has no current sense — it infers a rate from how fast its *SOC
+/// estimate* moves, and that estimate is heavily filtered, so `CRATE` takes
+/// minutes to respond to a supply change.
+///
+/// Measured on this board: the USB meter read **1.16 W** — about 232 mA at 5 V,
+/// against roughly 33 mA for the board itself, so ~200 mA was going into the
+/// cell — while `CRATE` still read `0.00 %/hr` and the screen said `idle`.
+/// Several minutes later `CRATE` came good and the screen said `charging` on
+/// its own. Nothing was broken; the reading was simply late, and "late" on a
+/// status line is indistinguishable from "wrong".
+///
+/// Cell voltage moves immediately. A charger holds the cell up; a load pulls it
+/// down. So this keeps an anchor sample and compares against it, which fills
+/// exactly the window in which `CRATE` has nothing to say.
+///
+/// It also matters for the **MAX17043**, the older part in the same family:
+/// that one has no `CRATE` register at all, only VCELL and SOC. There, this is
+/// not a fallback — it is the only way to answer the question.
+///
+/// ## Why an anchor rather than consecutive samples
+///
+/// Between two samples a minute apart the change is smaller than the noise a
+/// panel refresh puts on the rail. Holding one anchor for several minutes gives
+/// the signal time to exceed that, at the cost of taking that long to notice a
+/// change — acceptable for something displayed beside a battery percentage.
+pub struct Trend {
+    anchor_mv: u16,
+    anchor_s: u32,
+    latest_mv: u16,
+    latest_s: u32,
+}
+
+/// How long an anchor is held before it is replaced.
+pub const TREND_WINDOW_S: u32 = 5 * 60;
+
+/// How much the cell must move across the window to count as going somewhere.
+///
+/// Under this device's ~33 mA load a resting cell drifts by a millivolt or two
+/// over five minutes, and a panel refresh can dip the rail briefly. 8 mV is
+/// comfortably above both and well below what 200 mA of charge produces.
+pub const TREND_THRESHOLD_MV: i32 = 8;
+
+impl Trend {
+    pub fn new(millivolts: u16, now_s: u32) -> Self {
+        Trend {
+            anchor_mv: millivolts,
+            anchor_s: now_s,
+            latest_mv: millivolts,
+            latest_s: now_s,
+        }
+    }
+
+    pub fn observe(&mut self, millivolts: u16, now_s: u32) {
+        self.latest_mv = millivolts;
+        self.latest_s = now_s;
+        if now_s.saturating_sub(self.anchor_s) >= TREND_WINDOW_S {
+            self.anchor_mv = millivolts;
+            self.anchor_s = now_s;
+        }
+    }
+
+    /// Millivolts moved since the anchor. Positive is rising.
+    pub fn delta_mv(&self) -> i32 {
+        self.latest_mv as i32 - self.anchor_mv as i32
+    }
+
+    pub fn span_s(&self) -> u32 {
+        self.latest_s.saturating_sub(self.anchor_s)
+    }
+
+    /// What the voltage alone says.
+    ///
+    /// `Unknown` until the window has had time to mean something — reporting
+    /// `Idle` from a two-second span would be a guess wearing a conclusion's
+    /// clothes.
+    pub fn verdict(&self) -> Flow {
+        if self.span_s() < 60 {
+            return Flow::Unknown;
+        }
+        let delta = self.delta_mv();
+        if delta >= TREND_THRESHOLD_MV {
+            return Flow::Charging;
+        }
+        if delta <= -TREND_THRESHOLD_MV {
+            return Flow::Discharging;
+        }
+        Flow::Idle
+    }
+}
+
+/// Combine what the gauge says with what the voltage does.
+///
+/// `CRATE` is trusted whenever it is saying anything at all — it is a proper
+/// filtered estimate over a long window and beats a two-point voltage
+/// difference. The trend only gets a say while `CRATE` reads exactly zero,
+/// which in practice means the first few minutes after a supply change.
+pub fn flow(reading: &Reading, trend: Option<&Trend>) -> Flow {
+    if reading.crate_centi_per_hour > 0 {
+        return Flow::Charging;
+    }
+    if reading.crate_centi_per_hour < 0 {
+        return Flow::Discharging;
+    }
+    match trend {
+        Some(trend) => trend.verdict(),
+        None => Flow::Unknown,
+    }
 }
