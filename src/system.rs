@@ -29,6 +29,11 @@ pub struct Health {
     /// has: **how much room is left for data**. NVS holds a handful of settings
     /// and will never fill; the log is what grows. Same shape and unit as the
     /// heap, so one glance reads both.
+    ///
+    /// The figures come from the filesystem rather than from the partition
+    /// table, because those are different questions: the partition is 1.9 MB,
+    /// and how much of it LittleFS can still hand out is smaller and only it
+    /// knows.
     pub flash_kb: Option<(u32, u32)>,
 }
 
@@ -48,12 +53,6 @@ pub fn heap_kb() -> (u32, u32) {
     let total = unsafe { sys::heap_caps_get_total_size(sys::MALLOC_CAP_DEFAULT) } as u32;
     (free / 1024, total.saturating_sub(free) / 1024)
 }
-
-/// Convert the log's byte figures to kilobytes.
-///
-/// The numbers come from the filesystem rather than from the partition table,
-/// because those are different questions: the partition is 1.9 MB, and how much
-/// of it LittleFS can still hand out is smaller and only it knows.
 
 /// The on-die temperature sensor.
 ///
@@ -122,7 +121,16 @@ pub fn health(
         cpu_mhz: cpu_mhz(),
         die_temp_tenths: temperature.and_then(|t| t.read_tenths()),
         heap_kb: heap_kb(),
-        flash_kb: log_bytes.map(|(free, used)| (free / 1024, used / 1024)),
+        // **`used` rounds up, `free` rounds down.** Both are deliberate, and
+        // the first was a real confusion: four strikes is about 270 bytes,
+        // which floor-divides to `0 KB used` — indistinguishable from an empty
+        // log. It read as "the flash was wiped" when the records were fine.
+        //
+        // So a non-empty log now reports at least 1 KB, and free space is never
+        // overstated. `div_ceil` is the standard-library ceiling division;
+        // writing it as `(used + 1023) / 1024` is the same thing and easier to
+        // get wrong.
+        flash_kb: log_bytes.map(|(free, used)| (free / 1024, used.div_ceil(1024))),
     }
 }
 
