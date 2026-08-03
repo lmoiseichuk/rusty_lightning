@@ -254,3 +254,26 @@ pub fn apply_defence(
     sensor.set_spike_rejection(i2c, settings.spike_reject)
 }
 
+
+/// Every rejection knob at its minimum — below the §4.2 ladder's floor.
+///
+/// The ladder starts at `WDTH 2` because that is the chip's power-on default,
+/// which made it a natural-looking floor. It is not the minimum: the field is
+/// four bits and goes to 0, so "level 0" was never actually the most sensitive
+/// the part can be. Everything else (`NF_LEV`, `SREJ`, `MIN_NUM_LIGH`, indoor
+/// gain) already sits at its most sensitive setting during normal operation.
+///
+/// Expect disturbers. That is the point — this trades noise rejection for the
+/// chance of hearing a strike the ladder's floor was filtering out, and the
+/// caller must freeze the auto-tune while it is on or the first disturber will
+/// immediately climb back off it.
+pub fn force_max_sensitivity(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+) -> Result<(), esp_idf_hal::sys::EspError> {
+    sensor.set_noise_floor(i2c, 0)?;
+    sensor.set_watchdog_threshold(i2c, 0)?;
+    sensor.set_spike_rejection(i2c, 0)?;
+    sensor.set_min_strikes(i2c, 1)?;
+    Ok(())
+}

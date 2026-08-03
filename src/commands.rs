@@ -37,6 +37,8 @@ pub struct Ctx<'a> {
     pub irq_confirmed: bool,
     pub minute: u32,
     pub uptime_minutes: u32,
+    /// Whether the §4.2 ladder is currently overridden and frozen.
+    pub max_sensitivity: bool,
 }
 
 /// What the caller must do as a result.
@@ -49,6 +51,15 @@ pub struct Ctx<'a> {
 pub struct Effects {
     pub clock_saved: bool,
     pub redraw_now: bool,
+    /// `Some(on)` when `sensitive` was used. Applied by the caller rather than
+    /// here, because `Ctx` deliberately has no sensor or bus — every other
+    /// console command is pure, and one hardware command should not change that
+    /// for all of them.
+    pub sensitivity: Option<bool>,
+    /// Set by `regs`; the caller owns the bus. Same reason as `sensitivity`.
+    pub dump_registers: bool,
+    /// `Some(indoor)` when `mode` was used.
+    pub set_indoor: Option<bool>,
 }
 
 /// A short heapless string, for the "not set" cases.
@@ -203,15 +214,23 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Status => {
             let settings = defence::settings(ctx.level);
             println!("status: mode {}", ctx.location.label());
-            println!(
-                "status: noise {}/{} ({}) -- nf {}, wdth {}, srej {}",
-                ctx.level,
-                defence::MAX_LEVEL,
-                defence::rung(ctx.level),
-                settings.noise_floor,
-                settings.watchdog,
-                settings.spike_reject
-            );
+            if ctx.max_sensitivity {
+                // Not just "level 0": the ladder is overridden and frozen, and
+                // `wdth 0` is below anything `settings()` can produce. Printing
+                // the ordinary line here would misreport the hardware.
+                println!("status: MAX SENSITIVITY -- nf 0, wdth 0, srej 0, min strikes 1");
+                println!("status: auto-tune frozen; `sensitive off` restores the ladder");
+            } else {
+                println!(
+                    "status: noise {}/{} ({}) -- nf {}, wdth {}, srej {}",
+                    ctx.level,
+                    defence::MAX_LEVEL,
+                    defence::rung(ctx.level),
+                    settings.noise_floor,
+                    settings.watchdog,
+                    settings.spike_reject
+                );
+            }
             println!(
                 "status: {} strike(s), {} disturber(s) this session",
                 ctx.totals.strikes, ctx.totals.disturbers
@@ -238,6 +257,15 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             Some(log) => log::dump_csv(log),
             None => println!("dump: no log -- the storage partition is missing"),
         },
+        Command::Sensitive(on) => {
+            effects.sensitivity = Some(on);
+            effects.redraw_now = true;
+        }
+        Command::Regs => effects.dump_registers = true,
+        Command::SetMode(indoor) => {
+            effects.set_indoor = Some(indoor);
+            effects.redraw_now = true;
+        }
         Command::Help => crate::console::print_help(),
         Command::Unknown => println!("?  try: help"),
     }

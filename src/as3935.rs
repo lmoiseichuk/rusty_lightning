@@ -108,12 +108,35 @@ pub const ANTENNA_TOLERANCE_PERCENT: u32 = 35; // tenths of a percent: 3.5 %
 /// pin, with `LCO_FDIV` at its default.
 pub const LCO_DIVISOR: u32 = 16;
 
-/// Minimum wait between the IRQ edge and reading the reason register.
+/// Wait between the IRQ edge and reading the reason register.
 ///
-/// **Datasheet page 22, and it is not optional.** The chip needs this long to
-/// settle the interrupt bits after asserting the pin; read sooner and the
-/// reason nibble reads as 0, which decodes as `Unknown` and loses the strike.
-pub const IRQ_SETTLE_MS: u32 = 3;
+/// **Datasheet page 22 says 2 ms minimum, and it is not optional.** Read sooner
+/// and the reason nibble reads as 0, which decodes as `Unknown` and loses the
+/// event entirely.
+///
+/// ## Why 30 and not 3
+///
+/// This was 3 ms — the datasheet minimum plus a margin — and during a storm
+/// directly overhead the device reported **disturbers and never once a strike**,
+/// while the MicroPython reference on the same hardware had reported strikes.
+///
+/// The reference is where the answer was. Its comment says one thing and its
+/// code does another:
+///
+/// ```python
+/// utime.sleep(0.03) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
+/// ```
+///
+/// That is **30 ms, ten times what the comment claims**. Every port that reads
+/// the comment rather than the number gets 3 ms, which is the datasheet minimum
+/// for the interrupt *bits* — but the chip is still finishing its energy
+/// calculation and strike validation, and an event sampled mid-classification
+/// presents as a disturber. The nibble is legible long before it is final.
+///
+/// So the working value is the reference's actual behaviour, not its
+/// documentation. 30 ms costs nothing: this runs once per interrupt, on a
+/// device that spends its life asleep.
+pub const IRQ_SETTLE_MS: u32 = 30;
 
 /// Where the sensor is, which sets the AFE gain (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +207,21 @@ impl As3935 {
 
     pub fn address(&self) -> u8 {
         self.address
+    }
+
+    /// Every register the design touches, straight off the chip.
+    ///
+    /// A diagnostic, and the reason it exists: when the sensor reports nothing,
+    /// the question "is it configured the way we think it is" cannot be answered
+    /// from our own state. Every other status line prints what we *believe* we
+    /// wrote. This prints what the part actually holds — the two disagreeing is
+    /// the whole class of bug that is otherwise invisible.
+    pub fn dump_registers(&self, i2c: &mut I2cDriver<'_>) -> Result<[u8; 9], EspError> {
+        let mut out = [0u8; 9];
+        for (register, slot) in out.iter_mut().enumerate() {
+            *slot = self.read(i2c, register as u8)?;
+        }
+        Ok(out)
     }
 
     fn read(&self, i2c: &mut I2cDriver<'_>, register: u8) -> Result<u8, EspError> {

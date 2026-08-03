@@ -486,6 +486,12 @@ fn listen(
     mut strike_log: Option<&mut log::Log>,
 ) {
     let mut level: u8 = 0;
+    // Set by `sensitive on`; see `session::force_max_sensitivity`. Deliberately
+    // not persisted to NVS -- it is a diagnostic override for a storm happening
+    // now, and a device that silently came back from a power cut with its noise
+    // rejection disabled would be a trap. (`///` here would be a doc comment on
+    // a local, which Rust warns about: locals have no docs to attach to.)
+    let mut max_sensitivity = false;
     let mut quiet_ms: u32 = 0;
     let mut last_button_ms: u32 = 0;
     // Set by a button press, cleared by the redraw it causes.
@@ -664,6 +670,7 @@ fn listen(
                     irq_confirmed,
                     minute: minute_now(),
                     uptime_minutes: now_ms() / 60_000,
+                    max_sensitivity,
                 },
             );
             if effects.clock_saved {
@@ -672,6 +679,89 @@ fn listen(
             if effects.redraw_now {
                 drawn = None;
                 user_acted = true;
+            }
+            if let Some(indoor) = effects.set_indoor {
+                *location = if indoor {
+                    as3935::Location::Indoor
+                } else {
+                    as3935::Location::Outdoor
+                };
+                match sensor.set_location(i2c, *location) {
+                    // Outdoor is the LOWER gain, which is the counter-intuitive
+                    // half: indoor gain is ~4x, and a strike close enough to hear
+                    // saturates the front end, fails validation, and is reported
+                    // as a disturber. Less gain is what recovers a near storm.
+                    Ok(()) => println!("mode: {} gain applied", location.label()),
+                    Err(e) => println!("mode: could not apply -- {e}"),
+                }
+            }
+            if effects.dump_registers {
+                match sensor.dump_registers(i2c) {
+                    Ok(r) => {
+                        for (n, value) in r.iter().enumerate() {
+                            println!("regs: 0x0{n} = 0x{value:02X}  {:08b}", value);
+                        }
+                        // Decoded, because the failure this exists to catch is a
+                        // bit being set that nobody meant to set.
+                        println!(
+                            "regs: pwd {}  afe 0x{:02X} ({})",
+                            r[0] & 0x01,
+                            (r[0] & 0x3E) >> 1,
+                            if (r[0] & 0x3E) >> 1 == 0x12 { "indoor" } else { "outdoor" }
+                        );
+                        println!(
+                            "regs: nf {}  wdth {}  srej {}  min-strikes-bits {}",
+                            (r[1] & 0x70) >> 4,
+                            r[1] & 0x0F,
+                            r[2] & 0x0F,
+                            (r[2] & 0x30) >> 4
+                        );
+                        println!(
+                            "regs: int 0x{:X}  mask_dist {}  lco_fdiv {}",
+                            r[3] & 0x0F,
+                            (r[3] & 0x20) >> 5,
+                            (r[3] & 0xC0) >> 6
+                        );
+                        // The one that makes the sensor deaf: any of these three
+                        // set means the IRQ pin is a clock output, not an
+                        // interrupt line.
+                        let display = (r[8] & 0xE0) >> 5;
+                        println!(
+                            "regs: tun_cap {}  irq_display {:03b}{}",
+                            r[8] & 0x0F,
+                            display,
+                            if display != 0 {
+                                "  *** IRQ PIN IS A CLOCK OUTPUT -- SENSOR IS DEAF ***"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                    Err(e) => println!("regs: read failed -- {e}"),
+                }
+            }
+
+            // Applied here rather than in the command handler because `Ctx` has
+            // no sensor or bus -- see `Effects::sensitivity`.
+            if let Some(on) = effects.sensitivity {
+                max_sensitivity = on;
+                let outcome = if on {
+                    session::force_max_sensitivity(sensor, i2c)
+                } else {
+                    // Back to the bottom of the ladder, not to wherever the
+                    // level happened to be: the auto-tune was frozen, so `level`
+                    // is stale by however long the override was on.
+                    level = 0;
+                    quiet_ms = 0;
+                    session::apply_defence(sensor, i2c, 0)
+                };
+                match outcome {
+                    Ok(()) if on => println!(
+                        "sens: MAX -- nf 0, wdth 0, srej 0, min strikes 1; auto-tune frozen"
+                    ),
+                    Ok(()) => println!("sens: normal -- ladder restored at level 0"),
+                    Err(e) => println!("sens: could not apply -- {e}"),
+                }
             }
         }
 
@@ -748,7 +838,13 @@ fn listen(
         // relax: a storm's first strike should not arrive into a receiver that
         // spent the afternoon relaxing toward a floor it will have to climb
         // straight back up.
-        if batch.heard_interference() {
+        // Frozen while `sensitive on` is in force: the override sits below the
+        // ladder's floor, so the first disturber would otherwise climb straight
+        // off it and undo exactly what was asked for.
+        if max_sensitivity {
+            // nothing to do -- the knobs are held where `force_max_sensitivity`
+            // put them.
+        } else if batch.heard_interference() {
             quiet_ms = 0;
             if level < defence::MAX_LEVEL {
                 level += 1;

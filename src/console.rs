@@ -46,6 +46,13 @@ pub enum Command {
     /// `strike [km] [intensity]` — inject a synthetic strike, because a real
     /// one cannot be provoked; see the handler.
     Simulate(u8, u32),
+    /// `mode indoor|outdoor` — AFE gain, same switch as the BOOT button.
+    SetMode(bool),
+    /// `regs` — dump the sensor's registers as the chip actually holds them.
+    Regs,
+    /// `sensitive on|off` — force every rejection knob to its minimum and
+    /// freeze the §4.2 auto-tune there.
+    Sensitive(bool),
     /// Typed, but not understood. Still counts as activity.
     Unknown,
 }
@@ -170,6 +177,17 @@ fn parse(line: &str) -> Command {
             _ => Command::Unknown,
         },
 
+        "sensitive" | "sens" => match arg {
+            Some("on") => Command::Sensitive(true),
+            Some("off") => Command::Sensitive(false),
+            _ => Command::Unknown,
+        },
+        "mode" => match arg {
+            Some("indoor") => Command::SetMode(true),
+            Some("outdoor") => Command::SetMode(false),
+            _ => Command::Unknown,
+        },
+        "regs" => Command::Regs,
         "health" => Command::Health,
         "status" => Command::Status,
         "dump" => Command::Dump,
@@ -196,6 +214,7 @@ pub fn print_help() {
     println!("  dump                  the strike log as CSV");
     println!("  clear                 erase the strike log (no confirmation)");
     println!("  strike [km] [int]     inject a synthetic strike (default 8 km, 4000)");
+    println!("  sensitive on|off      force every knob below the ladder's floor");
     println!();
     println!("Typing anything also keeps the device awake for 10 minutes.");
     println!("Otherwise it light-sleeps and the USB port goes with it.");

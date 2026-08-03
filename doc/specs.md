@@ -496,6 +496,32 @@ the reference had, including the ones not yet on the wake path (`set_min_strikes
 `clear_statistics`, `power_down`) — ported before deletion precisely so that nothing lived only in
 a file about to be removed.
 
+> #### ⚠⚠ AS BUILT: the reference's comment and its code disagree, and the code is right
+>
+> Retiring the reference nearly cost a real bug. During a storm the device reported **disturbers and
+> never once a strike**, on hardware where the same sensor had reported strikes under MicroPython.
+> Everything checked out: `irq_display 000` (the IRQ pin was a real interrupt line, not the LCO
+> clock), RCO calibration complete including the `DISP_SRCO` pulse, `MIN_NUM_LIGH` = 1, indoor gain,
+> antenna at 500 kHz, and disturbers arriving in batches — so the sensor was demonstrably alive.
+>
+> The divergence was one number. The reference reads the reason register after:
+>
+> ```python
+> utime.sleep(0.03) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
+> ```
+>
+> **That is 30 ms, ten times what its own comment claims.** The port took the comment — 3 ms, the
+> datasheet minimum plus margin — and 3 ms is enough for the interrupt *bits* to be legible but not
+> for the chip to finish its energy calculation and strike validation. An event sampled
+> mid-classification presents as a disturber.
+>
+> Now 30 ms, matching the reference's behaviour rather than its documentation. It costs nothing:
+> once per interrupt, on a device that spends its life asleep.
+>
+> **The lesson for the rest of this port:** the reference was treated as the behavioural spec, and a
+> behavioural spec is what the code *does*. Anywhere a ported constant came from a comment rather
+> than from the executed value, it is unverified.
+
 Four things were deliberately **not** carried across, each noted at its call site:
 
 1. **I2C reads inside the IRQ callback.** Fine in MicroPython, not allowed on esp-idf — an ISR may
