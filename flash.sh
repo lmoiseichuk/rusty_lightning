@@ -20,6 +20,29 @@
 # immediately reset, printing nothing, which reads exactly like a firmware bug.
 #
 # Passing all three artifacts makes the board match what was built.
+# ⚠ RECOVERY ON THIS BOARD IS NOT THE USUAL DANCE.
+#
+# The standard advice -- "hold BOOT, unplug and replug USB, release BOOT" --
+# **does not work here**, and the reason is easy to miss: this board has its own
+# 2000 mAh cell, so unplugging USB does not power-cycle anything. The chip keeps
+# running, never leaves reset, and therefore never samples the BOOT strap. The
+# device stays enumerated and answers nothing, which looks exactly like a
+# hardware fault.
+#
+# With the board powered, the sequence that works is:
+#
+#     1. press and hold BOOT
+#     2. while holding, press and release RESET
+#     3. release BOOT
+#
+# Easier on this build: the shield board carries a **battery ON/OFF switch**.
+# Switch the cell OFF, unplug USB, then plug USB back in while holding BOOT --
+# with the cell disconnected the chip genuinely loses power and samples the
+# strap on the way back up.
+#
+# You need this whenever a build with light sleep enabled is running: light
+# sleep powers down the USB PHY, so neither the console nor espflash can reach
+# the board.
 set -euo pipefail
 
 PORT="${1:-/dev/ttyACM0}"

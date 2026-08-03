@@ -300,6 +300,34 @@ The display/UI was designed fresh — there was no MicroPython UI to port.
 
 ---
 
+### ⚠ Recovering a board that will not flash
+
+The usual ESP32 advice — hold BOOT, replug USB, release BOOT — **does not work
+on this board**, and the reason is worth writing down because the symptom looks
+like dead hardware.
+
+**The panel has its own 2000 mAh cell.** Unplugging USB therefore does not
+power-cycle anything: the chip keeps running, never leaves reset, and never
+samples the BOOT strap. The device stays enumerated, the port stays present, and
+`espflash` hangs at "Connecting..." indefinitely.
+
+With the board powered, the sequence that works is:
+
+1. press and hold **BOOT**;
+2. while holding, press and release **RESET**;
+3. release BOOT.
+
+Easier on this build: the shield board carries a **battery ON/OFF switch**.
+Switch the cell OFF, unplug USB, then plug USB back in while holding BOOT — with
+the cell disconnected the chip genuinely loses power, so the strap is sampled on
+the way back up. That switch is the reliable recovery on this hardware and the
+first thing to reach for.
+
+This is needed whenever a build with **light sleep** enabled is running, because
+light sleep powers down the USB PHY and takes both the console and the flasher
+with it. That is also why §7's battery policy is gated on the fuel gauge rather
+than applied unconditionally: an always-frugal build is an unflashable one.
+
 ## 9. Open items to verify
 
 1. **Battery** — *resolved:* **MAX17048 fuel gauge** on the shared I2C bus (§2.1); no ADC needed.
