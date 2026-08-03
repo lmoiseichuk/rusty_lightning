@@ -270,7 +270,11 @@ fn main() {
             println!(
                 "log:  {} records, {} KB used, {} KB free",
                 log.len(),
-                log.used_bytes() / 1024,
+                // `div_ceil`, matching `system::health` -- a non-empty log
+                // must never print as `0 KB used`, which reads as "no data".
+                // Fixed in `health` first and missed here: same figure, two
+                // formatters.
+                log.used_bytes().div_ceil(1024),
                 log.free_bytes() / 1024
             );
             Some(log)
