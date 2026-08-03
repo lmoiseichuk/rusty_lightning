@@ -207,7 +207,11 @@ fn main() {
     // write unstamped records until somebody tells it one, and that is worth
     // knowing before the log is trusted.
     match clock::restore() {
-        Some(epoch) => println!("time: restored {} UTC", clock::format(epoch)),
+        Some(epoch) => println!(
+            "time: restored {} {}",
+            clock::format_local(epoch),
+            clock::tz_label()
+        ),
         None => println!("time: NOT SET -- records will be unstamped. Use: time <unix-epoch>"),
     }
 
@@ -668,10 +672,78 @@ fn listen(
                 console::Command::SetTime(epoch) => match clock::set(epoch) {
                     Ok(()) => {
                         last_clock_save_s = now_ms() / 1000;
-                        println!("time: set to {} UTC", clock::format(epoch));
+                        println!(
+                            "time: set to {} {}",
+                            clock::format_local(epoch),
+                            clock::tz_label()
+                        );
                     }
                     Err(e) => println!("time: could not set -- {e}"),
                 },
+                console::Command::SetTz(minutes) => match clock::set_tz_minutes(minutes) {
+                    Ok(()) => println!(
+                        "time: local offset {} -- now {}",
+                        clock::tz_label(),
+                        clock::now()
+                            .map(clock::format_local)
+                            .unwrap_or_else(|| heapless::String::try_from("(clock not set)")
+                                .unwrap_or_default())
+                    ),
+                    Err(e) => println!("time: could not set offset -- {e}"),
+                },
+
+                // A synthetic strike, straight into the same path a real one
+                // takes. **This exists because a real one cannot be provoked.**
+                // The AS3935 validates a waveform against a lightning signature
+                // before classifying it, so a spark -- a piezo lighter, a relay
+                // -- raises a *disturber*, never a strike. Confirmed here: a
+                // lighter moved the disturber count and produced no strike, and
+                // that is the chip working correctly rather than failing.
+                //
+                // So everything downstream of `Interrupt::Lightning` -- the
+                // distance decode, the score, the rings, the CSV line -- would
+                // otherwise be unexercised until real weather arrives.
+                console::Command::Simulate(km, intensity_milli) => {
+                    let strike = as3935::Strike {
+                        distance: as3935::Distance::Km(km),
+                        // Invert `intensity_milli` so the synthetic strike
+                        // carries a plausible raw energy rather than a magic
+                        // number -- the same arithmetic a real one would have.
+                        energy_raw: intensity_milli * 16777 / 1000,
+                    };
+                    let epoch = clock::now();
+                    totals.strikes += 1;
+                    totals.last_strike =
+                        Some((strike.distance, strike.intensity_milli(), epoch));
+                    history.record(now_ms() / 60_000, &strike);
+                    if let Some(log) = strike_log.as_deref_mut() {
+                        log.append(epoch.unwrap_or(0), &strike);
+                    }
+                    println!(
+                        "STRIKE  {}  {:?}  energy {} (intensity {}.{:03})  [SIMULATED]",
+                        epoch
+                            .map(clock::format_local)
+                            .unwrap_or_else(|| heapless::String::try_from("(no clock)")
+                                .unwrap_or_default()),
+                        strike.distance,
+                        strike.energy_raw,
+                        strike.intensity_milli() / 1000,
+                        strike.intensity_milli() % 1000
+                    );
+                }
+
+                console::Command::Clear => match strike_log.as_deref_mut() {
+                    // No confirmation prompt. The console is non-blocking and
+                    // line-based, so a prompt would mean holding state across
+                    // polls for a command whose damage is bounded and whose
+                    // main use is exactly this: wiping test data.
+                    Some(log) => match log.clear() {
+                        Ok(()) => println!("log:  cleared"),
+                        Err(e) => println!("log:  could not clear -- {e}"),
+                    },
+                    None => println!("log:  no log to clear"),
+                },
+
                 console::Command::Dump => match strike_log.as_deref() {
                     Some(log) => log::dump_csv(log),
                     None => println!("dump: no log -- the storage partition is missing"),
@@ -981,7 +1053,7 @@ fn collect(
                     // strike watched live and the same strike read back later
                     // should be identifiable as one event.
                     let when = match epoch {
-                        Some(epoch) => crate::clock::format(epoch),
+                        Some(epoch) => crate::clock::format_local(epoch),
                         None => heapless::String::try_from("(no clock)").unwrap_or_default(),
                     };
                     println!(

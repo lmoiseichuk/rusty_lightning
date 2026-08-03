@@ -278,7 +278,7 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
             // happening", and a distance with no time cannot say whether it is
             // happening now or happened yesterday.
             if let Some(epoch) = when {
-                let stamp = crate::clock::format(epoch);
+                let stamp = crate::clock::format_local(epoch);
                 let _ = last.push_str("  ·  ");
                 let _ = last.push_str(stamp.get(11..16).unwrap_or(""));
             }
@@ -430,7 +430,7 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
     // without one.
     match s.now {
         Some(epoch) => {
-            let stamp = crate::clock::format(epoch);
+            let stamp = crate::clock::format_local(epoch);
             // "YYYY-MM-DD HH:MM:SS" -- take everything but the seconds.
             let _ = left.push_str(stamp.get(..16).unwrap_or(stamp.as_str()));
         }

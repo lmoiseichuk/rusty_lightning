@@ -28,6 +28,7 @@ use crate::storage::Namespace;
 
 const NAMESPACE: &[u8] = b"settings\0";
 const KEY_EPOCH: &[u8] = b"epoch\0";
+const KEY_TZ_MINUTES: &[u8] = b"tz_min\0";
 
 /// How often the current time is written back to NVS.
 ///
@@ -158,4 +159,57 @@ fn push_padded<const N: usize>(
         out.push(digits[i] as char).map_err(|_| ())?;
     }
     Ok(())
+}
+
+
+// === Local time ============================================================
+//
+// The stored epoch is, and stays, **UTC**. A Unix timestamp is defined that
+// way, and a log that stores local time is a log that becomes ambiguous twice
+// a year and unreadable if the device moves. So the offset is applied on the
+// way *out*, for the things a person reads.
+
+/// Minutes east of UTC. Negative for the Americas.
+///
+/// Stored in minutes rather than hours so that half-hour and quarter-hour zones
+/// — India, Nepal, parts of Australia — need no format change later.
+pub fn tz_minutes() -> i32 {
+    Namespace::open(NAMESPACE)
+        .ok()
+        .and_then(|nvs| nvs.get_i32(KEY_TZ_MINUTES))
+        .unwrap_or(0)
+}
+
+pub fn set_tz_minutes(minutes: i32) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_i32(KEY_TZ_MINUTES, minutes)?;
+    nvs.commit()
+}
+
+/// `YYYY-MM-DD HH:MM:SS` in local time.
+///
+/// Everything a person reads goes through this; everything stored uses
+/// [`format`] on the raw UTC epoch. Keeping the two apart is what stops a log
+/// becoming ambiguous at a daylight-saving boundary.
+pub fn format_local(epoch: u64) -> heapless::String<20> {
+    let shifted = (epoch as i64 + tz_minutes() as i64 * 60).max(0) as u64;
+    format(shifted)
+}
+
+/// The offset as `UTC-4` / `UTC+5:30`, for display.
+pub fn tz_label() -> heapless::String<12> {
+    let minutes = tz_minutes();
+    let mut out = heapless::String::new();
+    let _ = out.push_str("UTC");
+    if minutes == 0 {
+        return out;
+    }
+    let _ = out.push(if minutes < 0 { '-' } else { '+' });
+    let magnitude = minutes.unsigned_abs();
+    let _ = push_padded(&mut out, magnitude / 60, 1);
+    if magnitude % 60 != 0 {
+        let _ = out.push(':');
+        let _ = push_padded(&mut out, magnitude % 60, 2);
+    }
+    out
 }

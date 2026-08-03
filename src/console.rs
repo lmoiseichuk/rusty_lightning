@@ -22,8 +22,15 @@ use std::io::Read;
 pub enum Command {
     /// `time <unix-epoch>` — set the clock (§5).
     SetTime(u64),
+    /// `tz <hours>` — minutes east of UTC, given in hours (negative west).
+    SetTz(i32),
+    /// `strike [km] [intensity]` — inject a synthetic strike to exercise the
+    /// path end to end. See the handler for why this exists.
+    Simulate(u8, u32),
     /// `dump` — write the strike log as CSV.
     Dump,
+    /// `clear` — erase the strike log and start a fresh file.
+    Clear,
     /// `help`
     Help,
     /// Something was typed, but it was not a command. Still counts as activity.
@@ -125,7 +132,22 @@ fn parse(line: &str) -> Command {
             Some(epoch) => Command::SetTime(epoch),
             None => Command::Unknown,
         },
+        Some("tz") => match parts.next().and_then(|v| v.parse::<i32>().ok()) {
+            // Given in hours because that is how people say it; stored in
+            // minutes so a half-hour zone needs no format change.
+            Some(hours) if (-12..=14).contains(&hours) => Command::SetTz(hours * 60),
+            _ => Command::Unknown,
+        },
+        Some("strike") => {
+            let km = parts.next().and_then(|v| v.parse::<u8>().ok()).unwrap_or(8);
+            let intensity = parts
+                .next()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(4000);
+            Command::Simulate(km, intensity)
+        }
         Some("dump") => Command::Dump,
+        Some("clear") => Command::Clear,
         Some("help") | Some("?") => Command::Help,
         _ => Command::Unknown,
     }
@@ -136,7 +158,10 @@ pub fn print_help() {
     println!("commands:");
     println!("  time <unix-epoch>   set the clock, e.g. time 1785280179");
     println!("                      (date +%s on the host gives the number)");
+    println!("  tz <hours>          local offset, e.g. tz -4 for US Eastern");
+    println!("  strike [km] [int]   inject a synthetic strike (defaults 8 km, 4.0)");
     println!("  dump                write the strike log as CSV");
+    println!("  clear               erase the strike log (no confirmation)");
     println!("  help                this");
     println!();
     println!("typing anything also keeps the device awake for 10 minutes --");

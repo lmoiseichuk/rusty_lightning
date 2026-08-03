@@ -58,6 +58,17 @@ impl Namespace {
         check(unsafe { sys::nvs_set_u8(self.handle, key.as_ptr() as *const c_char, value) })
     }
 
+    pub fn get_i32(&self, key: &[u8]) -> Option<i32> {
+        let mut value = 0i32;
+        let err =
+            unsafe { sys::nvs_get_i32(self.handle, key.as_ptr() as *const c_char, &mut value) };
+        (err == ESP_OK).then_some(value)
+    }
+
+    pub fn set_i32(&self, key: &[u8], value: i32) -> Result<(), EspError> {
+        check(unsafe { sys::nvs_set_i32(self.handle, key.as_ptr() as *const c_char, value) })
+    }
+
     pub fn get_u64(&self, key: &[u8]) -> Option<u64> {
         let mut value = 0u64;
         let err =

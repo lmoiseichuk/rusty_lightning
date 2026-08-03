@@ -51,7 +51,7 @@ const PARTITION_LABEL: &str = "storage";
 const PATH: &str = "/lfs/strikes.csv";
 
 /// The header row, which is also how an empty log is recognised.
-const HEADER: &str = "timestamp,iso_utc,distance_km,energy_raw,intensity_milli,score_milli";
+const HEADER: &str = "timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli";
 
 /// How often buffered lines are flushed and synced.
 pub const SYNC_INTERVAL_MS: u32 = 60_000;
@@ -103,14 +103,31 @@ impl Log {
         Some(log)
     }
 
-    /// Write the header if the file is new or empty.
+    /// Write the header if the file is new or empty, and warn if it is stale.
     ///
     /// A header tells a reader — a person, a spreadsheet, or a browser — what
     /// the columns are, and its presence distinguishes "this log exists and
     /// holds nothing" from "there is no log".
+    ///
+    /// **It is only written to an empty file**, which means a format change
+    /// never reaches an existing log — caught in testing, where a renamed
+    /// column left old rows described by the old header. Rewriting the file to
+    /// fix it would be worse: that discards records to correct a label. So the
+    /// mismatch is reported and left alone, and `clear` is the deliberate way
+    /// to start again.
     fn ensure_header(&mut self) {
         let empty = std::fs::metadata(PATH).map(|m| m.len() == 0).unwrap_or(true);
         if !empty {
+            if let Ok(file) = File::open(PATH) {
+                if let Some(Ok(first)) = BufReader::new(file).lines().next() {
+                    if first != HEADER {
+                        println!("log:  ⚠ header is from an older format:");
+                        println!("log:    on disk: {first}");
+                        println!("log:    current: {HEADER}");
+                        println!("log:    rows still parse; use `clear` to start fresh");
+                    }
+                }
+            }
             return;
         }
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(PATH) {
@@ -178,10 +195,14 @@ impl Log {
         // An unset clock writes 0 and an empty ISO column rather than a
         // plausible 1970 date. The strike happened; what is unknown is when,
         // and saying so is recoverable where inventing it is not.
+        // **Local time in the ISO column, UTC in the epoch column.** The epoch
+        // is the machine-readable, unambiguous one; the ISO string is for a
+        // person reading the file, and a person in Florida wants Florida time.
+        // Keeping both means neither reader has to know about the other.
         let iso = if epoch == 0 {
             String::new()
         } else {
-            crate::clock::format(epoch).to_string()
+            crate::clock::format_local(epoch).to_string()
         };
 
         let _ = write!(
