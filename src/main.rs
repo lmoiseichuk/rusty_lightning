@@ -538,6 +538,10 @@ fn listen(
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.
     let mut policy = power::Policy::Awake;
+    // `Some(mhz)` while `freq <mhz>` is in force. Deliberately not persisted:
+    // it exists so a board can be watched over USB, and one that came back from
+    // a power cut silently refusing to sleep would quietly cost the battery.
+    let mut freq_override: Option<u32> = None;
     let mut console = console::Console::new();
     // Uptime at the last console input, and at the last clock save.
     let mut last_console_s: Option<u32> = None;
@@ -684,6 +688,77 @@ fn listen(
                 drawn = None;
                 user_acted = true;
             }
+            if let Some(request) = effects.freq {
+                use crate::console::FreqRequest;
+                match request {
+                    FreqRequest::Pin(mhz) if !power::PINNABLE_MHZ.contains(&mhz) => println!(
+                        "freq: {mhz} MHz is not one of {:?} -- unchanged",
+                        power::PINNABLE_MHZ
+                    ),
+                    FreqRequest::Pin(mhz) => match power::pin(mhz) {
+                        Ok(()) => {
+                            freq_override = Some(mhz);
+                            println!("freq: pinned at {mhz} MHz, light sleep off, policy paused");
+                        }
+                        Err(e) => println!("freq: could not pin {mhz} MHz -- {e}"),
+                    },
+                    FreqRequest::Auto => {
+                        freq_override = None;
+                        // Re-apply immediately rather than waiting for the next
+                        // tick: the loop below only acts on a *change*, and the
+                        // policy it last recorded is what the pin displaced.
+                        let want = power::decide(now_ms() / 1000, last_console_s);
+                        match power::apply(want) {
+                            Ok(()) => {
+                                policy = want;
+                                println!("freq: back on the {} policy", policy.label());
+                            }
+                            Err(e) => println!("freq: could not restore the policy -- {e}"),
+                        }
+                    }
+                    FreqRequest::Report => {}
+                }
+                // Always report what the chip is enforcing, not what we asked
+                // for -- `esp_pm_configure` can reject a config and leave the
+                // previous one running.
+                match power::config() {
+                    Some((max, min, sleep)) => println!(
+                        "freq: now {} MHz -- pm {}/{} MHz, light sleep {}, {}",
+                        system::cpu_mhz(),
+                        min,
+                        max,
+                        if sleep { "on" } else { "off" },
+                        match freq_override {
+                            Some(mhz) => format!("pinned at {mhz} MHz"),
+                            None => format!("policy {}", policy.label()),
+                        }
+                    ),
+                    None => println!("freq: {} MHz (pm read-back failed)", system::cpu_mhz()),
+                }
+            }
+            if let Some(on) = effects.light_sleep {
+                // Keep whatever clock is in force and change only the sleep
+                // flag, so `sleep off` after `freq 80` does not silently drag
+                // the frequency back to something else.
+                match power::config() {
+                    Some((max, min, _)) => match power::set_light_sleep(max, min, on) {
+                        Ok(()) => {
+                            // Counts as an override either way: the policy loop
+                            // would otherwise restore its own idea of both.
+                            freq_override = Some(max);
+                            println!(
+                                "sleep: light sleep {} at {min}/{max} MHz, policy paused",
+                                if on { "on" } else { "off" }
+                            );
+                            if on {
+                                println!("sleep: the USB port will go with it -- `freq auto` or a power cycle to return");
+                            }
+                        }
+                        Err(e) => println!("sleep: could not change it -- {e}"),
+                    },
+                    None => println!("sleep: could not read the current config -- unchanged"),
+                }
+            }
             if let Some(indoor) = effects.set_indoor {
                 *location = if indoor {
                     as3935::Location::Indoor
@@ -812,8 +887,11 @@ fn listen(
                 );
             }
 
+            // Skipped entirely while pinned -- otherwise the next tick would
+            // quietly undo the override and the console would go away again,
+            // which is the exact problem `freq` exists to solve.
             let want = power::decide(now_ms() / 1000, last_console_s);
-            if want != policy {
+            if freq_override.is_none() && want != policy {
                 match power::apply(want) {
                     Ok(()) => {
                         policy = want;

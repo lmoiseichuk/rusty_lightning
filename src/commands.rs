@@ -60,6 +60,11 @@ pub struct Effects {
     pub dump_registers: bool,
     /// `Some(indoor)` when `mode` was used.
     pub set_indoor: Option<bool>,
+    /// Set by `freq`. Handled by the caller, which owns the policy loop — doing
+    /// it here would be undone on the next tick.
+    pub freq: Option<crate::console::FreqRequest>,
+    /// Set by `sleep on|off`. Same reason as `freq`.
+    pub light_sleep: Option<bool>,
 }
 
 /// A short heapless string, for the "not set" cases.
@@ -261,6 +266,8 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             effects.sensitivity = Some(on);
             effects.redraw_now = true;
         }
+        Command::Freq(request) => effects.freq = Some(request),
+        Command::Sleep(on) => effects.light_sleep = Some(on),
         Command::Regs => effects.dump_registers = true,
         Command::SetMode(indoor) => {
             effects.set_indoor = Some(indoor);

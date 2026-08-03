@@ -26,6 +26,17 @@ use std::io::Read;
 ///
 /// The read side is non-blocking (see [`Console::new`]), so an idle console
 /// costs one failed `read` per loop and never stalls the sensor or the screen.
+/// What `freq` was asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreqRequest {
+    /// Bare `freq` — report, change nothing.
+    Report,
+    /// `freq auto` — hand the clock back to §7's policy.
+    Auto,
+    /// `freq <mhz>` — hold this clock, light sleep off, until `freq auto`.
+    Pin(u32),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Help,
@@ -46,6 +57,16 @@ pub enum Command {
     /// `strike [km] [intensity]` — inject a synthetic strike, because a real
     /// one cannot be provoked; see the handler.
     Simulate(u8, u32),
+    /// `freq` / `freq auto` / `freq <mhz>` — read or pin the CPU clock.
+    Freq(FreqRequest),
+    /// `sleep on|off` — light sleep alone, leaving the clock where it is.
+    ///
+    /// Separate from [`Command::Freq`] because they answer different questions:
+    /// the clock is about speed, light sleep is about whether the USB port
+    /// survives. Only deep sleep is absent, and deliberately — it loses RAM, so
+    /// the rings would have to be rebuilt from CSV on every wake, and this
+    /// device has no reason to use it.
+    Sleep(bool),
     /// `mode indoor|outdoor` — AFE gain, same switch as the BOOT button.
     SetMode(bool),
     /// `regs` — dump the sensor's registers as the chip actually holds them.
@@ -182,6 +203,19 @@ fn parse(line: &str) -> Command {
             Some("off") => Command::Sensitive(false),
             _ => Command::Unknown,
         },
+        "freq" => match arg {
+            None => Command::Freq(FreqRequest::Report),
+            Some("auto") => Command::Freq(FreqRequest::Auto),
+            Some(mhz) => match mhz.parse::<u32>() {
+                Ok(mhz) => Command::Freq(FreqRequest::Pin(mhz)),
+                Err(_) => Command::Unknown,
+            },
+        },
+        "sleep" => match arg {
+            Some("on") => Command::Sleep(true),
+            Some("off") => Command::Sleep(false),
+            _ => Command::Unknown,
+        },
         "mode" => match arg {
             Some("indoor") => Command::SetMode(true),
             Some("outdoor") => Command::SetMode(false),
@@ -214,8 +248,16 @@ pub fn print_help() {
     println!("  dump                  the strike log as CSV");
     println!("  clear                 erase the strike log (no confirmation)");
     println!("  strike [km] [int]     inject a synthetic strike (default 8 km, 4000)");
-    println!("  sensitive on|off      force every knob below the ladder's floor");
+    println!("  mode indoor|outdoor   AFE gain -- outdoor is LOWER gain, for close storms");
+    println!();
+    println!("diagnostics:");
+    println!("  regs                  the sensor's registers, off the chip and decoded");
+    println!("  sensitive on|off      every knob below the ladder's floor, ladder frozen");
+    println!("  freq [auto|40|80|160] read the clock, or pin it");
+    println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
     println!();
     println!("Typing anything also keeps the device awake for 10 minutes.");
     println!("Otherwise it light-sleeps and the USB port goes with it.");
+    println!("`freq 160` holds it open indefinitely; `freq auto` gives it back.");
+    println!("Full guide: doc/console.md");
 }

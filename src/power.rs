@@ -63,6 +63,52 @@ pub fn apply(policy: Policy) -> Result<(), EspError> {
     crate::storage::check(err)
 }
 
+/// Ceilings `esp_pm_configure` will accept on this chip.
+///
+/// 160 and 80 come from the PLL; 40 is the crystal itself. Anything else is
+/// rejected by IDF, and a rejected config leaves the *previous* policy running
+/// while the caller believes otherwise — so this is validated before the call
+/// rather than after.
+pub const PINNABLE_MHZ: [u32; 3] = [40, 80, 160];
+
+/// Pin the clock and hold light sleep off, ignoring the policy.
+///
+/// **A debugging override, and the reason it exists is the USB port.** Light
+/// sleep powers down the USB PHY, so a board on the frugal policy is reachable
+/// only in short windows — which is fine in the field and miserable when you
+/// are trying to watch a console. Pinning gives a board that stays reachable
+/// indefinitely without editing [`decide`] and reflashing, so the *default*
+/// behaviour stays honest while it is being observed.
+///
+/// `min == max` deliberately: DFS between two frequencies is not the thing
+/// being asked for here, a fixed clock is.
+pub fn pin(mhz: u32) -> Result<(), EspError> {
+    let config = sys::esp_pm_config_t {
+        max_freq_mhz: mhz as i32,
+        min_freq_mhz: mhz as i32,
+        light_sleep_enable: false,
+    };
+    // SAFETY: a plain IDF call with a fully initialised config.
+    let err = unsafe { sys::esp_pm_configure(&config as *const _ as *const core::ffi::c_void) };
+    crate::storage::check(err)
+}
+
+/// Change light sleep alone, holding the clock where it already is.
+///
+/// `esp_pm_configure` takes all three together, so "just toggle sleep" means
+/// reading the current pair back and writing them again unchanged — which is
+/// why the caller passes them in rather than this guessing.
+pub fn set_light_sleep(max_mhz: u32, min_mhz: u32, enabled: bool) -> Result<(), EspError> {
+    let config = sys::esp_pm_config_t {
+        max_freq_mhz: max_mhz as i32,
+        min_freq_mhz: min_mhz as i32,
+        light_sleep_enable: enabled,
+    };
+    // SAFETY: a plain IDF call with a fully initialised config.
+    let err = unsafe { sys::esp_pm_configure(&config as *const _ as *const core::ffi::c_void) };
+    crate::storage::check(err)
+}
+
 /// Read back what `esp_pm` is actually enforcing.
 ///
 /// Worth having rather than trusting the write: `esp_pm_configure` rejects
