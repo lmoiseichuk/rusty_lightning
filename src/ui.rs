@@ -12,7 +12,7 @@
 //! the layout is built to be read at a glance from across a room, not to be
 //! dense — the extra area buys *size*, not *more*.
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_9X15};
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_8X13, FONT_9X15};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
@@ -434,7 +434,19 @@ fn write_u32<const N: usize>(out: &mut heapless::String<N>, mut value: u32) -> R
 
 /// The device's own vital signs, as one line.
 fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
-    let style = MonoTextStyle::new(&FONT_9X15, INK);
+    // **8x13, not 9x15, and the arithmetic is the reason.** The two halves are
+    // drawn independently -- left from x=16, right anchored to x=WIDTH-16 --
+    // so nothing stops them meeting in the middle. At the widest realistic
+    // values the line is about 86 characters:
+    //
+    //     2026-08-02 23:27  160MHz  38.1C  ram 264/52KB  flash 1976/0KB
+    //     batt 97% 4.16V  12h left
+    //
+    // which at 9 px each needs 806 px on an 800 px panel. The right half was
+    // overwriting the left, and "batt" was where it landed. At 8 px the same
+    // line is 720 px, leaving ~80 px of slack for values that grow -- a filling
+    // log turns "1976/0KB" into "1000/976KB", which is four characters more.
+    let style = MonoTextStyle::new(&FONT_8X13, INK);
     let mut left = Text64::new();
 
     // The clock, when there is one. Date and time to the minute -- seconds
@@ -527,8 +539,22 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = write_u32(&mut right, hundredths as u32);
             let _ = right.push_str(" V");
 
+            // **Every state says something.** The first version had two
+            // branches -- charging, or an estimate -- and a cell sitting at
+            // exactly 0.00 %/hr matched neither, so a full battery on USB
+            // showed a percentage and a voltage with nothing after it. That
+            // reads as a missing feature rather than as a resting cell.
             if reading.is_charging() {
                 let _ = right.push_str("  charging");
+            } else if reading.crate_centi_per_hour == 0 {
+                // Neither direction. Distinguish a topped-up cell from one
+                // simply not being asked for anything, because they mean
+                // different things about what happens next.
+                let _ = right.push_str(if reading.percent >= 97 {
+                    "  full"
+                } else {
+                    "  idle"
+                });
             } else {
                 // **Two predictions, and the learned one wins where it exists.**
                 //
@@ -545,20 +571,26 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
                 // model is the better guess.
                 let hours = crate::battery::hours_from_range(s.battery_range, &reading)
                     .or_else(|| reading.hours_remaining());
-                if let Some(hours) = hours {
-                    let _ = right.push_str("  ");
-                    if hours >= 48 {
+                match hours {
+                    Some(hours) if hours >= 48 => {
+                        let _ = right.push_str("  ");
                         let _ = write_u32(&mut right, hours / 24);
                         let _ = right.push_str("d left");
-                    } else {
+                    }
+                    Some(hours) => {
+                        let _ = right.push_str("  ");
                         let _ = write_u32(&mut right, hours);
                         let _ = right.push_str("h left");
                     }
+                    // Discharging, but too slowly to divide by. Say the
+                    // direction rather than nothing: §2.1's CRATE averages over
+                    // minutes, so a device just unplugged genuinely has no
+                    // estimate yet — and a number there would be a division by
+                    // nearly zero wearing a hat.
+                    None => {
+                        let _ = right.push_str("  discharging");
+                    }
                 }
-                // No figure at all when neither can answer. §2.1's CRATE is a
-                // real measurement, and a device that has just woken has not
-                // discharged measurably yet — a number there would be a
-                // division by nearly zero wearing a hat.
             }
         }
         None => {
