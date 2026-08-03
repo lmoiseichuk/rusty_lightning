@@ -60,7 +60,20 @@ const NOTIFY_BUTTON: u32 = 2;
 /// A tactile switch bounces for a few milliseconds; 300 ms also stops a
 /// deliberate double-press from toggling twice and landing back where it
 /// started, which would look like the button not working at all.
+///
+/// Measured against a real clock rather than decremented per batch, which was
+/// the earlier version's mistake: the batch is 1000 ms, so a 300 ms blanking
+/// counter was clear again by the next window and blanked nothing at all.
 const BUTTON_DEBOUNCE_MS: u32 = 300;
+
+/// How many times to confirm the button is down, and how far apart.
+///
+/// A single sample rejects a microsecond glitch and is fooled by a longer one.
+/// Sampling across ~60 ms means a false press has to hold the pin down for
+/// longer than any coupled transient plausibly does, while still landing well
+/// inside the tens of milliseconds a fingertip takes.
+const BUTTON_CONFIRM_SAMPLES: u32 = 3;
+const BUTTON_CONFIRM_GAP_MS: u32 = 20;
 
 /// Antenna tuning capacitance, picofarads. The SEN0290's factory value, and
 /// changing it needs a scope on the IRQ pin (§3 step 5).
@@ -453,7 +466,7 @@ fn listen(
 ) {
     let mut level: u8 = 0;
     let mut quiet_ms: u32 = 0;
-    let mut button_blanked_ms: u32 = 0;
+    let mut last_button_ms: u32 = 0;
     // Set by a button press, cleared by the redraw it causes.
     let mut user_acted = false;
     let mut batch = Batch::default();
@@ -471,7 +484,7 @@ fn listen(
 
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.
-    let policy = power::Policy::Normal;
+    let mut policy = power::Policy::Usb;
     // The most recent gauge reading, or None until the first poll or if the
     // gauge is absent. Cached because the screen wants it far less often than
     // the loop runs, and it is an I2C transaction.
@@ -518,11 +531,33 @@ fn listen(
         if let Some(source) = woke {
             let bits = source.get();
 
-            if bits & NOTIFY_BUTTON != 0 && button_blanked_ms == 0 {
-                button_blanked_ms = BUTTON_DEBOUNCE_MS;
-                toggle_location(sensor, i2c, location);
-                // A deliberate press earns an immediate repaint -- see below.
-                user_acted = true;
+            if bits & NOTIFY_BUTTON != 0 {
+                // **Confirm the pin is actually held down.** An edge alone is
+                // not a press: GPIO9 is a strapping pin on a board sharing a
+                // bench with a lightning sensor, and a glitch on it produced a
+                // falling edge indistinguishable from a fingertip.
+                //
+                // That mattered more than a stray toggle would suggest. A
+                // spurious press changes `location`, which forces a redraw, and
+                // `user_acted` deliberately bypasses the 30 s floor -- so each
+                // glitch bought an immediate 3.8 s refresh AND an NVS write.
+                // The symptom was a screen repainting without pause and no logo
+                // between repaints, which ruled out a reboot and left this.
+                //
+                // A real press is held for tens of milliseconds; a glitch is
+                // over in microseconds. Sampling after a short settle tells them
+                // apart with no state and no timer.
+                let held = button_held(button);
+                let ready = now_ms().saturating_sub(last_button_ms) >= BUTTON_DEBOUNCE_MS;
+
+                if held && ready {
+                    last_button_ms = now_ms();
+                    toggle_location(sensor, i2c, location);
+                    // A deliberate press earns an immediate repaint -- see below.
+                    user_acted = true;
+                } else if !held {
+                    println!("btn:  edge with the pin already released -- ignored as a glitch");
+                }
             }
 
             // Any bit that is not the button is the sensor. Not
@@ -539,7 +574,6 @@ fn listen(
             continue;
         }
 
-        button_blanked_ms = button_blanked_ms.saturating_sub(BATCH_MS);
         report(&batch);
 
         // Keep the rings' idea of "now" current even in a lull, so a chart drawn
@@ -548,7 +582,8 @@ fn listen(
         history.tick(now_ms() / 60_000);
 
         // The fuel gauge, on its own slow cadence -- it is an I2C transaction
-        // for values that move over hours.
+        // for values that move over hours -- and the clock policy that follows
+        // from it (§7).
         if now_ms().saturating_sub(last_gauge_ms) >= GAUGE_POLL_S * 1000 {
             last_gauge_ms = now_ms();
             reading = gauge.and_then(|g| g.read(i2c).ok());
@@ -560,6 +595,26 @@ fn listen(
                     reading.crate_centi_per_hour / 100,
                     (reading.crate_centi_per_hour % 100).abs()
                 );
+            }
+
+            let want = power::decide(reading.map(|r| r.crate_centi_per_hour));
+            if want != policy {
+                match power::apply(want) {
+                    Ok(()) => {
+                        policy = want;
+                        match power::config() {
+                            Some((max, min, sleep)) => println!(
+                                "pm:   -> {} -- {}/{} MHz, light sleep {}",
+                                policy.label(),
+                                min,
+                                max,
+                                if sleep { "on" } else { "off" }
+                            ),
+                            None => println!("pm:   -> {} (read-back failed)", policy.label()),
+                        }
+                    }
+                    Err(e) => println!("pm:   could not switch to {} -- {e}", want.label()),
+                }
             }
         }
 
@@ -932,4 +987,32 @@ fn antenna_self_test(
         println!("self:     wanted {low}-{high} kHz -- adjust TUNING_CAPS_PF (§3 step 5)");
     }
     (true, antenna_khz)
+}
+
+
+/// Is the button genuinely held down?
+///
+/// **An edge is not a press.** GPIO9 is a strapping pin on a board that shares
+/// a bench with an e-paper boost converter and a 500 kHz receiver, and it
+/// produced falling edges indistinguishable from a fingertip while nobody was
+/// touching it.
+///
+/// The cost of believing one was high, which is why this is more careful than
+/// a debounce usually needs to be: a false press toggles indoor/outdoor, which
+/// forces a redraw, and a user-initiated redraw deliberately bypasses the 30 s
+/// floor — so every glitch bought an immediate 3.8 s refresh *and* an NVS
+/// write. The symptom was a screen repainting without pause, with no logo
+/// between repaints, which is what ruled out a reboot and left this.
+///
+/// Requiring the pin to stay down across several samples is what separates the
+/// two: a transient is over in microseconds, a press lasts tens of
+/// milliseconds.
+fn button_held(button: &PinDriver<'_, esp_idf_hal::gpio::Input>) -> bool {
+    for _ in 0..BUTTON_CONFIRM_SAMPLES {
+        if !button.is_low() {
+            return false;
+        }
+        FreeRtos::delay_ms(BUTTON_CONFIRM_GAP_MS);
+    }
+    button.is_low()
 }
