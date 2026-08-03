@@ -70,15 +70,25 @@ while true; do
 
     for before in no-reset default-reset; do
         echo "[$(date +%H:%M:%S)] attempt $attempt (--before $before): ERASING -- DO NOT POWER-CYCLE"
-        if ! timeout 60 espflash erase-flash --port "$PORT" --chip esp32c3 \
-                --before "$before" >/dev/null 2>&1; then
+        # `--after no-reset` is not optional here. erase-flash defaults to
+        # `hard-reset`, which reboots the chip out of the bootloader the moment
+        # the erase finishes -- so the write below, which connects with
+        # `--before no-reset`, would then be talking to a device that has left.
+        # A successful erase followed by a failed write, every time.
+        #
+        # 20 s rather than 60: the port is only up for ~12 s at a time on a
+        # light-sleep build, so a long timeout spends most of its life waiting
+        # on a window that has already closed. Short and often beats long and
+        # patient here.
+        if ! timeout 20 espflash erase-flash --port "$PORT" --chip esp32c3 \
+                --before "$before" --after no-reset >/dev/null 2>&1; then
             continue
         fi
 
         echo "[$(date +%H:%M:%S)] erased. WRITING -- DO NOT POWER-CYCLE"
         # After an erase the chip is already in the flasher stub, so no-reset is
         # the right choice regardless of how the erase got in.
-        if timeout 90 espflash flash --port "$PORT" --non-interactive \
+        if timeout 60 espflash flash --port "$PORT" --non-interactive \
                 --chip esp32c3 --before no-reset \
                 --bootloader "$DIR/bootloader.bin" \
                 --partition-table "$DIR/partition-table.bin" \
