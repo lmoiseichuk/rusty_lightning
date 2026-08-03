@@ -44,6 +44,20 @@ embedded-hal = "1.0"
 # an 800x480 panel meant to be read across a room that is not enough.
 u8g2-fonts = "0.8"
 
+[features]
+default = []
+# Compile light sleep out entirely. **A recovery build.**
+#
+# Light sleep powers down the USB Serial/JTAG PHY, so a board running it is
+# reachable only in brief windows and neither the console nor espflash can be
+# relied on. Recovering normally means ROM download mode, which needs GPIO9 held
+# low at power-on -- and on a board whose BOOT button is under a shield, that
+# may not be available at all.
+#
+# With this on, the device never sleeps and the port stays up permanently. Costs
+# the battery savings; buys a board that can always be talked to.
+no-light-sleep = []
+
 [build-dependencies]
 embuild = "0.33"
 

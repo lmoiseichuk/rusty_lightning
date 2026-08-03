@@ -172,6 +172,11 @@ pub fn config() -> Option<(u32, u32, bool)> {
 /// See the module comment for the table and for why every case except "actively
 /// discharging" resolves to [`Policy::Usb`].
 pub fn decide(centi_per_hour: Option<i32>) -> Policy {
+    // The recovery build never leaves Usb, so the USB PHY never powers down and
+    // the board stays reachable no matter what it is running from.
+    if cfg!(feature = "no-light-sleep") {
+        return Policy::Usb;
+    }
     match centi_per_hour {
         Some(rate) if rate < 0 => Policy::Battery,
         _ => Policy::Usb,
