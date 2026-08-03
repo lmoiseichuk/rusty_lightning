@@ -428,10 +428,26 @@ primary goal. Model: mostly-on when on USB; **light-sleep between events with IR
 on battery; the e-paper holds its image with no power, so the screen can persist while the MCU
 sleeps. Keep WiFi off except for the brief NTP sync.
 
-> #### ⚠⚠ AS BUILT: "nice-to-have" understates it by a factor of twenty
+> #### ⚠⚠ AS BUILT: "nice-to-have" understates it by an order of magnitude
 >
-> On the 2000 mAh cell the difference between the default policy and a considered one is roughly
-> **four days against eighty**. Two facts drive that, and the first was a bug:
+> **Measured at the USB port with a power meter:**
+>
+> | Policy | Measured | Implied |
+> |---|---|---|
+> | **Awake** — 160 MHz, no light sleep | 0.170 W ≈ 33.5 mA | ~2.5 days |
+> | **Frugal** — 80 MHz + light sleep | 0.0127–0.0152 W ≈ **2.5–3.0 mA** | **~28–33 days** |
+>
+> **13× lower**, and this is the first end-to-end proof that light sleep actually *engages*.
+> `esp_pm_get_configuration` cannot distinguish "configured to sleep" from "configured to sleep and
+> blocked by a 20 ms poll" — it reports the same config either way, which is exactly how the bug
+> below survived. 2.5 mA cannot happen unless the core is genuinely sleeping between interrupts.
+>
+> The figures are taken at the USB port, so they include the charge controller's quiescent draw and
+> the panel board, not just the MCU. That makes them pessimistic against a cell-side measurement and
+> they are still the ones to trust: earlier estimates of *four days against eighty* were modelled
+> from datasheet currents for the MCU alone.
+>
+> Two facts drive the improvement, and the first was a bug:
 >
 > **`CONFIG_PM_ENABLE=y` does nothing on its own.** It was set in `sdkconfig.defaults` and
 > `esp_pm_configure` was never called, so the chip sat at 160 MHz continuously with no DFS and no

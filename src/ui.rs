@@ -12,6 +12,8 @@
 //! the layout is built to be read at a glance from across a room, not to be
 //! dense — the extra area buys *size*, not *more*.
 
+use core::fmt::Write as _;
+
 use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_8X13, FONT_9X15};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
@@ -235,7 +237,7 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     // means a quiet spot the ladder has not relaxed from yet, and a low level
     // with thousands means the auto-tune is losing.
     let mut count = Text16::new();
-    let _ = write_u32(&mut count, s.disturbers_total);
+    let _ = write!(count, "{}", s.disturbers_total);
     field(frame, Point::new(600, 62), "Disturbers: ", &count);
 
     let _ = Line::new(Point::new(16, 84), Point::new(WIDTH as i32 - 16, 84))
@@ -247,7 +249,7 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     // The one number the device exists to report. Everything else on this
     // screen is context for it.
     let mut count = Text16::new();
-    let _ = write_u32(&mut count, s.strikes_total);
+    let _ = write!(count, "{}", s.strikes_total);
     let _ = HEADLINE.render(
         count.as_str(),
         Point::new(16, 158),
@@ -282,11 +284,11 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
                 Distance::Km(_) => "",
             });
             if let Distance::Km(km) = distance {
-                let _ = write_u32(&mut last, km as u32);
+                let _ = write!(last, "{}", km as u32);
                 let _ = last.push_str(" km");
             }
             let _ = last.push_str("  ·  intensity ");
-            let _ = write_u32(&mut last, intensity_milli / 1000);
+            let _ = write!(last, "{}", intensity_milli / 1000);
             // When, to the minute. The point of the strike readout is "what is
             // happening", and a distance with no time cannot say whether it is
             // happening now or happened yesterday.
@@ -317,19 +319,19 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     // device with no console has nowhere else to say them.
     let mut antenna = Text32::new();
     let _ = antenna.push_str("antenna ");
-    let _ = write_u32(&mut antenna, s.antenna_khz);
+    let _ = write!(antenna, "{}", s.antenna_khz);
     let _ = antenna.push_str(" kHz · IRQ ");
     let _ = antenna.push_str(if s.irq_confirmed { "OK" } else { "NOT CONFIRMED" });
     let _ = antenna.push_str(" · disturbers ");
-    let _ = write_u32(&mut antenna, s.disturbers_total);
+    let _ = write!(antenna, "{}", s.disturbers_total);
     // The learned cell range, small and at the foot. It is a slow-moving
     // diagnostic rather than a reading — but it is the number that says whether
     // the runtime prediction above it has anything behind it, and a pack whose
     // observed maximum has fallen is a cell that is ageing.
     let _ = antenna.push_str(" · cell ");
-    let _ = write_u32(&mut antenna, s.battery_range.0 as u32);
+    let _ = write!(antenna, "{}", s.battery_range.0 as u32);
     let _ = antenna.push('-');
-    let _ = write_u32(&mut antenna, s.battery_range.1 as u32);
+    let _ = write!(antenna, "{}", s.battery_range.1 as u32);
     let _ = antenna.push_str(" mV");
 
     let _ = Line::new(
@@ -397,9 +399,9 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
     // that is a fact about the implementation rather than about the weather. It
     // stays on the console, where it is a debugging aid.
     let mut caption = Text32::new();
-    let _ = write_u32(&mut caption, value);
+    let _ = write!(caption, "{}", value);
     let _ = caption.push('/');
-    let _ = write_u32(&mut caption, max);
+    let _ = write!(caption, "{}", max);
     let _ = Text::with_baseline(
         &caption,
         Point::new(bar_x + BAR_WIDTH as i32 + GAP, at.y - 14),
@@ -414,22 +416,6 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
 /// The render path runs on a device that is meant to stay up for weeks;
 /// `format!` allocates, and the allocation is avoidable here for the sake of
 /// four lines.
-fn write_u32<const N: usize>(out: &mut heapless::String<N>, mut value: u32) -> Result<(), ()> {
-    if value == 0 {
-        return out.push('0').map_err(|_| ());
-    }
-    let mut digits = [0u8; 10];
-    let mut used = 0;
-    while value > 0 {
-        digits[used] = b'0' + (value % 10) as u8;
-        value /= 10;
-        used += 1;
-    }
-    for i in (0..used).rev() {
-        out.push(digits[i] as char).map_err(|_| ())?;
-    }
-    Ok(())
-}
 
 
 /// The device's own vital signs, as one line.
@@ -466,10 +452,10 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = left.push_str("no clock, up ");
             let hours = s.uptime_minutes / 60;
             if hours > 0 {
-                let _ = write_u32(&mut left, hours);
+                let _ = write!(left, "{}", hours);
                 let _ = left.push('h');
             }
-            let _ = write_u32(&mut left, s.uptime_minutes % 60);
+            let _ = write!(left, "{}", s.uptime_minutes % 60);
             let _ = left.push('m');
         }
     }
@@ -479,7 +465,7 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
     // the only witness there is once USB is cut, because cutting USB also cuts
     // the console. Unplug, press BOOT, read the line.
     let _ = left.push_str("  ");
-    let _ = write_u32(&mut left, s.health.cpu_mhz);
+    let _ = write!(left, "{}", s.health.cpu_mhz);
     let _ = left.push_str("MHz");
     if s.light_sleep {
         let _ = left.push_str(" +sleep");
@@ -491,9 +477,9 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = left.push('-');
         }
         let magnitude = tenths.unsigned_abs();
-        let _ = write_u32(&mut left, magnitude / 10);
+        let _ = write!(left, "{}", magnitude / 10);
         let _ = left.push('.');
-        let _ = write_u32(&mut left, magnitude % 10);
+        let _ = write!(left, "{}", magnitude % 10);
         let _ = left.push('C');
     }
 
@@ -504,16 +490,16 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
     // read by whoever is standing in front of the device, not by whoever wrote
     // the allocator.
     let _ = left.push_str("  ram ");
-    let _ = write_u32(&mut left, s.health.heap_kb.0);
+    let _ = write!(left, "{}", s.health.heap_kb.0);
     let _ = left.push('/');
-    let _ = write_u32(&mut left, s.health.heap_kb.1);
+    let _ = write!(left, "{}", s.health.heap_kb.1);
     let _ = left.push_str("KB");
 
     if let Some((free, used)) = s.health.flash_kb {
         let _ = left.push_str("  flash ");
-        let _ = write_u32(&mut left, free);
+        let _ = write!(left, "{}", free);
         let _ = left.push('/');
-        let _ = write_u32(&mut left, used);
+        let _ = write!(left, "{}", used);
         let _ = left.push_str("KB");
     }
 
@@ -528,15 +514,15 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
     match s.battery {
         Some(reading) => {
             let _ = right.push_str("batt ");
-            let _ = write_u32(&mut right, reading.percent as u32);
+            let _ = write!(right, "{}", reading.percent as u32);
             let _ = right.push_str("%  ");
-            let _ = write_u32(&mut right, reading.millivolts as u32 / 1000);
+            let _ = write!(right, "{}", reading.millivolts as u32 / 1000);
             let _ = right.push('.');
             let hundredths = (reading.millivolts % 1000) / 10;
             if hundredths < 10 {
                 let _ = right.push('0');
             }
-            let _ = write_u32(&mut right, hundredths as u32);
+            let _ = write!(right, "{}", hundredths as u32);
             let _ = right.push_str(" V");
 
             // **Every state says something.** The first version had two
@@ -574,12 +560,12 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
                 match hours {
                     Some(hours) if hours >= 48 => {
                         let _ = right.push_str("  ");
-                        let _ = write_u32(&mut right, hours / 24);
+                        let _ = write!(right, "{}", hours / 24);
                         let _ = right.push_str("d left");
                     }
                     Some(hours) => {
                         let _ = right.push_str("  ");
-                        let _ = write_u32(&mut right, hours);
+                        let _ = write!(right, "{}", hours);
                         let _ = right.push_str("h left");
                     }
                     // Discharging, but too slowly to divide by. Say the
@@ -626,19 +612,19 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     let hour = &s.last_hour;
 
     let mut count = Text16::new();
-    let _ = write_u32(&mut count, hour.strikes as u32);
+    let _ = write!(count, "{}", hour.strikes as u32);
     stat(frame, Point::new(16, TOP), "strikes / hour", &count);
 
     let mut score = Text16::new();
     match hour.mean_score_milli() {
         Some(milli) => {
-            let _ = write_u32(&mut score, milli / 1000);
+            let _ = write!(score, "{}", milli / 1000);
             let _ = score.push('.');
             let hundredths = (milli % 1000) / 10;
             if hundredths < 10 {
                 let _ = score.push('0');
             }
-            let _ = write_u32(&mut score, hundredths);
+            let _ = write!(score, "{}", hundredths);
         }
         // A dash, not a zero. Zero is a score, and an hour with no strikes did
         // not score zero -- it has no score at all, and the two mean opposite
@@ -652,7 +638,7 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     let mut distance = Text16::new();
     match hour.mean_distance_km() {
         Some(km) => {
-            let _ = write_u32(&mut distance, km);
+            let _ = write!(distance, "{}", km);
             let _ = distance.push_str(" km");
         }
         None => {
@@ -665,7 +651,7 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     if hour.distance_km_min == u8::MAX {
         let _ = closest.push('-');
     } else {
-        let _ = write_u32(&mut closest, hour.distance_km_min as u32);
+        let _ = write!(closest, "{}", hour.distance_km_min as u32);
         let _ = closest.push_str(" km");
     }
     stat(frame, Point::new(16 + COLUMN * 3, TOP), "closest", &closest);
@@ -820,7 +806,7 @@ fn chart<I>(
     let _ = caption.push_str(label);
     if peak > 0 {
         let _ = caption.push_str("  peak ");
-        let _ = write_u32(&mut caption, peak);
+        let _ = write!(caption, "{}", peak);
     } else {
         let _ = caption.push_str("  none");
     }

@@ -1,42 +1,14 @@
 //! The strike log: a CSV file on LittleFS, surviving power cuts (§5).
 //!
-//! ## Why LittleFS and not SPIFFS
+//! Lines are appended as strikes happen, buffered in RAM, and `fsync`ed once a
+//! minute. The file's length is the cursor, the filesystem checks its own
+//! integrity, and the stored form is already the output form — so there is no
+//! end-of-log search, no per-record checksum, and nothing to render on the way
+//! out.
 //!
-//! This board has a **battery ON/OFF switch**, so power is removed abruptly and
-//! often — not an edge case here, it is the normal way the device is turned
-//! off. SPIFFS is not power-loss resilient: a cut mid-write can corrupt the
-//! *filesystem*, taking the whole log with it rather than the one record being
-//! written. LittleFS is designed around exactly that failure and recovers to
-//! its last consistent state.
-//!
-//! ## Why a file and not raw records
-//!
-//! The first version appended fixed 16-byte records to a raw partition, on the
-//! reasoning that a file buys nothing when there is no way to read it — no SD
-//! card, no USB mass storage, WiFi deferred. **That argument expires the moment
-//! §9's HTTP endpoint exists**: a browser fetching `/strikes.csv` wants a file,
-//! and serving one is a stream rather than a generator.
-//!
-//! A file also removes machinery. The length *is* the cursor, so there is no
-//! binary search for the end; the filesystem checks its own integrity, so there
-//! is no per-record checksum; and CSV is the stored form, so nothing has to be
-//! rendered on the way out.
-//!
-//! ## Durability: buffered, synced once a minute
-//!
-//! Lines are appended as they happen and `fsync`ed on a one-minute cadence
-//! rather than per strike. The trade is explicit: a power cut loses at most a
-//! minute of strikes, and in exchange a storm producing events every few
-//! seconds does not turn into a flash write every few seconds.
-//!
-//! That is safe here in a way it would not be on SPIFFS. An unsynced LittleFS
-//! write is *lost*, not corrupting — the filesystem stays consistent whatever
-//! happens to the data in flight — so the cost of the batch is bounded to the
-//! records themselves.
-//!
-//! The handle is held open across the batch, which is what makes buffering
-//! possible at all, and closed on every sync so no state depends on an orderly
-//! shutdown that this device does not have.
+//! **See §5 for why**: LittleFS over SPIFFS given this board's ON/OFF switch,
+//! why that choice is what makes minute-scale batching safe, and the two format
+//! decisions (`overhead`/`far` as words, an unset clock writing `0`).
 
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};

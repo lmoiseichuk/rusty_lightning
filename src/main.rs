@@ -17,6 +17,7 @@ mod power;
 mod session;
 mod settings;
 mod storage;
+mod strike;
 mod system;
 mod ui;
 
@@ -439,7 +440,7 @@ fn configure(
     FreeRtos::delay_ms(500);
 
     sensor.set_tuning_caps(i2c, TUNING_CAPS_PF)?;
-    defence::apply(sensor, i2c, 0)?;
+    session::apply_defence(sensor, i2c, 0)?;
 
     // Explicit rather than relying on the reset default. One strike reports
     // immediately; the alternatives make the sensor wait for a pattern before

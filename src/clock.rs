@@ -22,6 +22,8 @@
 //!
 //! The write is cheap and rare (see [`SAVE_INTERVAL_S`]), and NVS wear-levels.
 
+use core::fmt::Write as _;
+
 use esp_idf_hal::sys::{self, EspError};
 
 use crate::storage::Namespace;
@@ -121,45 +123,23 @@ pub fn format(epoch: u64) -> heapless::String<20> {
     } as u32;
     let year = (year_of_era + era * 400 + if month <= 2 { 1 } else { 0 }) as u32;
 
+    // `heapless::String` implements `core::fmt::Write`, so `write!` works on it
+    // exactly as it does on a `std::string::String` — the only difference is
+    // that it returns `Err` when the fixed capacity is reached instead of
+    // growing. Nineteen characters into a 20-byte buffer never will, hence the
+    // discarded result. This replaced a hand-rolled digit loop; `{:02}` is the
+    // same zero padding, written once.
     let mut out = heapless::String::new();
-    let _ = push_padded(&mut out, year, 4);
-    let _ = out.push('-');
-    let _ = push_padded(&mut out, month, 2);
-    let _ = out.push('-');
-    let _ = push_padded(&mut out, day, 2);
-    let _ = out.push(' ');
-    let _ = push_padded(&mut out, (time_of_day / 3600) as u32, 2);
-    let _ = out.push(':');
-    let _ = push_padded(&mut out, ((time_of_day % 3600) / 60) as u32, 2);
-    let _ = out.push(':');
-    let _ = push_padded(&mut out, (time_of_day % 60) as u32, 2);
+    let _ = write!(
+        out,
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}",
+        time_of_day / 3600,
+        (time_of_day % 3600) / 60,
+        time_of_day % 60
+    );
     out
 }
 
-fn push_padded<const N: usize>(
-    out: &mut heapless::String<N>,
-    value: u32,
-    width: usize,
-) -> Result<(), ()> {
-    let mut digits = [0u8; 10];
-    let mut used = 0;
-    let mut v = value;
-    loop {
-        digits[used] = b'0' + (v % 10) as u8;
-        v /= 10;
-        used += 1;
-        if v == 0 {
-            break;
-        }
-    }
-    for _ in used..width {
-        out.push('0').map_err(|_| ())?;
-    }
-    for i in (0..used).rev() {
-        out.push(digits[i] as char).map_err(|_| ())?;
-    }
-    Ok(())
-}
 
 
 // === Local time ============================================================
@@ -204,12 +184,12 @@ pub fn tz_label() -> heapless::String<12> {
     if minutes == 0 {
         return out;
     }
-    let _ = out.push(if minutes < 0 { '-' } else { '+' });
+    let sign = if minutes < 0 { '-' } else { '+' };
     let magnitude = minutes.unsigned_abs();
-    let _ = push_padded(&mut out, magnitude / 60, 1);
+    let _ = write!(out, "{sign}{}", magnitude / 60);
+    // Only the odd zones — India, Nepal, parts of Australia — reach this.
     if magnitude % 60 != 0 {
-        let _ = out.push(':');
-        let _ = push_padded(&mut out, magnitude % 60, 2);
+        let _ = write!(out, ":{:02}", magnitude % 60);
     }
     out
 }

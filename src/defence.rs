@@ -1,44 +1,17 @@
 //! How hard the sensor is trying to reject noise (§4.2).
 //!
-//! ## Why this is a ladder and not one number
+//! One integer, 0..=[`MAX_LEVEL`], walking three registers in order — noise
+//! floor, then watchdog, then spike rejection. Up by one per *batch* in which
+//! anything was heard, down by one after a whole minute of silence: quick to
+//! defend, slow to relax.
 //!
-//! §4.2 auto-tunes `NF_LEV` alone, 0–7. On the bench that ran out in seconds:
+//! **See §4.2 for why**: what `NF_LEV` alone did on the bench, what the other
+//! two knobs reject, why `SREJ` stops at 11 of 15, and why the step is per
+//! batch rather than per event.
 //!
-//! ```text
-//! tune: disturber -- noise floor up to 7
-//! tune: disturber -- noise floor already at 7, cannot defend further
-//! ```
-//!
-//! ...repeating indefinitely. A detector that has stopped defending and says so
-//! once a second is not tuned, it is stuck — and `NF_LEV` is not the only knob
-//! the AS3935 offers. The datasheet's other two do the same job at different
-//! stages of the receive chain:
-//!
-//! | Rung | Register | What it rejects |
-//! |---|---|---|
-//! | `NF_LEV` 0–7 | `0x01` | continuous noise, by raising the detection floor |
-//! | `WDTH` 2–15 | `0x01` | short events that do not look like a strike's envelope |
-//! | `SREJ` 0–11 | `0x02` | spikes that pass the watchdog but fail the shape test |
-//!
-//! So "defence" is one integer walking all three in order. Climbing costs
-//! sensitivity in roughly that order too, which is why they are tried in it: the
-//! noise floor is the cheapest thing to give up and spike rejection is the
-//! dearest.
-//!
-//! ## The asymmetry is the design
-//!
-//! Up by one **per batch** in which anything was heard; down by one after a
-//! whole minute of silence. Quick to defend, slow to relax — a storm's first
-//! strike should not arrive into a receiver that spent the afternoon relaxing
-//! toward a noise floor it will immediately have to climb back up.
-//!
-//! **Per batch, not per event.** An earlier version escalated per interrupt and
-//! saturated the whole ladder in under two seconds, which is not tuning — it is
-//! a counter racing the interrupt rate.
-
-use esp_idf_hal::i2c::I2cDriver;
-
-use crate::as3935::As3935;
+//! This module is deliberately free of ESP-IDF imports, which is what lets
+//! `tests/host/defence.rs` compile it directly rather than copying it. The
+//! register writes live in `session::apply_defence`.
 
 /// Where each rung starts, from §3 step 6.
 pub const NOISE_FLOOR_BASE: u8 = 0;
@@ -114,22 +87,5 @@ pub fn rung(level: u8) -> &'static str {
         l if l - noise_span <= watchdog_span => "watchdog",
         _ => "spike rejection",
     }
-}
-
-/// Push one defence level into the sensor's three registers.
-///
-/// Lives here rather than in `main` because it is the other half of
-/// [`settings`] — that turns a level into three numbers, this puts them on the
-/// chip, and splitting them across modules meant a rung change had to be
-/// followed through two files.
-pub fn apply(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    level: u8,
-) -> Result<(), esp_idf_hal::sys::EspError> {
-    let settings = settings(level);
-    sensor.set_noise_floor(i2c, settings.noise_floor)?;
-    sensor.set_watchdog_threshold(i2c, settings.watchdog)?;
-    sensor.set_spike_rejection(i2c, settings.spike_reject)
 }
 

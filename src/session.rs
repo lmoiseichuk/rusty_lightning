@@ -195,7 +195,7 @@ pub fn report(batch: &Batch) {
 /// Move the defence level and say what it did in terms of the knob it is on.
 pub fn tune(sensor: &As3935, i2c: &mut I2cDriver<'_>, level: u8, direction: &str) {
     let settings = defence::settings(level);
-    match defence::apply(sensor, i2c, level) {
+    match apply_defence(sensor, i2c, level) {
         Ok(()) => println!(
             "tune: {direction} to {level}/{} -- {} (nf {}, wdth {}, srej {})",
             defence::MAX_LEVEL,
@@ -236,4 +236,21 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
     }
 }
 
+
+
+/// Push one defence level into the sensor's three registers.
+///
+/// Lives here rather than in `defence` so that module stays free of ESP-IDF —
+/// which is what lets `tests/host` compile the real ladder instead of a copy of
+/// it. The register writes are the one part that cannot be host-tested anyway.
+pub fn apply_defence(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    level: u8,
+) -> Result<(), esp_idf_hal::sys::EspError> {
+    let settings = defence::settings(level);
+    sensor.set_noise_floor(i2c, settings.noise_floor)?;
+    sensor.set_watchdog_threshold(i2c, settings.watchdog)?;
+    sensor.set_spike_rejection(i2c, settings.spike_reject)
+}
 

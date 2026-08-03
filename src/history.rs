@@ -44,7 +44,7 @@
 //! which is exactly right, because everything recorded before the device knew
 //! the time is unplaceable anyway.
 
-use crate::as3935::{Distance, Strike};
+use crate::strike::{Distance, Strike};
 
 /// One time bucket.
 ///

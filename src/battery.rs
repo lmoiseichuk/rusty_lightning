@@ -14,6 +14,17 @@
 //! **percent** directly, and `CRATE` gives a real discharge rate rather than an
 //! inferred one.
 //!
+//! ## Why not the `max170xx` crate
+//!
+//! Evaluated and rejected, recorded here so it is not re-litigated. It would
+//! replace perhaps thirty lines of endianness-prone register plumbing — real,
+//! if modest, value — but it returns `f32`, and on this soft-float target every
+//! such call drags in a software floating-point routine to undo work the table
+//! below does exactly in integers. The conversions, the signed `CRATE`
+//! semantics and the learned range would all stay here regardless, so the crate
+//! would sit between this module and the bus without removing anything this
+//! module has to keep being right about.
+//!
 //! ## Everything here is integer arithmetic
 //!
 //! The C3 is `riscv32imc` — no FPU. Each scale factor below is written as an
