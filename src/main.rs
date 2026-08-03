@@ -677,16 +677,24 @@ fn listen(
         if let Some(command) = console.poll() {
             last_console_s = Some(now_ms() / 1000);
             match command {
-                console::Command::SetTime(epoch) => match clock::set(epoch) {
+                console::Command::Date(None) => match clock::now() {
+                    Some(epoch) => println!(
+                        "date: {} {}",
+                        clock::format_local(epoch),
+                        clock::tz_label()
+                    ),
+                    None => println!("date: not set -- use: date <unix-epoch>"),
+                },
+                console::Command::Date(Some(epoch)) => match clock::set(epoch) {
                     Ok(()) => {
                         last_clock_save_s = now_ms() / 1000;
                         println!(
-                            "time: set to {} {}",
+                            "date: {} {}",
                             clock::format_local(epoch),
                             clock::tz_label()
                         );
                     }
-                    Err(e) => println!("time: could not set -- {e}"),
+                    Err(e) => println!("date: could not set -- {e}"),
                 },
                 console::Command::SetTz(minutes) => match clock::set_tz_minutes(minutes) {
                     Ok(()) => println!(
@@ -752,7 +760,7 @@ fn listen(
                     None => println!("log:  no log to clear"),
                 },
 
-                console::Command::SetChart(which) => {
+                console::Command::Scope(which) => {
                     chart_period = match which {
                         1 => ui::ChartPeriod::Week,
                         2 => ui::ChartPeriod::Month,
@@ -762,7 +770,80 @@ fn listen(
                     // test -- it is set by a person, like the mode button, so
                     // it cannot churn and should not wait for the baseline.
                     user_acted = true;
-                    println!("chart: showing the last {}", chart_period.label());
+                    println!("scope: showing the last {}", chart_period.label());
+                }
+
+                // The screen's top line, in text. Same figures, same order, so
+                // a reading taken over the console and a photograph of the
+                // panel can be compared without translating between them.
+                console::Command::Health => {
+                    let health = system::health(
+                        die_temperature,
+                        strike_log.as_deref().map(|l| (l.free_bytes(), l.used_bytes())),
+                    );
+                    match clock::now() {
+                        Some(epoch) => println!(
+                            "health: {} {}",
+                            clock::format_local(epoch),
+                            clock::tz_label()
+                        ),
+                        None => println!("health: clock not set, up {} min", now_ms() / 60_000),
+                    }
+                    println!("health: {} MHz, light sleep {}", health.cpu_mhz,
+                        if power::config().map(|(_, _, ls)| ls).unwrap_or(false) { "on" } else { "off" });
+                    match health.die_temp_tenths {
+                        Some(t) => println!("health: die {}.{} C", t / 10, (t % 10).abs()),
+                        None => println!("health: die temperature unavailable"),
+                    }
+                    println!("health: ram {} KB free, {} KB used", health.heap_kb.0, health.heap_kb.1);
+                    match health.flash_kb {
+                        Some((free, used)) => println!("health: flash {free} KB free, {used} KB used"),
+                        None => println!("health: no filesystem"),
+                    }
+                    match reading {
+                        Some(r) => println!(
+                            "health: batt {}% {} mV, rate {}.{:02} %/hr, learned range {}-{} mV",
+                            r.percent, r.millivolts,
+                            r.crate_centi_per_hour / 100, (r.crate_centi_per_hour % 100).abs(),
+                            range.0, range.1
+                        ),
+                        None => println!("health: no fuel gauge"),
+                    }
+                }
+
+                // The screen's second line, plus what it cannot fit.
+                console::Command::Status => {
+                    let settings = defence::settings(level);
+                    println!("status: mode {}", location.label());
+                    println!(
+                        "status: noise {}/{} ({}) -- nf {}, wdth {}, srej {}",
+                        level,
+                        defence::MAX_LEVEL,
+                        defence::rung(level),
+                        settings.noise_floor,
+                        settings.watchdog,
+                        settings.spike_reject
+                    );
+                    println!(
+                        "status: {} strike(s), {} disturber(s) this session",
+                        totals.strikes, totals.disturbers
+                    );
+                    let hour = history.last_hour();
+                    println!(
+                        "status: last hour -- {} strikes, mean score {}, closest {}",
+                        hour.strikes,
+                        hour.mean_score_milli()
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                        if hour.distance_km_min == u8::MAX {
+                            "-".to_string()
+                        } else {
+                            format!("{} km", hour.distance_km_min)
+                        }
+                    );
+                    println!("status: antenna {antenna_khz} kHz, IRQ {}",
+                        if irq_confirmed { "confirmed" } else { "NOT CONFIRMED" });
+                    println!("status: charts showing the last {}", chart_period.label());
                 }
 
                 console::Command::Dump => match strike_log.as_deref() {
@@ -922,7 +1003,7 @@ fn listen(
 
                 // Flatten the ring just before drawing it, so the chart shows
                 // the state at draw time rather than whenever it last changed.
-                let chart_len = fill_chart(
+                let (chart_len, chart_capacity) = fill_chart(
                     &history,
                     chart_period,
                     &mut chart_counts,
@@ -952,6 +1033,7 @@ fn listen(
                         chart_period,
                         chart_counts: &chart_counts[..chart_len],
                         chart_scores: &chart_scores[..chart_len],
+                        chart_capacity,
                         light_sleep: power::config().map(|(_, _, ls)| ls).unwrap_or(false),
                     },
                     if changed { "content changed" } else { "baseline" },
@@ -1274,36 +1356,42 @@ fn button_held(button: &PinDriver<'_, esp_idf_hal::gpio::Input>) -> bool {
 /// One buffer sized for the longest ring rather than three: the rings differ in
 /// length but not in what a chart does with them, and a prefix is cheaper than
 /// three allocations that are each idle two thirds of the time.
+/// Returns `(live, capacity)`: how many buckets hold data, and how many the
+/// ring holds when full.
+///
+/// The chart needs both. `capacity` fixes the column width so bars do not
+/// change size as the ring fills, and `live` says how many to draw — which is
+/// what makes a chart fill from the left and only scroll once it is full.
 fn fill_chart(
     history: &history::History,
     period: ui::ChartPeriod,
     counts: &mut [u16],
     scores: &mut [u32],
-) -> usize {
+) -> (usize, usize) {
     match period {
         ui::ChartPeriod::Day => {
             let mut c = [0u16; history::FINE_LEN];
             let mut s = [0u32; history::FINE_LEN];
-            history::series_of(&history.day, &mut c, &mut s);
+            let live = history::series_of(&history.day, &mut c, &mut s);
             counts[..history::FINE_LEN].copy_from_slice(&c);
             scores[..history::FINE_LEN].copy_from_slice(&s);
-            history::FINE_LEN
+            (live, history::FINE_LEN)
         }
         ui::ChartPeriod::Week => {
             let mut c = [0u16; history::MEDIUM_LEN];
             let mut s = [0u32; history::MEDIUM_LEN];
-            history::series_of(&history.week, &mut c, &mut s);
+            let live = history::series_of(&history.week, &mut c, &mut s);
             counts[..history::MEDIUM_LEN].copy_from_slice(&c);
             scores[..history::MEDIUM_LEN].copy_from_slice(&s);
-            history::MEDIUM_LEN
+            (live, history::MEDIUM_LEN)
         }
         ui::ChartPeriod::Month => {
             let mut c = [0u16; history::COARSE_LEN];
             let mut s = [0u32; history::COARSE_LEN];
-            history::series_of(&history.month, &mut c, &mut s);
+            let live = history::series_of(&history.month, &mut c, &mut s);
             counts[..history::COARSE_LEN].copy_from_slice(&c);
             scores[..history::COARSE_LEN].copy_from_slice(&s);
-            history::COARSE_LEN
+            (live, history::COARSE_LEN)
         }
     }
 }

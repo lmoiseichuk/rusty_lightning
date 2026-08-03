@@ -173,6 +173,12 @@ pub struct Status<'a> {
     /// Mean score per bucket in thousandths, oldest first, `0` for an empty
     /// bucket. The severity chart.
     pub chart_scores: &'a [u32],
+    /// How many buckets the ring holds when full.
+    ///
+    /// Separate from the slice length so the column width stays fixed as the
+    /// ring fills: bars that grow narrower over the first day would make two
+    /// readings of the same chart incomparable.
+    pub chart_capacity: usize,
     /// Whether `esp_pm` is actually light-sleeping, read back rather than
     /// assumed (§7).
     pub light_sleep: bool,
@@ -736,7 +742,7 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
         HEIGHT,
         "strikes",
         s.chart_counts.iter().map(|v| *v as u32),
-        s.chart_counts.len(),
+        s.chart_capacity,
     );
     chart(
         frame,
@@ -745,7 +751,7 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
         HEIGHT,
         "mean score",
         s.chart_scores.iter().copied(),
-        s.chart_scores.len(),
+        s.chart_capacity,
     );
 }
 
@@ -763,7 +769,7 @@ fn chart<I>(
     height: u32,
     label: &str,
     values: I,
-    count: usize,
+    capacity: usize,
 ) where
     I: Iterator<Item = u32> + Clone,
 {
@@ -794,14 +800,20 @@ fn chart<I>(
     )
     .draw(frame);
 
-    if peak == 0 || count == 0 {
+    if peak == 0 || capacity == 0 {
         return;
     }
 
-    // One column per bucket, as wide as the space allows. Buckets outnumber
-    // pixels on the month chart and vice versa on the day chart, so the width
-    // is computed rather than assumed.
-    let column = (width / count as i32).max(1);
+    // Column width comes from the ring's **capacity**, not from how much of it
+    // is filled -- so bars keep their size as the chart fills and two readings
+    // taken hours apart are the same shape.
+    //
+    // Drawing starts at the left edge and the iterator is the live tail
+    // oldest-first, so a new device fills left to right and only begins
+    // scrolling once the ring is genuinely full. Anchoring to the right instead
+    // would show one bar at the far edge behind a day of blank columns, which
+    // reads as "a day of silence, then this" -- a different and wrong story.
+    let column = (width / capacity as i32).max(1);
     for (index, value) in values.enumerate() {
         if value == 0 {
             continue;

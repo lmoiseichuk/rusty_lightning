@@ -52,6 +52,7 @@ impl Bucket {
             .then(|| self.distance_km_sum / self.distance_samples as u32)
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.strikes == 0
     }
@@ -85,6 +86,9 @@ pub struct Ring<const N: usize> {
     /// Bucket index of `buckets[head]`, in units of `minutes_per_bucket` since
     /// boot. Monotonic; the ring position is `index % N`.
     newest_index: u32,
+    /// Bucket index the ring first saw, so a partly-filled ring knows how much
+    /// of itself is real.
+    first_index: u32,
     minutes_per_bucket: u32,
     started: bool,
 }
@@ -100,6 +104,7 @@ impl<const N: usize> Ring<N> {
                 distance_km_min: u8::MAX,
             }; N],
             newest_index: 0,
+            first_index: 0,
             minutes_per_bucket,
             started: false,
         }
@@ -116,6 +121,7 @@ impl<const N: usize> Ring<N> {
 
         if !self.started {
             self.newest_index = index;
+            self.first_index = index;
             self.started = true;
             return;
         }
@@ -157,6 +163,11 @@ impl<const N: usize> Ring<N> {
     }
 
     /// Buckets oldest-first, for a chart. Length is always `N`.
+    ///
+    /// Not on the draw path yet — the day/week/month charts are the next piece
+    /// of §6. Kept because it is the ring's natural read API and is covered by
+    /// the host checks, not as a stub for something unwritten.
+    #[allow(dead_code)]
     pub fn series(&self, into: &mut [Bucket; N]) {
         for offset in 0..N {
             // `newest_index + 1` is the oldest slot: one past the newest, which
@@ -164,6 +175,21 @@ impl<const N: usize> Ring<N> {
             let index = self.newest_index as usize + 1 + offset;
             into[offset] = self.buckets[index % N];
         }
+    }
+
+    /// How many buckets hold real data.
+    ///
+    /// **Not always `N`.** A ring that has been running for two hours has eight
+    /// fifteen-minute buckets, not ninety-six — and drawing the other
+    /// eighty-eight as empty columns to the *left* of them reads as "a day of
+    /// silence, then this", which is a different and wrong story. Knowing the
+    /// live length lets a chart fill from the left and only scroll once it is
+    /// genuinely full.
+    pub fn live_len(&self) -> usize {
+        if !self.started {
+            return 0;
+        }
+        ((self.newest_index - self.first_index + 1) as usize).min(N)
     }
 
     /// Totals over the most recent `buckets` entries, newest first.
@@ -226,6 +252,42 @@ impl History {
     pub fn last_hour(&self) -> Bucket {
         self.day.recent(60 / FINE_MINUTES as usize)
     }
+}
+
+
+/// Flatten a ring into the two series the charts draw.
+///
+/// Two separate arrays rather than one of structs, because the renderer wants
+/// each as a contiguous run of numbers to scale and walk — and because the two
+/// scale independently: counts and mean scores share a time axis and nothing
+/// else.
+/// Returns how many buckets are real, which is what the chart should draw.
+///
+/// The output is the **live tail**, oldest first: a partly-filled ring yields
+/// just its own buckets so a chart can fill from the left, and a full one
+/// yields all `N` so it scrolls.
+pub fn series_of<const N: usize>(
+    ring: &Ring<N>,
+    counts: &mut [u16; N],
+    scores: &mut [u32; N],
+) -> usize {
+    let mut buckets = [Bucket::default(); N];
+    ring.series(&mut buckets);
+
+    // `series` is oldest-first over the whole ring, so the live buckets are its
+    // last `live` entries -- everything before them is a lap that never
+    // happened.
+    let live = ring.live_len();
+    let start = N - live;
+    for offset in 0..live {
+        let bucket = buckets[start + offset];
+        counts[offset] = bucket.strikes;
+        // Zero for an empty bucket. The chart treats zero as "no bar", which is
+        // right: a bucket with no strikes has no mean score, and drawing it at
+        // the baseline says exactly that.
+        scores[offset] = bucket.mean_score_milli().unwrap_or(0);
+    }
+    live
 }
 
 static mut PASS: u32 = 0;
@@ -299,6 +361,24 @@ fn main() {
     let mut out = [Bucket::default(); 4];
     ring.series(&mut out);
     check("series is oldest-first, newest last", out[3].strikes == 2 && out[0].strikes == 1);
+
+    // --- live length: charts must fill from the left ----------------------
+    let mut ring: Ring<96> = Ring::new(15);
+    check("an untouched ring has no live buckets", ring.live_len() == 0);
+    ring.record(0, &strike(Distance::Km(6), 3000));
+    check("one bucket after the first strike", ring.live_len() == 1);
+    ring.tick(45);
+    check("four buckets after 45 minutes", ring.live_len() == 4);
+    ring.tick(15 * 200);
+    check("never exceeds the ring length", ring.live_len() == 96);
+
+    let mut ring: Ring<4> = Ring::new(15);
+    ring.record(0, &strike(Distance::Km(6), 3000));
+    ring.record(30, &strike(Distance::Km(2), 9000));
+    let (mut c, mut s2) = ([0u16; 4], [0u32; 4]);
+    let live = series_of(&ring, &mut c, &mut s2);
+    check("series_of reports the live count", live == 3);
+    check("...oldest first, anchored at index 0", c[0] == 1 && c[2] == 1 && c[1] == 0);
 
     // --- mean score --------------------------------------------------------
     let mut ring: Ring<96> = Ring::new(15);

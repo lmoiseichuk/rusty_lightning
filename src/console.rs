@@ -18,24 +18,35 @@
 use std::io::Read;
 
 /// What the console can be asked to do.
+///
+/// Deliberately a small, flat vocabulary: one word, at most two arguments, no
+/// modes and no state between lines. A device console is read by a person at a
+/// terminal *and* piped from a host script, and anything cleverer than this
+/// serves neither well.
+///
+/// The read side is non-blocking (see [`Console::new`]), so an idle console
+/// costs one failed `read` per loop and never stalls the sensor or the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    /// `time <unix-epoch>` — set the clock (§5).
-    SetTime(u64),
-    /// `tz <hours>` — minutes east of UTC, given in hours (negative west).
-    SetTz(i32),
-    /// `strike [km] [intensity]` — inject a synthetic strike to exercise the
-    /// path end to end. See the handler for why this exists.
-    Simulate(u8, u32),
-    /// `dump` — write the strike log as CSV.
-    Dump,
-    /// `clear` — erase the strike log and start a fresh file.
-    Clear,
-    /// `chart day|week|month` — which span the charts cover.
-    SetChart(u8),
-    /// `help`
     Help,
-    /// Something was typed, but it was not a command. Still counts as activity.
+    /// `date` shows the clock; `date <unix-epoch>` sets it (§5).
+    Date(Option<u64>),
+    /// `tz <hours>` — local offset, negative west of UTC.
+    SetTz(i32),
+    /// `scope day|week|month` — which span the charts cover.
+    Scope(u8),
+    /// `health` — the device's own vitals, i.e. the top line of the screen.
+    Health,
+    /// `status` — what the sensor is doing, i.e. the second line.
+    Status,
+    /// `dump` — the strike log as CSV.
+    Dump,
+    /// `clear` — erase the strike log.
+    Clear,
+    /// `strike [km] [intensity]` — inject a synthetic strike, because a real
+    /// one cannot be provoked; see the handler.
+    Simulate(u8, u32),
+    /// Typed, but not understood. Still counts as activity.
     Unknown,
 }
 
@@ -129,34 +140,46 @@ impl Console {
 
 fn parse(line: &str) -> Command {
     let mut parts = line.split_whitespace();
-    match parts.next() {
-        Some("time") => match parts.next().and_then(|v| v.parse::<u64>().ok()) {
-            Some(epoch) => Command::SetTime(epoch),
-            None => Command::Unknown,
+    let word = parts.next().unwrap_or("");
+    let arg = parts.next();
+
+    match word {
+        "help" | "?" => Command::Help,
+
+        // `date` reads, `date <epoch>` writes. One word for one concept beats
+        // `date` to show and `time` to set, which is the sort of split nobody
+        // remembers the right half of.
+        "date" | "time" => match arg {
+            None => Command::Date(None),
+            Some(value) => match value.parse::<u64>() {
+                Ok(epoch) => Command::Date(Some(epoch)),
+                Err(_) => Command::Unknown,
+            },
         },
-        Some("tz") => match parts.next().and_then(|v| v.parse::<i32>().ok()) {
-            // Given in hours because that is how people say it; stored in
-            // minutes so a half-hour zone needs no format change.
+
+        "tz" => match arg.and_then(|v| v.parse::<i32>().ok()) {
+            // Hours in, minutes stored -- see `clock::tz_minutes`.
             Some(hours) if (-12..=14).contains(&hours) => Command::SetTz(hours * 60),
             _ => Command::Unknown,
         },
-        Some("strike") => {
-            let km = parts.next().and_then(|v| v.parse::<u8>().ok()).unwrap_or(8);
-            let intensity = parts
-                .next()
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(4000);
-            Command::Simulate(km, intensity)
-        }
-        Some("dump") => Command::Dump,
-        Some("clear") => Command::Clear,
-        Some("chart") => match parts.next() {
-            Some("day") => Command::SetChart(0),
-            Some("week") => Command::SetChart(1),
-            Some("month") => Command::SetChart(2),
+
+        "scope" | "chart" => match arg {
+            Some("day") => Command::Scope(0),
+            Some("week") => Command::Scope(1),
+            Some("month") => Command::Scope(2),
             _ => Command::Unknown,
         },
-        Some("help") | Some("?") => Command::Help,
+
+        "health" => Command::Health,
+        "status" => Command::Status,
+        "dump" => Command::Dump,
+        "clear" => Command::Clear,
+
+        "strike" => Command::Simulate(
+            arg.and_then(|v| v.parse::<u8>().ok()).unwrap_or(8),
+            parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(4000),
+        ),
+
         _ => Command::Unknown,
     }
 }
@@ -164,15 +187,16 @@ fn parse(line: &str) -> Command {
 /// One screen of help.
 pub fn print_help() {
     println!("commands:");
-    println!("  time <unix-epoch>   set the clock, e.g. time 1785280179");
-    println!("                      (date +%s on the host gives the number)");
-    println!("  tz <hours>          local offset, e.g. tz -4 for US Eastern");
-    println!("  strike [km] [int]   inject a synthetic strike (defaults 8 km, 4.0)");
-    println!("  dump                write the strike log as CSV");
-    println!("  clear               erase the strike log (no confirmation)");
-    println!("  chart day|week|month  which span the charts cover");
-    println!("  help                this");
+    println!("  help                  this");
+    println!("  date [unix-epoch]     show the clock, or set it");
+    println!("  tz <hours>            local offset, e.g. tz -4 for US Eastern");
+    println!("  scope day|week|month  which span the charts cover");
+    println!("  health                device vitals -- the screen's top line");
+    println!("  status                sensor state -- the screen's second line");
+    println!("  dump                  the strike log as CSV");
+    println!("  clear                 erase the strike log (no confirmation)");
+    println!("  strike [km] [int]     inject a synthetic strike (default 8 km, 4000)");
     println!();
-    println!("typing anything also keeps the device awake for 10 minutes --");
-    println!("otherwise it light-sleeps and the USB port goes with it.");
+    println!("Typing anything also keeps the device awake for 10 minutes.");
+    println!("Otherwise it light-sleeps and the USB port goes with it.");
 }
