@@ -135,70 +135,50 @@ pub fn config() -> Option<(u32, u32, bool)> {
 }
 
 
-/// Is a USB **host** talking to us right now?
+/// Decide the policy from the fuel gauge's discharge rate.
 ///
-/// `usb_serial_jtag_is_connected` reports whether the peripheral is seeing
-/// start-of-frame packets — so it is exact and instant when the device is
-/// plugged into a computer, which is the case that matters on a bench.
+/// ## Why the USB peripheral is not consulted
 ///
-/// **It is not a VBUS sense**, and the difference shows up in two places:
+/// An earlier version asked `usb_serial_jtag_is_connected()` first, reasoning
+/// that it is exact and instant where the gauge is slow. **Measured on
+/// hardware, it does not report a disconnect**: cutting USB left the device
+/// claiming a host and sitting at 160 MHz indefinitely. Whatever that function
+/// answers on this chip, it is not "is a cable attached" — so it is gone rather
+/// than left in place looking authoritative.
 ///
-/// * a **power-only charger** sends no SOF, so this reads *disconnected* on a
-///   device that is very much plugged in. The gauge's discharge sign covers
-///   that case — slowly, but correctly;
-/// * once light sleep is running, the **USB PHY is powered down**, so plugging
-///   a cable into a sleeping device will not be noticed here either. The gauge
-///   covers that too, within a few minutes of `CRATE` turning positive.
+/// ## What is left is enough
 ///
-/// So neither signal is sufficient alone, and the two fail in opposite
-/// directions: this one is fast and misses chargers, the gauge is slow and
-/// misses nothing.
-pub fn usb_host_present() -> bool {
-    // SAFETY: a read-only query with no preconditions.
-    unsafe { sys::usb_serial_jtag_is_connected() }
-}
-
-/// Decide the policy from both signals.
+/// The gauge is the one signal proven to work all session: it reported
+/// `0.00 %/hr` on a static cell and tracked voltage to the millivolt.
 ///
-/// **A USB host is the only reason to stay fast.** That is the whole rule, and
-/// the first version got it backwards by asking "is it discharging?" and
-/// defaulting to `Usb` when unsure.
+/// ```text
+/// CRATE < 0   discharging       -> Battery
+/// CRATE > 0   charging          -> Usb
+/// CRATE = 0   neither, or full  -> Usb
+/// ```
 ///
-/// The measurement that killed that version: a cell sitting at 3976 mV reports
-/// `CRATE` of **exactly 0.00 %/hr**, not a negative number. The gauge averages
-/// over minutes, so for the first few after unplugging it says nothing at all —
-/// and "not discharging" was being read as "plugged in", leaving the device at
-/// 160 MHz on battery precisely when it had just been unplugged.
+/// **`CRATE = 0` means Usb deliberately.** A fully charged cell on a desk
+/// reports exactly zero, and reading that as "on battery" would drop the clock
+/// and take the console with it — a board going silent because its battery
+/// finished charging.
 ///
-/// Inverting the default costs nothing, which is what makes it obviously right:
-/// **no USB host means no console**, so there is nothing left to protect by
-/// keeping the clock up.
+/// ## The cost: minutes, not milliseconds
 ///
-/// ## Host **or** charging, not both
+/// `CRATE` is averaged over minutes, so after unplugging the device holds
+/// 160 MHz until that average turns negative. Roughly 22 mA for a few minutes
+/// out of 2000 mAh — under a tenth of a percent of the cell, once per unplug.
+/// Correct and late beats instant and wrong.
 ///
-/// This went round twice and the second answer is the right one. `AND` fails on
-/// a case that happens constantly: **a full cell on USB reports `CRATE ≈ 0`**,
-/// so "charging AND host" is false on a board that has been sitting on a desk
-/// all afternoon — and the device would drop to 40 MHz with light sleep and
-/// take the console down with it. A developer's board going silent because its
-/// battery finished charging is not a trade worth making.
+/// The reverse transition needs no detection at all: **plugging USB in reboots
+/// the board** — the C3 maps the host's DTR/RTS onto its reset straps — and a
+/// fresh boot starts on the Usb policy.
 ///
-/// So either signal alone is enough to stay fast. The cost of the `OR` is one
-/// case that is genuinely suboptimal and genuinely minor: a **power-only
-/// charger** — charging, no host — keeps the clock at 160 with no console to
-/// show for it, and the charger's current is shared between the MCU and the
-/// pack, so ~21 mA that could have gone into the cell does not. It charges
-/// slower. Nothing breaks.
-///
-/// `centi_per_hour` is `None` when there is no gauge or it did not answer; with
-/// neither signal available, battery is both the safe assumption and the likely
-/// one.
+/// `None` — no gauge, or it did not answer — is battery: with no evidence
+/// either way, the frugal assumption is the safe one.
 pub fn decide(centi_per_hour: Option<i32>) -> Policy {
-    if usb_host_present() {
-        return Policy::Usb;
-    }
     match centi_per_hour {
-        Some(rate) if rate > 0 => Policy::Usb,
-        _ => Policy::Battery,
+        Some(rate) if rate < 0 => Policy::Battery,
+        Some(_) => Policy::Usb,
+        None => Policy::Battery,
     }
 }
