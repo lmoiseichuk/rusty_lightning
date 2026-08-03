@@ -82,7 +82,21 @@ const MASK_MIN_STRIKES: u8 = 0x30;
 const MASK_CLEAR_STATS: u8 = 0x40;
 const MASK_DISTURBER: u8 = 0x20;
 const MASK_INTERRUPT: u8 = 0x0F;
-const MASK_DISPLAY_SRCO: u8 = 0x20;
+/// `DISP_TRCO`, register `0x08` **bit 5**.
+///
+/// **Named for what the datasheet calls it, not for what the reference called
+/// it.** The MicroPython reference writes this bit during power-up under the
+/// comment `#set DISP_SRCO to 1` — but its own `setIrqOutputSource` maps
+/// `0x20` to TRCO, `0x40` to SRCO and `0x80` to LCO, and the datasheet agrees.
+/// The comment is simply wrong; the value is right, and TRCO is the bit
+/// `CALIB_RCO` actually requires.
+///
+/// This port originally inherited the wrong name. That is worse than it sounds:
+/// anyone checking `MASK_DISPLAY_TRCO = 0x20` against the datasheet would
+/// "correct" it to `0x40`, which pulses the wrong oscillator, leaves the RCO
+/// uncalibrated, and breaks strike validation in a way that presents as
+/// "disturbers but never lightning" — with nothing in the code looking wrong.
+const MASK_DISPLAY_TRCO: u8 = 0x20;
 const MASK_DISPLAY_LCO: u8 = 0x80;
 const MASK_LCO_FDIV: u8 = 0xC0;
 const MASK_IRQ_DISPLAY: u8 = 0xE0;
@@ -271,9 +285,9 @@ impl As3935 {
         self.modify(i2c, REG_CONFIG0, MASK_POWER_DOWN, 0x00)?;
         self.write(i2c, CMD_CALIB_RCO, DIRECT_COMMAND)?;
         esp_idf_hal::delay::FreeRtos::delay_ms(2);
-        self.modify(i2c, REG_TUNING, MASK_DISPLAY_SRCO, MASK_DISPLAY_SRCO)?;
+        self.modify(i2c, REG_TUNING, MASK_DISPLAY_TRCO, MASK_DISPLAY_TRCO)?;
         esp_idf_hal::delay::FreeRtos::delay_ms(2);
-        self.modify(i2c, REG_TUNING, MASK_DISPLAY_SRCO, 0x00)
+        self.modify(i2c, REG_TUNING, MASK_DISPLAY_TRCO, 0x00)
     }
 
     pub fn set_location(&self, i2c: &mut I2cDriver<'_>, location: Location) -> Result<(), EspError> {

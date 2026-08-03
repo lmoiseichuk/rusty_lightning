@@ -521,6 +521,26 @@ a file about to be removed.
 > **The lesson for the rest of this port:** the reference was treated as the behavioural spec, and a
 > behavioural spec is what the code *does*. Anywhere a ported constant came from a comment rather
 > than from the executed value, it is unverified.
+>
+> #### The full re-audit that lesson prompted
+>
+> The upstream bundle (Arduino C++, MicroPython and Raspberry Pi ports) was re-cloned and **every
+> register operation compared against `src/as3935.rs`**, on the theory that if one comment lied,
+> others might. Energy assembly (`(MMSB & 0x1F) << 16 | MSB << 8 | LSB`), distance masking, noise
+> floor, watchdog, spike rejection, min-strikes encoding, clear-statistics pulsing and tuning-cap
+> conversion all match exactly. Two findings, both the same shape:
+>
+> 1. **The 30 ms settle above.**
+> 2. **`0x08` bit 5 is `DISP_TRCO`, not `DISP_SRCO`.** The reference pulses it during power-up under
+>    the comment `#set DISP_SRCO to 1`, while its own `setIrqOutputSource` maps `0x20`→TRCO,
+>    `0x40`→SRCO, `0x80`→LCO — matching the datasheet. The *value* was ported correctly, so RCO
+>    calibration has always worked; only the name was wrong. That is a live trap rather than a
+>    cosmetic one: checking `MASK_DISPLAY_SRCO = 0x20` against the datasheet invites "correcting" it
+>    to `0x40`, which pulses the wrong oscillator, leaves the RCO uncalibrated, and breaks strike
+>    validation into exactly the disturbers-but-never-lightning symptom — with nothing looking wrong.
+>    Now named `MASK_DISPLAY_TRCO`, with the reasoning at the constant.
+>
+> The bundle was then deleted again. `src/as3935.rs` remains the record.
 
 Four things were deliberately **not** carried across, each noted at its call site:
 
