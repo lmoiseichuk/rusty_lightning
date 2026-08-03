@@ -272,9 +272,10 @@ fn main() {
     let mut strike_log = match log::Log::open() {
         Some(log) => {
             println!(
-                "log:  {} records on the storage partition ({} KB used)",
+                "log:  {} records, {} KB used, {} KB free",
                 log.len(),
-                log.used_bytes() / 1024
+                log.used_bytes() / 1024,
+                log.free_bytes() / 1024
             );
             Some(log)
         }
@@ -547,6 +548,7 @@ fn listen(
     // Uptime at the last console input, and at the last clock save.
     let mut last_console_s: Option<u32> = None;
     let mut last_clock_save_s: u32 = 0;
+    let mut last_log_sync_ms: u32 = 0;
     // The most recent gauge reading, or None until the first poll or if the
     // gauge is absent. Cached because the screen wants it far less often than
     // the loop runs, and it is an I2C transaction.
@@ -676,6 +678,22 @@ fn listen(
                 },
                 console::Command::Help => console::print_help(),
                 console::Command::Unknown => println!("?  try: help"),
+            }
+        }
+
+        // Flush the strike log on its own cadence. Buffered rather than synced
+        // per strike so a storm producing events every few seconds does not
+        // become a flash write every few seconds -- the trade being that a
+        // power cut loses at most a minute. Safe on LittleFS specifically: an
+        // unsynced write is lost, not corrupting.
+        if now_ms().saturating_sub(last_log_sync_ms) >= log::SYNC_INTERVAL_MS {
+            last_log_sync_ms = now_ms();
+            if let Some(log) = strike_log.as_deref_mut() {
+                match log.sync() {
+                    Ok(0) => {}
+                    Ok(n) => println!("log:  synced {n} record(s), {} total", log.len()),
+                    Err(e) => println!("log:  sync FAILED -- {e}"),
+                }
             }
         }
 
@@ -813,7 +831,10 @@ fn listen(
                     panel,
                     &ui::Status {
                         location: *location,
-                        health: system::health(die_temperature, strike_log.as_deref().map(|l| l.used_bytes()).unwrap_or(0)),
+                        health: system::health(
+                            die_temperature,
+                            strike_log.as_deref().map(|l| (l.free_bytes(), l.used_bytes())),
+                        ),
                         battery: reading,
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
@@ -951,14 +972,7 @@ fn collect(
                     // where that can happen down to the first few minutes after
                     // a fresh device is powered on.
                     if let Some(log) = strike_log.as_deref_mut() {
-                        let record = log::Record {
-                            epoch: crate::clock::now().unwrap_or(0),
-                            distance: strike.distance,
-                            energy_raw: strike.energy_raw,
-                        };
-                        if let Err(e) = log.append(&record) {
-                            println!("log:  could not append -- {e}");
-                        }
+                        log.append(crate::clock::now().unwrap_or(0), &strike);
                     }
                     println!(
                         "STRIKE  {:?}  energy {} (intensity {}.{:03})",

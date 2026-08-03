@@ -323,17 +323,25 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
     const BAR_WIDTH: u32 = 200;
     const BAR_HEIGHT: u32 = 22;
 
-    let _ = FIELD_LABEL.render(
-        "Noise ",
-        Point::new(at.x, at.y),
-        VerticalPosition::Baseline,
-        FontColor::Transparent(INK),
-        frame,
-    );
+    // **Measured, not assumed.** A hardcoded label width put the bar through
+    // the "e" of "Noise" -- proportional text is not 8 px a character, and the
+    // number that would have to be right is exactly the one nobody can predict
+    // from reading the code. Asking the renderer how wide it drew cannot drift.
+    const GAP: i32 = 10;
+    let label_width = FIELD_LABEL
+        .render(
+            "Noise",
+            Point::new(at.x, at.y),
+            VerticalPosition::Baseline,
+            FontColor::Transparent(INK),
+            frame,
+        )
+        .map(|dims| dims.advance.x)
+        .unwrap_or(48);
 
-    const LABEL_WIDTH: i32 = 48;
+    let bar_x = at.x + label_width + GAP;
     let bar = Rectangle::new(
-        Point::new(at.x + LABEL_WIDTH, at.y - 16),
+        Point::new(bar_x, at.y - 16),
         Size::new(BAR_WIDTH, BAR_HEIGHT),
     );
     let _ = bar
@@ -344,7 +352,7 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
         // Inset by the stroke so the fill does not sit on the border.
         let filled = (BAR_WIDTH - 4) * value.min(max) / max;
         let _ = Rectangle::new(
-            Point::new(at.x + LABEL_WIDTH + 2, at.y - 14),
+            Point::new(bar_x + 2, at.y - 14),
             Size::new(filled, BAR_HEIGHT - 4),
         )
         .into_styled(PrimitiveStyle::with_fill(INK))
@@ -361,7 +369,7 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
     let _ = write_u32(&mut caption, max);
     let _ = Text::with_baseline(
         &caption,
-        Point::new(at.x + LABEL_WIDTH + BAR_WIDTH as i32 + 12, at.y - 14),
+        Point::new(bar_x + BAR_WIDTH as i32 + GAP, at.y - 14),
         MonoTextStyle::new(&FONT_9X15, INK),
         Baseline::Top,
     )

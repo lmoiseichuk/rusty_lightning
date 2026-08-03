@@ -1,330 +1,258 @@
-//! The strike log: every strike, on flash, surviving power cuts (§5).
+//! The strike log: a CSV file on LittleFS, surviving power cuts (§5).
 //!
-//! ## Why not a filesystem
+//! ## Why LittleFS and not SPIFFS
 //!
-//! §5 says "a single CSV file on the on-flash filesystem", and the reasoning
-//! given is that a file is directly inspectable. That reasoning does not
-//! survive contact with this device: **there is no way to read the file
-//! directly.** No SD card, no USB mass storage, and WiFi is deferred — so the
-//! only route out is the console or an HTTP endpoint, and both of those are
-//! code we write either way. A filesystem would buy a `fopen` we then have to
-//! wrap in exactly the same dump command.
+//! This board has a **battery ON/OFF switch**, so power is removed abruptly and
+//! often — not an edge case here, it is the normal way the device is turned
+//! off. SPIFFS is not power-loss resilient: a cut mid-write can corrupt the
+//! *filesystem*, taking the whole log with it rather than the one record being
+//! written. LittleFS is designed around exactly that failure and recovers to
+//! its last consistent state.
 //!
-//! What it would cost is real: SPIFFS or FAT means a mount, a wear-levelling
-//! layer, directory metadata, and a failure mode — a corrupt filesystem — that
-//! takes the log with it. Against that, a **fixed-size record appended to a raw
-//! partition** has no metadata to corrupt, needs no mount, and recovers from a
-//! torn write by ignoring one record.
+//! ## Why a file and not raw records
 //!
-//! So: raw flash, fixed records, CSV generated **on the way out** rather than
-//! stored. The moisture project reached the same conclusion for the same
-//! reasons, and its soak log is the direct ancestor of this one.
+//! The first version appended fixed 16-byte records to a raw partition, on the
+//! reasoning that a file buys nothing when there is no way to read it — no SD
+//! card, no USB mass storage, WiFi deferred. **That argument expires the moment
+//! §9's HTTP endpoint exists**: a browser fetching `/strikes.csv` wants a file,
+//! and serving one is a stream rather than a generator.
 //!
-//! ## The record
+//! A file also removes machinery. The length *is* the cursor, so there is no
+//! binary search for the end; the filesystem checks its own integrity, so there
+//! is no per-record checksum; and CSV is the stored form, so nothing has to be
+//! rendered on the way out.
 //!
-//! Sixteen bytes, aligned so a record never straddles a flash page:
+//! ## Durability: buffered, synced once a minute
 //!
-//! | Offset | Size | Field |
-//! |---|---|---|
-//! | 0 | 2 | magic + generation |
-//! | 2 | 8 | Unix timestamp, seconds |
-//! | 10 | 1 | distance code (0–63 km, or the two sentinels) |
-//! | 11 | 4 | energy, raw 20-bit value |
-//! | 15 | 1 | checksum over the first 15 bytes |
+//! Lines are appended as they happen and `fsync`ed on a one-minute cadence
+//! rather than per strike. The trade is explicit: a power cut loses at most a
+//! minute of strikes, and in exchange a storm producing events every few
+//! seconds does not turn into a flash write every few seconds.
 //!
-//! The timestamp is stored rather than derived, because uptime is not time: the
-//! device may be told the clock hours after it started logging, and every
-//! record written before that would otherwise be unrecoverable.
+//! That is safe here in a way it would not be on SPIFFS. An unsynced LittleFS
+//! write is *lost*, not corrupting — the filesystem stays consistent whatever
+//! happens to the data in flight — so the cost of the batch is bounded to the
+//! records themselves.
 //!
-//! ## Why a checksum rather than a length or a footer
-//!
-//! Flash erases to `0xFF`, so an unwritten record is all-ones and trivially
-//! recognised. The failure that needs catching is the *torn* one — power lost
-//! mid-write — which leaves a record that is neither blank nor complete. A
-//! checksum catches that in the one place it matters, at the tail, without
-//! needing a second write to commit it.
+//! The handle is held open across the batch, which is what makes buffering
+//! possible at all, and closed on every sync so no state depends on an orderly
+//! shutdown that this device does not have.
 
-use esp_idf_hal::sys::{self, esp_partition_t, EspError};
+use std::fmt::Write as _;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+
+use esp_idf_hal::sys;
 
 use crate::as3935::{Distance, Strike};
 
-/// Bump to invalidate every stored record.
-///
-/// Combined with the magic into one byte pair, so a generation change and a
-/// corrupt record are distinguishable: the wrong generation is a *valid* record
-/// this firmware does not understand, which is worth saying rather than
-/// silently treating as garbage.
-const GENERATION: u8 = 1;
-const MAGIC: u8 = 0x4C; // 'L'
+const MOUNT_POINT: &str = "/lfs";
+const PARTITION_LABEL: &str = "storage";
+const PATH: &str = "/lfs/strikes.csv";
 
-pub const RECORD_LEN: u32 = 16;
+/// The header row, which is also how an empty log is recognised.
+const HEADER: &str = "timestamp,iso_utc,distance_km,energy_raw,intensity_milli,score_milli";
 
-/// Distance sentinels, stored rather than the enum's shape, so the on-flash
-/// format does not move when the enum does.
-const DISTANCE_OVERHEAD: u8 = 0xFE;
-const DISTANCE_OUT_OF_RANGE: u8 = 0xFF;
+/// How often buffered lines are flushed and synced.
+pub const SYNC_INTERVAL_MS: u32 = 60_000;
 
-/// One logged strike.
-#[derive(Debug, Clone, Copy)]
-pub struct Record {
-    pub epoch: u64,
-    pub distance: Distance,
-    pub energy_raw: u32,
-}
-
-impl Record {
-    fn encode(&self) -> [u8; RECORD_LEN as usize] {
-        let mut bytes = [0u8; RECORD_LEN as usize];
-        bytes[0] = MAGIC;
-        bytes[1] = GENERATION;
-        bytes[2..10].copy_from_slice(&self.epoch.to_le_bytes());
-        bytes[10] = match self.distance {
-            Distance::Km(km) => km.min(63),
-            Distance::Overhead => DISTANCE_OVERHEAD,
-            Distance::OutOfRange => DISTANCE_OUT_OF_RANGE,
-        };
-        bytes[11..15].copy_from_slice(&self.energy_raw.to_le_bytes());
-        bytes[15] = checksum(&bytes[..15]);
-        bytes
-    }
-
-    fn decode(bytes: &[u8; RECORD_LEN as usize]) -> Option<Self> {
-        if bytes[0] != MAGIC || bytes[1] != GENERATION {
-            return None;
-        }
-        if bytes[15] != checksum(&bytes[..15]) {
-            return None;
-        }
-        Some(Record {
-            epoch: u64::from_le_bytes(bytes[2..10].try_into().ok()?),
-            distance: match bytes[10] {
-                DISTANCE_OVERHEAD => Distance::Overhead,
-                DISTANCE_OUT_OF_RANGE => Distance::OutOfRange,
-                km => Distance::Km(km),
-            },
-            energy_raw: u32::from_le_bytes(bytes[11..15].try_into().ok()?),
-        })
-    }
-}
-
-/// Sum of bytes, inverted.
-///
-/// Inverted so that an all-`0xFF` erased record does **not** checksum as valid:
-/// a plain sum of fifteen `0xFF` bytes would be a fixed value that could be
-/// matched by chance, whereas this makes blank flash fail the check for the
-/// same reason it fails the magic.
-fn checksum(bytes: &[u8]) -> u8 {
-    !bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b))
-}
-
-/// The strike log, on the `storage` partition.
 pub struct Log {
-    partition: *const esp_partition_t,
-    /// Byte offset of the next write.
-    cursor: u32,
-    capacity: u32,
+    /// Records written, counted at open from the file itself.
+    records: u32,
+    bytes: u32,
+    /// Lines appended since the last sync. Kept in memory so a storm does not
+    /// become one flash write per strike.
+    pending: Vec<String>,
 }
 
 impl Log {
-    /// Find the partition and locate the end of the existing log.
+    /// Mount the filesystem and prepare the log.
     pub fn open() -> Option<Self> {
-        // SAFETY: a lookup returning a descriptor the IDF owns for the life of
-        // the program.
-        let partition = unsafe {
-            sys::esp_partition_find_first(
-                sys::esp_partition_type_t_ESP_PARTITION_TYPE_DATA,
-                sys::esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
-                b"storage\0".as_ptr() as *const core::ffi::c_char,
-            )
+        let mount = std::ffi::CString::new(MOUNT_POINT).ok()?;
+        let label = std::ffi::CString::new(PARTITION_LABEL).ok()?;
+
+        let mut config = sys::littlefs::esp_vfs_littlefs_conf_t {
+            base_path: mount.as_ptr(),
+            partition_label: label.as_ptr(),
+            ..Default::default()
         };
-        if partition.is_null() {
-            return None;
-        }
-        // SAFETY: non-null, checked above.
-        let capacity = unsafe { (*partition).size };
+        // The flags are a bindgen bitfield rather than plain bools, so they are
+        // set through generated accessors rather than in the initialiser.
+        //
+        // Format on a failed mount, so a virgin device — or one whose
+        // filesystem did not survive something — comes up working rather than
+        // dead. The cost of a spurious format is the log, and in that situation
+        // the log is already unreadable.
+        config.set_format_if_mount_failed(1);
+        config.set_read_only(0);
+        config.set_dont_mount(0);
 
-        let mut log = Log {
-            partition,
-            cursor: 0,
-            capacity,
-        };
-        log.cursor = log.find_end();
-        Some(log)
-    }
-
-    /// Binary-search for the first blank record.
-    ///
-    /// Binary rather than linear because the partition holds ~124 000 records:
-    /// a linear scan is 124 000 flash reads at every boot, against seventeen.
-    /// The search is valid because the log only ever appends, so written
-    /// records form a prefix — the first blank one is the boundary.
-    fn find_end(&self) -> u32 {
-        let slots = self.capacity / RECORD_LEN;
-        let (mut low, mut high) = (0u32, slots);
-        while low < high {
-            let mid = low + (high - low) / 2;
-            if self.slot_written(mid) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        low * RECORD_LEN
-    }
-
-    /// Is this slot written? Judged by the magic byte alone — one byte read
-    /// rather than sixteen, and blank flash is `0xFF`.
-    fn slot_written(&self, slot: u32) -> bool {
-        let mut byte = [0u8; 1];
-        // SAFETY: reading inside the partition; the offset is bounded by the
-        // caller's slot count.
-        let err = unsafe {
-            sys::esp_partition_read(
-                self.partition,
-                (slot * RECORD_LEN) as usize,
-                byte.as_mut_ptr() as *mut core::ffi::c_void,
-                1,
-            )
-        };
-        err == sys::ESP_OK && byte[0] == MAGIC
-    }
-
-    pub fn len(&self) -> u32 {
-        self.cursor / RECORD_LEN
-    }
-
-    pub fn used_bytes(&self) -> u32 {
-        self.cursor
-    }
-
-    pub fn is_full(&self) -> bool {
-        self.cursor + RECORD_LEN > self.capacity
-    }
-
-    /// Append one strike.
-    ///
-    /// **Stops when full rather than wrapping.** §5 leaves the retention policy
-    /// open — rotate or overwrite-oldest — and stopping is the one choice that
-    /// cannot lose data that has already been recorded. At ~124 000 records the
-    /// question is years away, and a wrong answer now would quietly discard the
-    /// history the §7 ETA model is meant to be built from.
-    pub fn append(&mut self, record: &Record) -> Result<(), EspError> {
-        if self.is_full() {
-            return Ok(());
-        }
-        let bytes = record.encode();
-        // SAFETY: writing inside the partition, bounds checked above.
-        let err = unsafe {
-            sys::esp_partition_write(
-                self.partition,
-                self.cursor as usize,
-                bytes.as_ptr() as *const core::ffi::c_void,
-                bytes.len(),
-            )
-        };
-        crate::storage::check(err)?;
-        self.cursor += RECORD_LEN;
-        Ok(())
-    }
-
-    /// Read one record by index.
-    pub fn get(&self, index: u32) -> Option<Record> {
-        if index >= self.len() {
-            return None;
-        }
-        let mut bytes = [0u8; RECORD_LEN as usize];
-        // SAFETY: bounded by `len`.
-        let err = unsafe {
-            sys::esp_partition_read(
-                self.partition,
-                (index * RECORD_LEN) as usize,
-                bytes.as_mut_ptr() as *mut core::ffi::c_void,
-                bytes.len(),
-            )
-        };
+        // SAFETY: a plain IDF call; both CStrings outlive it.
+        let err = unsafe { sys::littlefs::esp_vfs_littlefs_register(&config) };
         if err != sys::ESP_OK {
             return None;
         }
-        Record::decode(&bytes)
+
+        let mut log = Log {
+            records: 0,
+            bytes: 0,
+            pending: Vec::new(),
+        };
+        log.ensure_header();
+        log.recount();
+        Some(log)
     }
 
-    /// Erase the whole log.
+    /// Write the header if the file is new or empty.
     ///
-    /// No caller yet — it belongs to a `clear` console command, or to the
-    /// retention policy §5 leaves open. Kept because it is a complete
-    /// operation and erasing is the one thing a full log will need.
-    #[allow(dead_code)]
-    pub fn erase(&mut self) -> Result<(), EspError> {
-        // SAFETY: erasing the whole partition we own.
-        let err = unsafe {
-            sys::esp_partition_erase_range(self.partition, 0, self.capacity as usize)
+    /// A header tells a reader — a person, a spreadsheet, or a browser — what
+    /// the columns are, and its presence distinguishes "this log exists and
+    /// holds nothing" from "there is no log".
+    fn ensure_header(&mut self) {
+        let empty = std::fs::metadata(PATH).map(|m| m.len() == 0).unwrap_or(true);
+        if !empty {
+            return;
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(PATH) {
+            let _ = writeln!(file, "{HEADER}");
+            let _ = file.flush();
+            let _ = file.sync_all();
+        }
+    }
+
+    /// Count what is already on disk.
+    ///
+    /// Derived from the file rather than kept in a separate counter, so the two
+    /// cannot disagree after a crash. Done once at open.
+    fn recount(&mut self) {
+        self.bytes = std::fs::metadata(PATH).map(|m| m.len() as u32).unwrap_or(0);
+        self.records = File::open(PATH)
+            .map(|file| {
+                BufReader::new(file)
+                    .lines()
+                    .skip(1) // the header
+                    .filter(|line| line.as_ref().map(|l| !l.trim().is_empty()).unwrap_or(false))
+                    .count() as u32
+            })
+            .unwrap_or(0);
+    }
+
+    pub fn len(&self) -> u32 {
+        self.records + self.pending.len() as u32
+    }
+
+    pub fn used_bytes(&self) -> u32 {
+        self.bytes
+    }
+
+    /// Free space on the partition, in bytes.
+    pub fn free_bytes(&self) -> u32 {
+        let Ok(label) = std::ffi::CString::new(PARTITION_LABEL) else {
+            return 0;
         };
-        crate::storage::check(err)?;
-        self.cursor = 0;
+        let (mut total, mut used) = (0usize, 0usize);
+        // SAFETY: a read-only query against a mounted partition.
+        let err =
+            unsafe { sys::littlefs::esp_littlefs_info(label.as_ptr(), &mut total, &mut used) };
+        if err != sys::ESP_OK {
+            return 0;
+        }
+        total.saturating_sub(used) as u32
+    }
+
+    /// Record a strike. Buffered; see [`Log::sync`].
+    pub fn append(&mut self, epoch: u64, strike: &Strike) {
+        let mut line = String::with_capacity(96);
+
+        // Words rather than numbers for the two sentinels. "Overhead" and "out
+        // of range" are not distances, and a consumer averaging this column
+        // must not silently take them for 1 km and 63 km.
+        let distance = match strike.distance {
+            Distance::Overhead => "overhead".to_string(),
+            Distance::OutOfRange => "far".to_string(),
+            Distance::Km(km) => km.to_string(),
+        };
+        let score = crate::history::score_milli(strike)
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        // An unset clock writes 0 and an empty ISO column rather than a
+        // plausible 1970 date. The strike happened; what is unknown is when,
+        // and saying so is recoverable where inventing it is not.
+        let iso = if epoch == 0 {
+            String::new()
+        } else {
+            crate::clock::format(epoch).to_string()
+        };
+
+        let _ = write!(
+            line,
+            "{},{},{},{},{},{}",
+            epoch,
+            iso,
+            distance,
+            strike.energy_raw,
+            strike.intensity_milli(),
+            score
+        );
+        self.pending.push(line);
+    }
+
+    /// Flush and sync anything buffered.
+    ///
+    /// Returns how many records were written, so the caller can say so — a
+    /// silent flush is indistinguishable from a lost one.
+    pub fn sync(&mut self) -> Result<u32, std::io::Error> {
+        if self.pending.is_empty() {
+            return Ok(0);
+        }
+        let mut file = OpenOptions::new().create(true).append(true).open(PATH)?;
+        let mut written = 0;
+        for line in self.pending.drain(..) {
+            writeln!(file, "{line}")?;
+            self.bytes += line.len() as u32 + 1;
+            self.records += 1;
+            written += 1;
+        }
+        file.flush()?;
+        // The call that makes the difference: without it the data sits in the
+        // filesystem's cache and a power cut takes it.
+        file.sync_all()?;
+        Ok(written)
+    }
+
+    /// Erase the log and start again.
+    #[allow(dead_code)]
+    pub fn clear(&mut self) -> Result<(), std::io::Error> {
+        self.pending.clear();
+        std::fs::remove_file(PATH)?;
+        self.ensure_header();
+        self.recount();
         Ok(())
     }
 }
 
-/// CSV, generated on the way out.
+/// Stream the file to the console.
 ///
-/// The header names the derived column too: `score` is not stored, because it
-/// is a function of the two fields either side of it and storing it would let
-/// the three disagree after a formula change.
+/// A copy rather than a re-render: the stored form is already the output form,
+/// which is the point of keeping CSV on disk. Anything reading this — a
+/// terminal, `netcat`, or later an HTTP handler — gets identical bytes.
 pub fn dump_csv(log: &Log) {
     println!("# lightning strike log, {} records", log.len());
-    println!("timestamp,iso_utc,distance_km,energy_raw,intensity_milli,score_milli");
-
-    for index in 0..log.len() {
-        let Some(record) = log.get(index) else {
-            // A torn or foreign record. Say so and keep going: one bad record
-            // must not cost the rest of the log.
-            println!("# record {index} unreadable");
-            continue;
-        };
-
-        let strike = Strike {
-            distance: record.distance,
-            energy_raw: record.energy_raw,
-        };
-        let distance = match record.distance {
-            Distance::Km(km) => {
-                let mut s = heapless::String::<8>::new();
-                let _ = write_u32(&mut s, km as u32);
-                s
+    if !log.pending.is_empty() {
+        println!("# ({} not yet synced, shown after the file)", log.pending.len());
+    }
+    match File::open(PATH) {
+        Ok(file) => {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
+                println!("{line}");
             }
-            Distance::Overhead => heapless::String::try_from("overhead").unwrap_or_default(),
-            Distance::OutOfRange => heapless::String::try_from("far").unwrap_or_default(),
-        };
-        let score = crate::history::score_milli(&strike)
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-
-        println!(
-            "{},{},{},{},{},{}",
-            record.epoch,
-            crate::clock::format(record.epoch),
-            distance,
-            record.energy_raw,
-            strike.intensity_milli(),
-            score
-        );
+        }
+        Err(e) => println!("# could not read {PATH}: {e}"),
+    }
+    // Buffered lines are shown too. They are real strikes that happened; the
+    // only thing not yet true of them is that they are on flash.
+    for line in &log.pending {
+        println!("{line}");
     }
     println!("# end");
-}
-
-fn write_u32<const N: usize>(out: &mut heapless::String<N>, mut value: u32) -> Result<(), ()> {
-    if value == 0 {
-        return out.push('0').map_err(|_| ());
-    }
-    let mut digits = [0u8; 10];
-    let mut used = 0;
-    while value > 0 {
-        digits[used] = b'0' + (value % 10) as u8;
-        value /= 10;
-        used += 1;
-    }
-    for i in (0..used).rev() {
-        out.push(digits[i] as char).map_err(|_| ())?;
-    }
-    Ok(())
 }

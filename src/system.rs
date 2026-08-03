@@ -49,33 +49,11 @@ pub fn heap_kb() -> (u32, u32) {
     (free / 1024, total.saturating_sub(free) / 1024)
 }
 
-/// The `storage` partition, as `(free, used)` kilobytes.
+/// Convert the log's byte figures to kilobytes.
 ///
-/// `used_bytes` is supplied by the caller, because only the log knows how far
-/// it has written — this module knows the size of the partition and nothing
-/// about what is in it.
-///
-/// `None` if the partition is missing, which would mean a partition table that
-/// does not match this firmware.
-pub fn flash_kb(used_bytes: u32) -> Option<(u32, u32)> {
-    // SAFETY: a lookup by type and label, returning a borrowed descriptor.
-    let partition = unsafe {
-        sys::esp_partition_find_first(
-            sys::esp_partition_type_t_ESP_PARTITION_TYPE_DATA,
-            sys::esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
-            b"storage\0".as_ptr() as *const core::ffi::c_char,
-        )
-    };
-    if partition.is_null() {
-        return None;
-    }
-    // SAFETY: non-null, and the IDF owns the descriptor for the program's life.
-    let total = unsafe { (*partition).size };
-    Some((
-        total.saturating_sub(used_bytes) / 1024,
-        used_bytes / 1024,
-    ))
-}
+/// The numbers come from the filesystem rather than from the partition table,
+/// because those are different questions: the partition is 1.9 MB, and how much
+/// of it LittleFS can still hand out is smaller and only it knows.
 
 /// The on-die temperature sensor.
 ///
@@ -136,12 +114,15 @@ impl Drop for DieTemperature {
 }
 
 /// Collect everything at once.
-pub fn health(temperature: Option<&DieTemperature>, log_bytes: u32) -> Health {
+pub fn health(
+    temperature: Option<&DieTemperature>,
+    log_bytes: Option<(u32, u32)>,
+) -> Health {
     Health {
         cpu_mhz: cpu_mhz(),
         die_temp_tenths: temperature.and_then(|t| t.read_tenths()),
         heap_kb: heap_kb(),
-        flash_kb: flash_kb(log_bytes),
+        flash_kb: log_bytes.map(|(free, used)| (free / 1024, used / 1024)),
     }
 }
 
