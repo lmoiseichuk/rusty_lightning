@@ -50,7 +50,7 @@ use crate::as3935::{Distance, Strike};
 ///
 /// `Copy` and eight bytes, so a ring of them is a plain array with no
 /// allocation and no per-bucket bookkeeping.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Bucket {
     pub strikes: u16,
     /// Sum of per-strike scores, in thousandths.
@@ -63,6 +63,29 @@ pub struct Bucket {
     pub distance_samples: u16,
     /// Closest strike in this bucket, km. `u8::MAX` when none reported one.
     pub distance_km_min: u8,
+}
+
+/// **Hand-written, because `derive(Default)` is wrong for this type.**
+///
+/// `distance_km_min` uses `u8::MAX` as "nothing recorded", and a derived
+/// default would give it `0` — which then wins every `min()` it takes part in.
+/// `Ring::new` set the sentinel correctly, but every bucket cleared by
+/// `advance_to` used the derived default, so an empty or partly-empty window
+/// reported the **closest strike as 0 km**: a storm directly overhead, forever,
+/// on a device that had seen nothing.
+///
+/// Caught on hardware after a refactor: three replayed strikes at 20, 9 and
+/// 3 km reported `closest 0 km`.
+impl Default for Bucket {
+    fn default() -> Self {
+        Self {
+            strikes: 0,
+            score_milli_sum: 0,
+            distance_km_sum: 0,
+            distance_samples: 0,
+            distance_km_min: u8::MAX,
+        }
+    }
 }
 
 impl Bucket {
@@ -124,6 +147,8 @@ pub struct Ring<const N: usize> {
 impl<const N: usize> Ring<N> {
     pub const fn new(minutes_per_bucket: u32) -> Self {
         Self {
+            // `Bucket::default()` is not `const`, so the sentinel is spelled
+            // out once here. It must match the `Default` impl above.
             buckets: [Bucket {
                 strikes: 0,
                 score_milli_sum: 0,

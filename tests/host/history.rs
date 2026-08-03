@@ -22,7 +22,7 @@ impl Strike {
 ///
 /// `Copy` and eight bytes, so a ring of them is a plain array with no
 /// allocation and no per-bucket bookkeeping.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Bucket {
     pub strikes: u16,
     /// Sum of per-strike scores, in thousandths.
@@ -35,6 +35,29 @@ pub struct Bucket {
     pub distance_samples: u16,
     /// Closest strike in this bucket, km. `u8::MAX` when none reported one.
     pub distance_km_min: u8,
+}
+
+/// **Hand-written, because `derive(Default)` is wrong for this type.**
+///
+/// `distance_km_min` uses `u8::MAX` as "nothing recorded", and a derived
+/// default would give it `0` — which then wins every `min()` it takes part in.
+/// `Ring::new` set the sentinel correctly, but every bucket cleared by
+/// `advance_to` used the derived default, so an empty or partly-empty window
+/// reported the **closest strike as 0 km**: a storm directly overhead, forever,
+/// on a device that had seen nothing.
+///
+/// Caught on hardware after a refactor: three replayed strikes at 20, 9 and
+/// 3 km reported `closest 0 km`.
+impl Default for Bucket {
+    fn default() -> Self {
+        Self {
+            strikes: 0,
+            score_milli_sum: 0,
+            distance_km_sum: 0,
+            distance_samples: 0,
+            distance_km_min: u8::MAX,
+        }
+    }
 }
 
 impl Bucket {
@@ -96,6 +119,8 @@ pub struct Ring<const N: usize> {
 impl<const N: usize> Ring<N> {
     pub const fn new(minutes_per_bucket: u32) -> Self {
         Self {
+            // `Bucket::default()` is not `const`, so the sentinel is spelled
+            // out once here. It must match the `Default` impl above.
             buckets: [Bucket {
                 strikes: 0,
                 score_milli_sum: 0,
@@ -352,6 +377,23 @@ fn main() {
     check("only the one with a distance is averaged", b.distance_samples == 1);
     check("mean distance is that one, not a third of it", b.mean_distance_km() == Some(10));
     check("closest is tracked", b.distance_km_min == 10);
+
+    // --- the sentinel, which derive(Default) got wrong ---------------------
+    check("a default bucket has NO closest, not 0 km",
+        Bucket::default().distance_km_min == u8::MAX);
+
+    // The failure this guards: a window whose other buckets are empty must not
+    // report the closest strike as 0 km. Seen on hardware -- three strikes at
+    // 20, 9 and 3 km reported "closest 0 km" because every cleared bucket
+    // carried a derived default of zero and won every min().
+    let mut ring: Ring<96> = Ring::new(15);
+    ring.record(0, &strike(Distance::Km(20), 3000));
+    ring.record(1, &strike(Distance::Km(9), 3000));
+    ring.record(2, &strike(Distance::Km(3), 3000));
+    check("closest over a mostly-empty window is the real closest",
+        ring.recent(4).distance_km_min == 3);
+    check("...and an entirely empty window has no closest",
+        Ring::<96>::new(15).recent(4).distance_km_min == u8::MAX);
 
     // --- series ordering ---------------------------------------------------
     let mut ring: Ring<4> = Ring::new(15);
