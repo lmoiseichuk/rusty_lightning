@@ -598,6 +598,7 @@ fn listen(
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
                 location: *location,
+                defence: level,
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
@@ -711,6 +712,16 @@ struct Drawn {
     strikes: u32,
     last_strike: Option<(as3935::Distance, u32)>,
     location: Location,
+    /// §4.2's level. **A change test, so 11 -> 11 cannot repaint** — only a
+    /// genuine move does, and the 30 s floor bounds how often that can happen.
+    ///
+    /// It was excluded for a while after it caused a refresh every half minute
+    /// in a marginal room, oscillating 0 -> 1 -> 0. That was the ladder sitting
+    /// exactly on a threshold, which is the one place it does not settle.
+    /// Everywhere else it **converges**: it climbs until the noise is rejected
+    /// and then stops, so the churn is a property of one environment rather
+    /// than of the value.
+    defence: u8,
 }
 
 /// Render and push one status screen.
