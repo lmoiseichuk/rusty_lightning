@@ -196,7 +196,7 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
     // other label anywhere on the device, so a sealed box otherwise gives no
     // clue that pressing it does anything at all.
     let _ = Text::with_baseline(
-        "BOOT switches",
+        "hold BOOT to switch",
         Point::new(16, 70),
         MonoTextStyle::new(&FONT_6X10, INK),
         Baseline::Top,

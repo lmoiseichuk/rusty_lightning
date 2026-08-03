@@ -66,14 +66,27 @@ const NOTIFY_BUTTON: u32 = 2;
 /// counter was clear again by the next window and blanked nothing at all.
 const BUTTON_DEBOUNCE_MS: u32 = 300;
 
-/// How many times to confirm the button is down, and how far apart.
+/// How long the button must be held to count as a press.
 ///
-/// A single sample rejects a microsecond glitch and is fooled by a longer one.
-/// Sampling across ~60 ms means a false press has to hold the pin down for
-/// longer than any coupled transient plausibly does, while still landing well
-/// inside the tens of milliseconds a fingertip takes.
-const BUTTON_CONFIRM_SAMPLES: u32 = 3;
-const BUTTON_CONFIRM_GAP_MS: u32 = 20;
+/// ⚠ **This is not debounce. It is telling a person from a USB host.**
+///
+/// GPIO9 is the BOOT strap, and the ESP32-C3 maps the host's CDC **DTR** line
+/// onto it. So every time `espflash`, `esptool` or a serial monitor connects, it
+/// asserts DTR, GPIO9 goes low, and the firmware sees a falling edge that is
+/// electrically indistinguishable from a fingertip — because it *is* one. That
+/// is the whole explanation for the "phantom presses": they were our own
+/// tooling, firing every time anyone opened the port.
+///
+/// It also rules out the obvious fixes. Sampling the level harder does not help,
+/// because the pin really is held down. Moving the button to another pin is not
+/// available either — GPIO9 carries the only button on the board.
+///
+/// What does separate them is **duration**. A flashing tool pulses DTR for a few
+/// hundred milliseconds; a person pressing a button holds it far longer without
+/// trying. 1.5 s sits well clear of the first and is unnoticeable in the second.
+const BUTTON_HOLD_MS: u32 = 1500;
+/// How often to check during the hold.
+const BUTTON_POLL_MS: u32 = 100;
 
 /// Antenna tuning capacitance, picofarads. The SEN0290's factory value, and
 /// changing it needs a scope on the IRQ pin (§3 step 5).
@@ -314,7 +327,7 @@ fn main() {
     let (irq_confirmed, antenna_khz) = antenna_self_test(&sensor, &mut i2c, &irq);
 
     println!("irq:  GPIO21 (D6), rising edge, pulldown");
-    println!("btn:  GPIO9 (BOOT), press to switch indoor/outdoor");
+    println!("btn:  GPIO9 (BOOT), HOLD {BUTTON_HOLD_MS} ms to switch indoor/outdoor");
     println!("as:   running {}", location.label());
 
     // --- the panel --------------------------------------------------------
@@ -556,7 +569,11 @@ fn listen(
                     // A deliberate press earns an immediate repaint -- see below.
                     user_acted = true;
                 } else if !held {
-                    println!("btn:  edge with the pin already released -- ignored as a glitch");
+                    // Almost always a flashing tool asserting DTR, which the C3
+                    // wires to this pin. Said out loud rather than swallowed,
+                    // because "the button does nothing" and "the button is
+                    // being pressed by your laptop" look identical otherwise.
+                    println!("btn:  edge not held {BUTTON_HOLD_MS} ms -- ignored (USB DTR?)");
                 }
             }
 
@@ -990,29 +1007,22 @@ fn antenna_self_test(
 }
 
 
-/// Is the button genuinely held down?
+/// Was the button held long enough to be a person rather than a USB host?
 ///
-/// **An edge is not a press.** GPIO9 is a strapping pin on a board that shares
-/// a bench with an e-paper boost converter and a 500 kHz receiver, and it
-/// produced falling edges indistinguishable from a fingertip while nobody was
-/// touching it.
+/// See [`BUTTON_HOLD_MS`] for why duration is the only signal that separates
+/// them: a host asserting DTR drives GPIO9 low exactly as a fingertip does, and
+/// GPIO9 is the only button on this board.
 ///
-/// The cost of believing one was high, which is why this is more careful than
-/// a debounce usually needs to be: a false press toggles indoor/outdoor, which
-/// forces a redraw, and a user-initiated redraw deliberately bypasses the 30 s
-/// floor — so every glitch bought an immediate 3.8 s refresh *and* an NVS
-/// write. The symptom was a screen repainting without pause, with no logo
-/// between repaints, which is what ruled out a reboot and left this.
-///
-/// Requiring the pin to stay down across several samples is what separates the
-/// two: a transient is over in microseconds, a press lasts tens of
-/// milliseconds.
+/// Returns as soon as the pin comes back up, so a rejected press costs nothing
+/// — which matters because the rejected ones are every flash attempt.
 fn button_held(button: &PinDriver<'_, esp_idf_hal::gpio::Input>) -> bool {
-    for _ in 0..BUTTON_CONFIRM_SAMPLES {
+    let mut held_ms = 0;
+    while held_ms < BUTTON_HOLD_MS {
         if !button.is_low() {
             return false;
         }
-        FreeRtos::delay_ms(BUTTON_CONFIRM_GAP_MS);
+        FreeRtos::delay_ms(BUTTON_POLL_MS);
+        held_ms += BUTTON_POLL_MS;
     }
     button.is_low()
 }
