@@ -5,6 +5,8 @@
 
 mod as3935;
 mod battery;
+mod clock;
+mod console;
 mod display;
 mod defence;
 mod history;
@@ -198,6 +200,15 @@ fn main() {
     println!("=== lightning terminal ===");
     println!("fw {}", env!("CARGO_PKG_VERSION"));
     println!("boot: {}", system::reset_reason_name());
+
+    // §5's clock: a persisted epoch plus uptime, with no network involved.
+    // Said out loud either way -- a device that comes up without a time will
+    // write unstamped records until somebody tells it one, and that is worth
+    // knowing before the log is trusted.
+    match clock::restore() {
+        Some(epoch) => println!("time: restored {} UTC", clock::format(epoch)),
+        None => println!("time: NOT SET -- records will be unstamped. Use: time <unix-epoch>"),
+    }
 
     // §2: the display consumes GPIO 2, 3, 4, 5, 8 and 10, which leaves the
     // XIAO's native I2C pads free. These are fixed by that, not chosen.
@@ -511,7 +522,11 @@ fn listen(
 
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.
-    let mut policy = power::Policy::Usb;
+    let mut policy = power::Policy::Awake;
+    let mut console = console::Console::new();
+    // Uptime at the last console input, and at the last clock save.
+    let mut last_console_s: Option<u32> = None;
+    let mut last_clock_save_s: u32 = 0;
     // The most recent gauge reading, or None until the first poll or if the
     // gauge is absent. Cached because the screen wants it far less often than
     // the loop runs, and it is an I2C transaction.
@@ -612,6 +627,38 @@ fn listen(
         // against its right edge.
         history.tick(now_ms() / 60_000);
 
+        // --- the console ----------------------------------------------------
+        //
+        // Any input counts as "somebody is here", which is what holds the awake
+        // policy -- see `power::decide`. It is the only supply signal that has
+        // not lied, because it is about a person rather than a cable.
+        if let Some(command) = console.poll() {
+            last_console_s = Some(now_ms() / 1000);
+            match command {
+                console::Command::SetTime(epoch) => match clock::set(epoch) {
+                    Ok(()) => {
+                        last_clock_save_s = now_ms() / 1000;
+                        println!("time: set to {} UTC", clock::format(epoch));
+                    }
+                    Err(e) => println!("time: could not set -- {e}"),
+                },
+                console::Command::Dump => println!("dump: not implemented yet (§5)"),
+                console::Command::Help => console::print_help(),
+                console::Command::Unknown => println!("?  try: help"),
+            }
+        }
+
+        // Re-save the clock periodically, so a power cut costs only the time the
+        // device spent off rather than everything since it was last told.
+        if let Some(epoch) = clock::now() {
+            if now_ms() / 1000 - last_clock_save_s >= clock::SAVE_INTERVAL_S {
+                last_clock_save_s = now_ms() / 1000;
+                if let Err(e) = clock::save(epoch) {
+                    println!("time: periodic save failed -- {e}");
+                }
+            }
+        }
+
         // The fuel gauge, on its own slow cadence -- it is an I2C transaction
         // for values that move over hours -- and the clock policy that follows
         // from it (§7).
@@ -628,7 +675,7 @@ fn listen(
                 );
             }
 
-            let want = power::decide(reading.map(|r| r.crate_centi_per_hour), now_ms() / 1000);
+            let want = power::decide(now_ms() / 1000, last_console_s);
             if want != policy {
                 match power::apply(want) {
                     Ok(()) => {
@@ -735,7 +782,7 @@ fn listen(
                     panel,
                     &ui::Status {
                         location: *location,
-                        health: system::health(die_temperature),
+                        health: system::health(die_temperature, 0),
                         battery: reading,
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,

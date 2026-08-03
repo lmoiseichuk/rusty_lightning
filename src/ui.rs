@@ -408,15 +408,15 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
     // the chip reports rather than from what the policy asked for — and this is
     // the only witness there is once USB is cut, because cutting USB also cuts
     // the console. Unplug, press BOOT, read the line.
-    let _ = left.push_str("   ");
+    let _ = left.push_str("  ");
     let _ = write_u32(&mut left, s.health.cpu_mhz);
-    let _ = left.push_str(" MHz");
+    let _ = left.push_str("MHz");
     if s.light_sleep {
         let _ = left.push_str(" +sleep");
     }
 
     if let Some(tenths) = s.health.die_temp_tenths {
-        let _ = left.push_str("   die ");
+        let _ = left.push_str("  ");
         if tenths < 0 {
             let _ = left.push('-');
         }
@@ -424,20 +424,27 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
         let _ = write_u32(&mut left, magnitude / 10);
         let _ = left.push('.');
         let _ = write_u32(&mut left, magnitude % 10);
-        let _ = left.push_str(" C");
+        let _ = left.push('C');
     }
 
-    let _ = left.push_str("   heap ");
-    let _ = write_u32(&mut left, s.health.free_heap_kb);
-    let _ = left.push_str(" KB");
+    // free/used, both of them, in the same unit. A bare percentage was
+    // ambiguous in the one way that matters -- "99%" reads equally as
+    // nearly-full and nearly-empty, and those are opposite emergencies.
+    // "ram" rather than "heap": heap is an implementation word, and the line is
+    // read by whoever is standing in front of the device, not by whoever wrote
+    // the allocator.
+    let _ = left.push_str("  ram ");
+    let _ = write_u32(&mut left, s.health.heap_kb.0);
+    let _ = left.push('/');
+    let _ = write_u32(&mut left, s.health.heap_kb.1);
+    let _ = left.push_str("KB");
 
-    // NVS as a percentage rather than a byte count: the useful question is
-    // "will the next write fit", and NVS runs out of *entries* rather than
-    // space -- a partition can have plenty of bytes and no free entries.
-    if let Some(percent) = s.health.free_nvs_percent {
-        let _ = left.push_str("   nvs ");
-        let _ = write_u32(&mut left, percent as u32);
-        let _ = left.push('%');
+    if let Some((free, used)) = s.health.flash_kb {
+        let _ = left.push_str("  flash ");
+        let _ = write_u32(&mut left, free);
+        let _ = left.push('/');
+        let _ = write_u32(&mut left, used);
+        let _ = left.push_str("KB");
     }
 
     let _ = Text::with_baseline(&left, Point::new(16, STATUS_TOP), style, Baseline::Top).draw(frame);
@@ -446,7 +453,7 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
     let mut right = Text64::new();
     match s.battery {
         Some(reading) => {
-            let _ = right.push_str("Battery ");
+            let _ = right.push_str("battery ");
             let _ = write_u32(&mut right, reading.percent as u32);
             let _ = right.push_str("%  ");
             let _ = write_u32(&mut right, reading.millivolts as u32 / 1000);
@@ -493,7 +500,7 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
             }
         }
         None => {
-            let _ = right.push_str("Battery -- no gauge");
+            let _ = right.push_str("battery -- no gauge");
         }
     }
 

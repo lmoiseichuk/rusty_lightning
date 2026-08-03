@@ -20,13 +20,16 @@ pub struct Health {
     /// it is measuring the chip that is doing the work — useful as a trend and
     /// as a fault signal, misleading as a thermometer.
     pub die_temp_tenths: Option<i32>,
-    pub free_heap_kb: u32,
-    /// Free NVS entries, as a percentage of the partition.
+    /// Heap, as `(free, used)` kilobytes.
+    pub heap_kb: (u32, u32),
+    /// The `storage` partition, as `(free, used)` kilobytes — where the strike
+    /// log lives (§5).
     ///
-    /// The question this answers is "will the next write fit", and entries are
-    /// what NVS actually runs out of — not bytes. A partition can have plenty
-    /// of space and no free entries.
-    pub free_nvs_percent: Option<u8>,
+    /// Reported instead of NVS because it answers the question anyone actually
+    /// has: **how much room is left for data**. NVS holds a handful of settings
+    /// and will never fill; the log is what grows. Same shape and unit as the
+    /// heap, so one glance reads both.
+    pub flash_kb: Option<(u32, u32)>,
 }
 
 /// The CPU frequency the chip is actually running at.
@@ -38,24 +41,40 @@ pub fn cpu_mhz() -> u32 {
     unsafe { sys::ets_get_cpu_frequency() }
 }
 
-pub fn free_heap_kb() -> u32 {
-    (unsafe { sys::esp_get_free_heap_size() }) / 1024
+/// Heap usage, as `(free, used)` kilobytes.
+pub fn heap_kb() -> (u32, u32) {
+    // SAFETY: read-only queries with no preconditions.
+    let free = unsafe { sys::esp_get_free_heap_size() };
+    let total = unsafe { sys::heap_caps_get_total_size(sys::MALLOC_CAP_DEFAULT) } as u32;
+    (free / 1024, total.saturating_sub(free) / 1024)
 }
 
-/// How much of the NVS partition is still free, as a percentage.
+/// The `storage` partition, as `(free, used)` kilobytes.
 ///
-/// `None` when NVS has not been initialised — `nvs_get_stats` fails with
-/// `NOT_INITIALIZED` rather than returning zeroes, and a caller that treated
-/// that as "full" would report a crisis on a device that has simply not opened
-/// it yet.
-pub fn free_nvs_percent() -> Option<u8> {
-    let mut stats = sys::nvs_stats_t::default();
-    // SAFETY: a plain IDF call filling a struct we own.
-    let err = unsafe { sys::nvs_get_stats(core::ptr::null(), &mut stats) };
-    if err != sys::ESP_OK || stats.total_entries == 0 {
+/// `used_bytes` is supplied by the caller, because only the log knows how far
+/// it has written — this module knows the size of the partition and nothing
+/// about what is in it.
+///
+/// `None` if the partition is missing, which would mean a partition table that
+/// does not match this firmware.
+pub fn flash_kb(used_bytes: u32) -> Option<(u32, u32)> {
+    // SAFETY: a lookup by type and label, returning a borrowed descriptor.
+    let partition = unsafe {
+        sys::esp_partition_find_first(
+            sys::esp_partition_type_t_ESP_PARTITION_TYPE_DATA,
+            sys::esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
+            b"storage\0".as_ptr() as *const core::ffi::c_char,
+        )
+    };
+    if partition.is_null() {
         return None;
     }
-    Some((stats.free_entries * 100 / stats.total_entries) as u8)
+    // SAFETY: non-null, and the IDF owns the descriptor for the program's life.
+    let total = unsafe { (*partition).size };
+    Some((
+        total.saturating_sub(used_bytes) / 1024,
+        used_bytes / 1024,
+    ))
 }
 
 /// The on-die temperature sensor.
@@ -117,12 +136,12 @@ impl Drop for DieTemperature {
 }
 
 /// Collect everything at once.
-pub fn health(temperature: Option<&DieTemperature>) -> Health {
+pub fn health(temperature: Option<&DieTemperature>, log_bytes: u32) -> Health {
     Health {
         cpu_mhz: cpu_mhz(),
         die_temp_tenths: temperature.and_then(|t| t.read_tenths()),
-        free_heap_kb: free_heap_kb(),
-        free_nvs_percent: free_nvs_percent(),
+        heap_kb: heap_kb(),
+        flash_kb: flash_kb(log_bytes),
     }
 }
 
