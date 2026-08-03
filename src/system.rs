@@ -102,3 +102,33 @@ pub fn health(temperature: Option<&DieTemperature>) -> Health {
         free_heap_kb: free_heap_kb(),
     }
 }
+
+
+/// Why the device last restarted, as a name.
+///
+/// **Worth printing on every boot**, because on this chip an unexpected reset
+/// is usually not a firmware fault and the reason says so immediately.
+///
+/// `ESP_RST_USB` in particular: the C3's USB-Serial/JTAG maps the host's CDC
+/// control lines onto the reset and boot straps, so a host that asserts DTR/RTS
+/// — which Linux's ModemManager does to *every* new serial device it probes —
+/// reboots the board simply by having a cable plugged into it. That presents as
+/// "plugging in USB reboots the device", which looks like a power fault and is
+/// not one. The moisture project lost time to the same thing.
+pub fn reset_reason_name() -> &'static str {
+    // bindgen flattens C enums to `<enum>_<VARIANT>` constants, which is why
+    // these names are as long as they are.
+    match unsafe { sys::esp_reset_reason() } {
+        sys::esp_reset_reason_t_ESP_RST_POWERON => "power-on",
+        sys::esp_reset_reason_t_ESP_RST_SW => "software restart",
+        sys::esp_reset_reason_t_ESP_RST_PANIC => "PANIC",
+        sys::esp_reset_reason_t_ESP_RST_INT_WDT => "interrupt watchdog",
+        sys::esp_reset_reason_t_ESP_RST_TASK_WDT => "TASK WATCHDOG",
+        sys::esp_reset_reason_t_ESP_RST_WDT => "other watchdog",
+        sys::esp_reset_reason_t_ESP_RST_DEEPSLEEP => "deep-sleep wake",
+        sys::esp_reset_reason_t_ESP_RST_BROWNOUT => "BROWNOUT",
+        sys::esp_reset_reason_t_ESP_RST_USB => "USB (host asserted DTR/RTS -- not a fault)",
+        sys::esp_reset_reason_t_ESP_RST_JTAG => "JTAG",
+        _ => "unknown",
+    }
+}

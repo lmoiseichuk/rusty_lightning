@@ -158,6 +158,7 @@ fn main() {
     println!();
     println!("=== lightning terminal ===");
     println!("fw {}", env!("CARGO_PKG_VERSION"));
+    println!("boot: {}", system::reset_reason_name());
 
     // §2: the display consumes GPIO 2, 3, 4, 5, 8 and 10, which leaves the
     // XIAO's native I2C pads free. These are fixed by that, not chosen.
@@ -610,6 +611,7 @@ fn listen(
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
                 location: *location,
+                policy,
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
@@ -756,6 +758,12 @@ struct Drawn {
     strikes: u32,
     last_strike: Option<(as3935::Distance, u32)>,
     location: Location,
+    /// The supply, for the same reason as the mode: it changes only when
+    /// somebody plugs or unplugs a cable, so it cannot churn — and it is the
+    /// one moment when the clock readout on the status line becomes wrong.
+    /// Without this, unplugging USB left the old figure on the glass until the
+    /// fifteen-minute baseline, and the device looked like it had not noticed.
+    policy: power::Policy,
 }
 
 /// Render and push one status screen.
