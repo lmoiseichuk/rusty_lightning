@@ -171,10 +171,35 @@ pub fn config() -> Option<(u32, u32, bool)> {
 ///
 /// See the module comment for the table and for why every case except "actively
 /// discharging" resolves to [`Policy::Usb`].
-pub fn decide(centi_per_hour: Option<i32>) -> Policy {
+/// How long after boot light sleep is held off, whatever the supply.
+///
+/// **This is the answer to "is light sleep a problem?".** It is not a problem
+/// for the device — it is the difference between roughly four days and eighty
+/// on the cell, which is not a saving to give up. It is a problem for *getting
+/// at* the device: light sleep powers down the USB PHY, so a board running it
+/// is reachable only in windows of a few seconds, and recovering one cost an
+/// evening.
+///
+/// A grace period fixes the second without touching the first. For five minutes
+/// after every boot the port is guaranteed up, which is all a flash needs — and
+/// after that a deployed device gets the full saving. Nothing has to be
+/// remembered at flash time and no build is fast but flat.
+///
+/// It also means the escape hatch is always a power cycle away, which is the
+/// property that was missing tonight.
+const LIGHT_SLEEP_GRACE_S: u32 = 5 * 60;
+
+/// Which policy to run, given the discharge rate and how long we have been up.
+///
+/// See the module comment for the table, and [`LIGHT_SLEEP_GRACE_S`] for why
+/// uptime is part of the decision at all.
+pub fn decide(centi_per_hour: Option<i32>, uptime_s: u32) -> Policy {
     // The recovery build never leaves Usb, so the USB PHY never powers down and
     // the board stays reachable no matter what it is running from.
     if cfg!(feature = "no-light-sleep") {
+        return Policy::Usb;
+    }
+    if uptime_s < LIGHT_SLEEP_GRACE_S {
         return Policy::Usb;
     }
     match centi_per_hour {

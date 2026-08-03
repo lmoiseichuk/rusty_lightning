@@ -21,6 +21,12 @@ pub struct Health {
     /// as a fault signal, misleading as a thermometer.
     pub die_temp_tenths: Option<i32>,
     pub free_heap_kb: u32,
+    /// Free NVS entries, as a percentage of the partition.
+    ///
+    /// The question this answers is "will the next write fit", and entries are
+    /// what NVS actually runs out of — not bytes. A partition can have plenty
+    /// of space and no free entries.
+    pub free_nvs_percent: Option<u8>,
 }
 
 /// The CPU frequency the chip is actually running at.
@@ -34,6 +40,22 @@ pub fn cpu_mhz() -> u32 {
 
 pub fn free_heap_kb() -> u32 {
     (unsafe { sys::esp_get_free_heap_size() }) / 1024
+}
+
+/// How much of the NVS partition is still free, as a percentage.
+///
+/// `None` when NVS has not been initialised — `nvs_get_stats` fails with
+/// `NOT_INITIALIZED` rather than returning zeroes, and a caller that treated
+/// that as "full" would report a crisis on a device that has simply not opened
+/// it yet.
+pub fn free_nvs_percent() -> Option<u8> {
+    let mut stats = sys::nvs_stats_t::default();
+    // SAFETY: a plain IDF call filling a struct we own.
+    let err = unsafe { sys::nvs_get_stats(core::ptr::null(), &mut stats) };
+    if err != sys::ESP_OK || stats.total_entries == 0 {
+        return None;
+    }
+    Some((stats.free_entries * 100 / stats.total_entries) as u8)
 }
 
 /// The on-die temperature sensor.
@@ -100,6 +122,7 @@ pub fn health(temperature: Option<&DieTemperature>) -> Health {
         cpu_mhz: cpu_mhz(),
         die_temp_tenths: temperature.and_then(|t| t.read_tenths()),
         free_heap_kb: free_heap_kb(),
+        free_nvs_percent: free_nvs_percent(),
     }
 }
 

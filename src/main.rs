@@ -119,9 +119,22 @@ const REDRAW_MIN_GAP_S: u32 = 30;
 /// Redraw even if nothing tracked has changed, at most this often.
 ///
 /// The backstop for everything the change test deliberately ignores — the
-/// disturber count, and later the clock and battery. Without it those fields
-/// would be correct only at boot.
-const REDRAW_BASELINE_S: u32 = 15 * 60;
+/// uptime, the disturber count, the battery, the die temperature. Without it
+/// those fields would be correct only at boot, which is exactly how "up 0m" was
+/// still on the glass long after boot.
+///
+/// Five minutes rather than fifteen: at 3.8 s a refresh that is ~1.3 % of the
+/// panel's time, which is affordable, and it keeps every slow-moving field on
+/// screen within a period short enough that nobody mistakes it for frozen.
+const REDRAW_BASELINE_S: u32 = 5 * 60;
+
+/// How long the cold-boot logo stays up before the first status screen.
+///
+/// The splash is worth a moment and not worth more. Note the panel itself eats
+/// most of any budget here — the logo's own refresh is ~3.8 s before this delay
+/// even starts, and the status screen that replaces it costs another 3.8 s — so
+/// this is a *dwell*, not the total time a logo is visible.
+const LOGO_DWELL_MS: u32 = 5000;
 
 fn main() {
     esp_idf_hal::sys::link_patches();
@@ -366,6 +379,7 @@ fn main() {
             Ok(busy_ms) => println!("epd:  logo drawn, panel busy {busy_ms} ms"),
             Err(e) => println!("epd:  logo FAILED -- {e}"),
         }
+        FreeRtos::delay_ms(LOGO_DWELL_MS);
     }
 
     println!("--- listening ---");
@@ -614,7 +628,7 @@ fn listen(
                 );
             }
 
-            let want = power::decide(reading.map(|r| r.crate_centi_per_hour));
+            let want = power::decide(reading.map(|r| r.crate_centi_per_hour), now_ms() / 1000);
             if want != policy {
                 match power::apply(want) {
                     Ok(()) => {

@@ -431,6 +431,15 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
     let _ = write_u32(&mut left, s.health.free_heap_kb);
     let _ = left.push_str(" KB");
 
+    // NVS as a percentage rather than a byte count: the useful question is
+    // "will the next write fit", and NVS runs out of *entries* rather than
+    // space -- a partition can have plenty of bytes and no free entries.
+    if let Some(percent) = s.health.free_nvs_percent {
+        let _ = left.push_str("   nvs ");
+        let _ = write_u32(&mut left, percent as u32);
+        let _ = left.push('%');
+    }
+
     let _ = Text::with_baseline(&left, Point::new(16, STATUS_TOP), style, Baseline::Top).draw(frame);
 
     // Battery on the right, because it is the one field a passer-by looks for.
