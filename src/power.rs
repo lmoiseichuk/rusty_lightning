@@ -172,18 +172,32 @@ pub fn usb_host_present() -> bool {
 ///
 /// Inverting the default costs nothing, which is what makes it obviously right:
 /// **no USB host means no console**, so there is nothing left to protect by
-/// keeping the clock up. The only case worth an exception is the gauge actively
-/// reporting a charge, where mains power is evidently present and there is no
-/// reason to be frugal.
+/// keeping the clock up.
 ///
-/// `rate` is `None` when there is no gauge or it did not answer. With no gauge
-/// and no host, battery is both the safe assumption and the likely one.
+/// ## Host **or** charging, not both
+///
+/// This went round twice and the second answer is the right one. `AND` fails on
+/// a case that happens constantly: **a full cell on USB reports `CRATE ≈ 0`**,
+/// so "charging AND host" is false on a board that has been sitting on a desk
+/// all afternoon — and the device would drop to 40 MHz with light sleep and
+/// take the console down with it. A developer's board going silent because its
+/// battery finished charging is not a trade worth making.
+///
+/// So either signal alone is enough to stay fast. The cost of the `OR` is one
+/// case that is genuinely suboptimal and genuinely minor: a **power-only
+/// charger** — charging, no host — keeps the clock at 160 with no console to
+/// show for it, and the charger's current is shared between the MCU and the
+/// pack, so ~21 mA that could have gone into the cell does not. It charges
+/// slower. Nothing breaks.
+///
+/// `centi_per_hour` is `None` when there is no gauge or it did not answer; with
+/// neither signal available, battery is both the safe assumption and the likely
+/// one.
 pub fn decide(centi_per_hour: Option<i32>) -> Policy {
     if usb_host_present() {
         return Policy::Usb;
     }
     match centi_per_hour {
-        // Actively charging: mains is there, so spend freely.
         Some(rate) if rate > 0 => Policy::Usb,
         _ => Policy::Battery,
     }
