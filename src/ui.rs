@@ -141,8 +141,9 @@ pub struct Status {
     pub defence_level: u8,
     pub defence_max: u8,
     pub strikes_total: u32,
-    /// The most recent strike, if there has been one.
-    pub last_strike: Option<(Distance, u32)>,
+    /// The most recent strike: distance, intensity, and when — if there has
+    /// been one, and if the clock was set at the time.
+    pub last_strike: Option<(Distance, u32, Option<u64>)>,
     /// Disturbers counted since boot — the honest measure of how hostile the
     /// location is, and the number that decides whether a quiet screen means
     /// "no storms" or "this spot is unusable".
@@ -151,7 +152,15 @@ pub struct Status {
     pub health: Health,
     /// `None` when the gauge is absent or did not answer.
     pub battery: Option<crate::battery::Reading>,
-    /// Minutes since boot, for the uptime readout.
+    /// Wall-clock time, or `None` if the clock has never been set (§5).
+    ///
+    /// `None` is not an error and is shown as such: a device that has not been
+    /// told the time is still detecting strikes, it just cannot stamp them —
+    /// and every record it writes meanwhile carries an empty timestamp, which
+    /// is worth knowing from across the room.
+    pub now: Option<u64>,
+    /// Minutes since boot. Shown only when there is no wall clock, as the
+    /// nearest honest substitute.
     pub uptime_minutes: u32,
     /// Everything seen in the last hour (§4.3).
     pub last_hour: crate::history::Bucket,
@@ -251,9 +260,9 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
     stats(frame, s);
 
     // --- last strike ------------------------------------------------------
-    let mut last = Text32::new();
+    let mut last = Text64::new();
     match s.last_strike {
-        Some((distance, intensity_milli)) => {
+        Some((distance, intensity_milli, when)) => {
             let _ = last.push_str(match distance {
                 Distance::Overhead => "overhead",
                 Distance::OutOfRange => "out of range",
@@ -265,6 +274,14 @@ pub fn status(frame: &mut Display7in5, s: &Status) {
             }
             let _ = last.push_str("  ·  intensity ");
             let _ = write_u32(&mut last, intensity_milli / 1000);
+            // When, to the minute. The point of the strike readout is "what is
+            // happening", and a distance with no time cannot say whether it is
+            // happening now or happened yesterday.
+            if let Some(epoch) = when {
+                let stamp = crate::clock::format(epoch);
+                let _ = last.push_str("  ·  ");
+                let _ = last.push_str(stamp.get(11..16).unwrap_or(""));
+            }
         }
         None => {
             let _ = last.push_str("no strikes yet");
@@ -404,16 +421,30 @@ fn status_line(frame: &mut Display7in5, s: &Status) {
     let style = MonoTextStyle::new(&FONT_9X15, INK);
     let mut left = Text64::new();
 
-    // Uptime first: it is the number that says whether anything below it has
-    // had time to mean anything.
-    let _ = left.push_str("up ");
-    let hours = s.uptime_minutes / 60;
-    if hours > 0 {
-        let _ = write_u32(&mut left, hours);
-        let _ = left.push('h');
+    // The clock, when there is one. Date and time to the minute -- seconds
+    // would be false precision on a panel that refreshes every five minutes.
+    //
+    // Uptime is the fallback rather than the default, now that §5's clock
+    // exists. It is shown with a marker rather than silently, because the same
+    // gap that leaves this line without a time leaves every strike record
+    // without one.
+    match s.now {
+        Some(epoch) => {
+            let stamp = crate::clock::format(epoch);
+            // "YYYY-MM-DD HH:MM:SS" -- take everything but the seconds.
+            let _ = left.push_str(stamp.get(..16).unwrap_or(stamp.as_str()));
+        }
+        None => {
+            let _ = left.push_str("no clock, up ");
+            let hours = s.uptime_minutes / 60;
+            if hours > 0 {
+                let _ = write_u32(&mut left, hours);
+                let _ = left.push('h');
+            }
+            let _ = write_u32(&mut left, s.uptime_minutes % 60);
+            let _ = left.push('m');
+        }
     }
-    let _ = write_u32(&mut left, s.uptime_minutes % 60);
-    let _ = left.push_str("m");
 
     // The live clock, and whether light sleep is running. Both come from what
     // the chip reports rather than from what the policy asked for — and this is

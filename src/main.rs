@@ -836,6 +836,7 @@ fn listen(
                             strike_log.as_deref().map(|l| (l.free_bytes(), l.used_bytes())),
                         ),
                         battery: reading,
+                        now: clock::now(),
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
                         irq_confirmed,
@@ -866,7 +867,7 @@ fn listen(
 struct Totals {
     strikes: u32,
     disturbers: u32,
-    last_strike: Option<(as3935::Distance, u32)>,
+    last_strike: Option<(as3935::Distance, u32, Option<u64>)>,
 }
 
 /// The subset of state the screen is redrawn for.
@@ -895,7 +896,7 @@ struct Totals {
 #[derive(PartialEq)]
 struct Drawn {
     strikes: u32,
-    last_strike: Option<(as3935::Distance, u32)>,
+    last_strike: Option<(as3935::Distance, u32, Option<u64>)>,
     location: Location,
     /// §4.2's level. **A change test, so 11 -> 11 cannot repaint** — only a
     /// genuine move does, and the 30 s floor bounds how often that can happen.
@@ -962,7 +963,9 @@ fn collect(
             // the distance and energy that §4.3 needs.
             match sensor.strike(i2c) {
                 Ok(strike) => {
-                    totals.last_strike = Some((strike.distance, strike.intensity_milli()));
+                    let epoch = crate::clock::now();
+                    totals.last_strike =
+                        Some((strike.distance, strike.intensity_milli(), epoch));
                     history.record(minute, &strike);
 
                     // To flash, with the wall-clock time if there is one. An
@@ -972,10 +975,18 @@ fn collect(
                     // where that can happen down to the first few minutes after
                     // a fresh device is powered on.
                     if let Some(log) = strike_log.as_deref_mut() {
-                        log.append(crate::clock::now().unwrap_or(0), &strike);
+                        log.append(epoch.unwrap_or(0), &strike);
                     }
+                    // Stamped on the console too, not only in the CSV: a
+                    // strike watched live and the same strike read back later
+                    // should be identifiable as one event.
+                    let when = match epoch {
+                        Some(epoch) => crate::clock::format(epoch),
+                        None => heapless::String::try_from("(no clock)").unwrap_or_default(),
+                    };
                     println!(
-                        "STRIKE  {:?}  energy {} (intensity {}.{:03})",
+                        "STRIKE  {}  {:?}  energy {} (intensity {}.{:03})",
+                        when,
                         strike.distance,
                         strike.energy_raw,
                         strike.intensity_milli() / 1000,
