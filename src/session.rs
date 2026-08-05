@@ -141,9 +141,15 @@ pub fn collect(
 /// to stop matching, and the simulated path exists precisely so that the real
 /// one can be trusted without a storm.
 ///
-/// `simulated` changes only the console line. The record written to flash is
-/// deliberately the same either way — a synthetic strike that logged
-/// differently would not be exercising the path it exists to exercise.
+/// `simulated` marks the console line and one column of the record. It is
+/// deliberately **not** allowed to change anything else: same counters, same
+/// rings, same buffered write, same sync — a synthetic strike that took a
+/// different route would not be exercising the path it exists to exercise.
+///
+/// The column was added after four records of unknown provenance made "has this
+/// device ever seen real lightning?" unanswerable from its own log. A flag that
+/// only reaches the console answers it for whoever was watching at the time,
+/// which is the one reader who did not need telling.
 pub fn record_strike(
     totals: &mut Totals,
     history: &mut history::History,
@@ -160,7 +166,7 @@ pub fn record_strike(
     // An unset clock still logs the strike, with 0 for the time. It happened;
     // what is unknown is when.
     if let Some(log) = strike_log {
-        log.append(epoch.unwrap_or(0), strike);
+        log.append(epoch.unwrap_or(0), strike, simulated);
     }
 
     let when = match epoch {

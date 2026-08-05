@@ -1,12 +1,10 @@
 //! Host checks for §4.2's noise-rejection ladder.
 //!
-//! A copy of `src/defence.rs`'s logic — see README.md.
+//! Worth testing because the ladder decides how deaf the sensor is, and the
+//! interesting cases are its two ends: that level 0 is the chip's own defaults,
+//! and that no level can ever reach past the noise floor into the two knobs
+//! that reject lightning rather than noise.
 //!
-//! Worth testing because the ladder is three ranges welded end to end, and the
-//! joins are where an off-by-one lives: a level that skips a rung, repeats one,
-//! or writes a register value past its field width would all look plausible on
-//! a console and would only misbehave under sustained noise.
-
 //! **This compiles the real `src/defence.rs`**, included by path — not a copy
 //! of it. Keeping that module free of ESP-IDF imports is what makes this
 //! possible, and it means a change to the ladder that breaks these checks fails
@@ -38,23 +36,21 @@ fn main() {
     check("level 0 is every knob at its base", settings(0) == Settings {
         noise_floor: NOISE_FLOOR_BASE, watchdog: WATCHDOG_BASE, spike_reject: SPIKE_REJECT_BASE });
 
-    // --- the first rung: noise floor only ---------------------------------
+    // --- the whole ladder is the noise floor ------------------------------
     check("level 7 tops out the noise floor", settings(7).noise_floor == NOISE_FLOOR_MAX);
     check("...without touching the watchdog", settings(7).watchdog == WATCHDOG_BASE);
     check("...or spike rejection", settings(7).spike_reject == SPIKE_REJECT_BASE);
 
-    // --- the joins, which is what this file is for ------------------------
-    check("level 8 starts the watchdog, noise floor pinned", settings(8) == Settings {
-        noise_floor: NOISE_FLOOR_MAX, watchdog: WATCHDOG_BASE + 1, spike_reject: SPIKE_REJECT_BASE });
-    check("level 20 tops out the watchdog", settings(20).watchdog == WATCHDOG_MAX);
-    check("...spike rejection still untouched", settings(20).spike_reject == SPIKE_REJECT_BASE);
-    check("level 21 starts spike rejection", settings(21) == Settings {
-        noise_floor: NOISE_FLOOR_MAX, watchdog: WATCHDOG_MAX, spike_reject: SPIKE_REJECT_BASE + 1 });
-
-    // --- the top ----------------------------------------------------------
-    check("MAX_LEVEL is 31", MAX_LEVEL == 31);
-    check("MAX_LEVEL maxes every knob", settings(MAX_LEVEL) == Settings {
-        noise_floor: NOISE_FLOOR_MAX, watchdog: WATCHDOG_MAX, spike_reject: SPIKE_REJECT_MAX });
+    // --- the cap, which is what this file now exists for ------------------
+    //
+    // WDTH and SREJ reject lightning, not noise -- see the module comment. A
+    // ladder that can reach them is the defect these three checks exist to
+    // catch, so they assert the *absence* of the old rungs 8..31.
+    check("MAX_LEVEL is 7 -- the noise floor's own range", MAX_LEVEL == 7);
+    check("no level ever moves the watchdog off its default",
+        (0..=255u8).all(|l| settings(l).watchdog == WATCHDOG_BASE));
+    check("no level ever moves spike rejection off its default",
+        (0..=255u8).all(|l| settings(l).spike_reject == SPIKE_REJECT_BASE));
     check("past the top saturates rather than wrapping", settings(255) == settings(MAX_LEVEL));
 
     // --- properties that must hold across the whole ladder ----------------
@@ -85,10 +81,8 @@ fn main() {
     check("no setting ever exceeds its register field", in_range);
 
     // --- the rung labels --------------------------------------------------
-    check("rung names follow the ladder", rung(0) == "noise floor"
-        && rung(7) == "noise floor" && rung(8) == "watchdog"
-        && rung(20) == "watchdog" && rung(21) == "spike rejection"
-        && rung(MAX_LEVEL) == "spike rejection");
+    check("every rung is a noise-floor rung",
+        (0..=255u8).all(|l| rung(l) == "noise floor"));
 
     println!(
         "\n{} passed, {} failed",

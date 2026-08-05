@@ -23,7 +23,15 @@ const PARTITION_LABEL: &str = "storage";
 const PATH: &str = "/lfs/strikes.csv";
 
 /// The header row, which is also how an empty log is recognised.
-const HEADER: &str = "timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli";
+///
+/// `simulated` is `1` for a strike injected by the `strike` console command and
+/// `0` for one the sensor decoded. Without it the two are **indistinguishable
+/// on disk**, and the question the log exists to answer — has this device ever
+/// detected real lightning? — cannot be asked of it. A digit rather than a word
+/// because this column is for filtering, where `distance_km`'s `overhead` and
+/// `far` are for reading.
+const HEADER: &str =
+    "timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated";
 
 /// How often buffered lines are flushed and synced.
 pub const SYNC_INTERVAL_MS: u32 = 60_000;
@@ -150,7 +158,7 @@ impl Log {
     }
 
     /// Record a strike. Buffered; see [`Log::sync`].
-    pub fn append(&mut self, epoch: u64, strike: &Strike) {
+    pub fn append(&mut self, epoch: u64, strike: &Strike, simulated: bool) {
         let mut line = String::with_capacity(96);
 
         // Words rather than numbers for the two sentinels. "Overhead" and "out
@@ -179,13 +187,14 @@ impl Log {
 
         let _ = write!(
             line,
-            "{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{}",
             epoch,
             iso,
             distance,
             strike.energy_raw,
             strike.intensity_milli(),
-            score
+            score,
+            simulated as u8
         );
         self.pending.push(line);
     }
