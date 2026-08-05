@@ -128,29 +128,33 @@ pub const LCO_DIVISOR: u32 = 16;
 /// and the reason nibble reads as 0, which decodes as `Unknown` and loses the
 /// event entirely.
 ///
-/// ## Why 30 and not 3
+/// ## Why 3, and the 30 that was here before it
 ///
-/// This was 3 ms — the datasheet minimum plus a margin — and during a storm
-/// directly overhead the device reported **disturbers and never once a strike**,
-/// while the MicroPython reference on the same hardware had reported strikes.
-///
-/// The reference is where the answer was. Its comment says one thing and its
-/// code does another:
+/// **This is the reference's value, checked against the file rather than
+/// remembered.** `doc/DFRobot_AS3935_Lib.py`, retired in `a4e0b42bd67c` and
+/// still recoverable from it:
 ///
 /// ```python
-/// utime.sleep(0.03) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
+/// def getInterruptSrc(self) -> int:
+///     utime.sleep_ms(3) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
 /// ```
 ///
-/// That is **30 ms, ten times what the comment claims**. Every port that reads
-/// the comment rather than the number gets 3 ms, which is the datasheet minimum
-/// for the interrupt *bits* — but the chip is still finishing its energy
-/// calculation and strike validation, and an event sampled mid-classification
-/// presents as a disturber. The nibble is legible long before it is final.
+/// `sleep_ms(3)` is three milliseconds and the comment agrees with the code.
+/// That is the configuration which detected real strikes on this hardware.
 ///
-/// So the working value is the reference's actual behaviour, not its
-/// documentation. 30 ms costs nothing: this runs once per interrupt, on a
-/// device that spends its life asleep.
-pub const IRQ_SETTLE_MS: u32 = 30;
+/// It was 30 ms between `ff8f3714aad7` and here, on the claim that the
+/// reference's comment said 3 ms while its code said `utime.sleep(0.03)`. **No
+/// such line exists in the file.** The reasoning built on it — that a longer
+/// wait lets the chip finish validating, and that sampling early presents a
+/// strike as a disturber — was plausible, never tested against lightning, and
+/// rested on a quotation that was not there.
+///
+/// What is real is the datasheet's **2 ms minimum** (page 22) for the interrupt
+/// bits, which 3 ms clears with margin. If a longer settle is ever wanted
+/// again, it needs evidence from a storm rather than from a misread reference:
+/// §9 item 6 is still open precisely because nothing below
+/// [`Interrupt::Lightning`] has been confirmed by one.
+pub const IRQ_SETTLE_MS: u32 = 3;
 
 /// Where the sensor is, which sets the AFE gain (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
