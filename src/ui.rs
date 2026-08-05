@@ -172,6 +172,9 @@ pub struct Status<'a> {
     pub last_hour: crate::history::Bucket,
     /// The learned cell range, low/high mV (§2.1).
     pub battery_range: (u16, u16),
+    /// Millivolts shed and over how long — the measured half of the runtime
+    /// estimate. See [`crate::battery::Drain`].
+    pub battery_drain: crate::battery::Drain,
     /// Which period the charts show.
     pub chart_period: ChartPeriod,
     /// Strikes per bucket, oldest first — the count chart.
@@ -537,12 +540,28 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
             // plugged in -- it is filtered and slow to move. `battery_flow`
             // falls back to the voltage trend during exactly that window; see
             // `battery::Trend`.
+            // **The estimate is tried before the rate is consulted**, and that
+            // ordering is the whole fix. `CRATE` reads a hard zero on the
+            // frugal policy -- 0.13-0.15 %/hr against a 0.208 %/hr LSB -- so
+            // every branch keyed on it fell through to the word "idle" on a
+            // cell that was draining perfectly normally. Millivolts over hours
+            // can see what the gauge's own register cannot.
+            let hours = runtime_hours(s, &reading);
             if s.battery_flow == crate::battery::Flow::Charging {
                 let _ = right.push_str("  charging");
+            } else if let Some(hours) = hours {
+                let _ = right.push_str("  ");
+                if hours >= 48 {
+                    let _ = write!(right, "{}", hours / 24);
+                    let _ = right.push_str("d left");
+                } else {
+                    let _ = write!(right, "{}", hours);
+                    let _ = right.push_str("h left");
+                }
             } else if reading.crate_centi_per_hour == 0 {
-                // Neither direction. Distinguish a topped-up cell from one
-                // simply not being asked for anything, because they mean
-                // different things about what happens next.
+                // No estimate and no rate. Distinguish a topped-up cell from
+                // one that simply has not been observed long enough, because
+                // they mean different things about what happens next.
                 let _ = right.push_str(if reading.percent >= 97 {
                     "  full"
                 } else if s.battery_flow == crate::battery::Flow::Unknown {
@@ -715,6 +734,42 @@ fn field(frame: &mut Display7in5, at: Point, label: &str, value: &str) -> i32 {
 }
 
 
+/// Hours of runtime left — the best tier that can answer.
+///
+/// Four sources, tried in descending order of how much they know about *this*
+/// cell:
+///
+/// 1. **The accumulator.** Millivolts this cell has actually shed, over the
+///    hours it took. Knows the load, the chemistry and the ageing, because it
+///    measured all three at once.
+/// 2. **The gauge's rate over the learned span.** Real, but only when `CRATE`
+///    can see a rate at all — which on the frugal policy is never.
+/// 3. **The gauge's own model.** Its percentage divided by its own rate; same
+///    blind spot, and wrong in the gauge's direction whenever the gauge is
+///    wrong about this cell.
+/// 4. **Position in the learned range.** Assumes this cell drains like the one
+///    §7 metered. Coarse, and the only tier that can answer in the window right
+///    after a charge has reset the accumulator — which is exactly when someone
+///    has just unplugged the device and wants a number.
+///
+/// The fall-through matters more than any single tier: before this existed the
+/// display asked `CRATE` alone, and a register that reads zero for the entire
+/// run left a draining cell reported as "idle".
+fn runtime_hours(s: &Status<'_>, reading: &crate::battery::Reading) -> Option<u32> {
+    if let Some(hours) =
+        crate::battery::hours_from_drain(s.battery_drain, reading.millivolts, s.battery_range.0)
+    {
+        return Some(hours);
+    }
+    if let Some(hours) = crate::battery::hours_from_range(s.battery_range, reading) {
+        return Some(hours);
+    }
+    if let Some(hours) = reading.hours_remaining() {
+        return Some(hours);
+    }
+    crate::battery::hours_from_position(s.battery_range, reading.millivolts, s.light_sleep)
+}
+
 /// Which span the charts cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChartPeriod {
@@ -730,6 +785,127 @@ impl ChartPeriod {
             ChartPeriod::Week => "7 days",
             ChartPeriod::Month => "30 days",
         }
+    }
+
+    /// Minutes per bucket, matching the ring this period draws from.
+    ///
+    /// Duplicated from `history`'s constants rather than imported, because this
+    /// module is the *layout* and importing the rings to draw an axis would tie
+    /// the two together for one number each. They are asserted equal in
+    /// `tests/host/history.rs`.
+    fn bucket_minutes(self) -> u32 {
+        match self {
+            ChartPeriod::Day => 15,
+            ChartPeriod::Week => 60,
+            ChartPeriod::Month => 6 * 60,
+        }
+    }
+
+    /// How far apart the time gridlines go, in minutes, and how to name one.
+    ///
+    /// Chosen so a full chart carries four or five labels: enough to read a
+    /// position off, few enough that they do not become the chart.
+    fn tick_minutes(self) -> u32 {
+        match self {
+            ChartPeriod::Day => 6 * 60,
+            ChartPeriod::Week => 24 * 60,
+            ChartPeriod::Month => 7 * 24 * 60,
+        }
+    }
+
+    /// `-6h`, `-2d` — the label for a gridline this many minutes back.
+    fn tick_label(self, minutes_back: u32) -> Text32 {
+        let mut out = Text32::new();
+        if minutes_back == 0 {
+            let _ = out.push_str("now");
+            return out;
+        }
+        let _ = out.push('-');
+        match self {
+            ChartPeriod::Day => {
+                let _ = write!(out, "{}", minutes_back / 60);
+                let _ = out.push('h');
+            }
+            ChartPeriod::Week | ChartPeriod::Month => {
+                let _ = write!(out, "{}", minutes_back / (24 * 60));
+                let _ = out.push('d');
+            }
+        }
+        out
+    }
+}
+
+/// Dotted verticals through both charts, labelled with how long ago they are.
+///
+/// ## Why the axis is anchored to the newest bar, not to the right edge
+///
+/// `chart` draws bucket 0 at the left and fills rightward, so **"now" is the
+/// right edge only once the ring is full**. Before that the newest bar sits
+/// mid-chart with blank space to its right, and an axis pinned to the panel
+/// edge would label that empty space as recent time — putting `now` in a
+/// region where nothing has been recorded yet, and sliding every other label
+/// off the data it describes. Anchoring to `live` costs nothing once the ring
+/// fills, and is the difference between a legend and a lie in the day before
+/// that.
+///
+/// Ticks older than the data are skipped rather than clamped: a `-24h` mark
+/// crowded against the left edge on a device that booted an hour ago would
+/// claim a day of history it does not have.
+fn time_axis(
+    frame: &mut Display7in5,
+    left: i32,
+    top: i32,
+    height: u32,
+    gap: i32,
+    period: ChartPeriod,
+    live: usize,
+    column: i32,
+) {
+    if live == 0 {
+        return;
+    }
+    // The right-hand edge of the newest bucket: the instant the chart is
+    // current to.
+    let now_x = left + live as i32 * column;
+    let per_tick = (period.tick_minutes() / period.bucket_minutes()).max(1) as i32;
+
+    let lower_top = top + height as i32 + gap;
+    let lower_bottom = lower_top + height as i32;
+    let label_y = lower_bottom + 15;
+
+    let mut buckets_back = 0i32;
+    loop {
+        let x = now_x - buckets_back * column;
+        if x < left {
+            break;
+        }
+
+        // Dotted rather than solid, and drawn before the bars so a column of
+        // strikes reads as data with a rule behind it rather than as a bar with
+        // a line through it.
+        for segment in [(top, top + height as i32), (lower_top, lower_bottom)] {
+            let mut y = segment.0;
+            while y < segment.1 {
+                let _ = Pixel(Point::new(x, y), INK).draw(frame);
+                y += 3;
+            }
+        }
+
+        let minutes_back = buckets_back as u32 * period.bucket_minutes();
+        let label = period.tick_label(minutes_back);
+        // Centred on the line, then nudged inside the panel at the extremes so
+        // the first and last labels are not half-drawn.
+        let width = label.len() as i32 * 6;
+        let anchor = (x - width / 2).max(0).min(WIDTH as i32 - width);
+        let _ = Text::with_baseline(
+            label.as_str(),
+            Point::new(anchor, label_y),
+            MonoTextStyle::new(&FONT_6X10, INK),
+            Baseline::Top,
+        )
+        .draw(frame);
+
+        buckets_back += per_tick;
     }
 }
 
@@ -757,6 +933,23 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
         FontColor::Transparent(INK),
         frame,
     );
+
+    // Before the bars, so the rules sit behind the data rather than through it.
+    // The column width is recomputed from the same expression `chart` uses --
+    // one number, and an axis drawn on a different grid from the bars would be
+    // worse than no axis.
+    if s.chart_capacity > 0 {
+        time_axis(
+            frame,
+            left,
+            TOP,
+            HEIGHT,
+            GAP,
+            s.chart_period,
+            s.chart_counts.len(),
+            (width / s.chart_capacity as i32).max(1),
+        );
+    }
 
     chart(
         frame,

@@ -15,6 +15,8 @@ const NAMESPACE: &[u8] = b"settings\0";
 const KEY_LOCATION: &[u8] = b"location\0";
 const KEY_BATTERY_MIN: &[u8] = b"bat_min\0";
 const KEY_BATTERY_MAX: &[u8] = b"bat_max\0";
+const KEY_DRAIN_SUM: &[u8] = b"bat_sum\0";
+const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -72,5 +74,44 @@ pub fn store_battery_range(low: u16, high: u16) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u16(KEY_BATTERY_MIN, low)?;
     nvs.set_u16(KEY_BATTERY_MAX, high)?;
+    nvs.commit()
+}
+
+
+/// The discharge accumulator: millivolts shed, and over how many seconds.
+///
+/// **Four battery values in NVS, and these are the last two** — the borders
+/// (`bat_min`/`bat_max`) say how far the cell can fall, and this pair says how
+/// fast it is falling. Together they are a runtime estimate; neither half is
+/// one alone.
+///
+/// `None` when the device has never accumulated anything, which is a first boot
+/// or the first poll after a charge reset it.
+pub fn battery_drain() -> Option<crate::battery::Drain> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    let sum_mv = nvs.get_i32(KEY_DRAIN_SUM)?;
+    let seconds = nvs.get_i32(KEY_DRAIN_SECONDS)?;
+    // A negative on either side is a value this never writes; treat it as
+    // absent rather than reasoning from it.
+    if sum_mv < 0 || seconds < 0 {
+        return None;
+    }
+    Some(crate::battery::Drain {
+        sum_mv: sum_mv as u32,
+        seconds: seconds as u32,
+    })
+}
+
+/// Persist the accumulator.
+///
+/// Written on a reset and then only every [`crate::battery::DRAIN_SAVE_S`], not
+/// on every poll: the gauge is read every ten seconds, and a flash write at
+/// that cadence to protect a number whose whole purpose is to average over days
+/// would be the wrong trade. A power cut costs the last interval, which is a
+/// rounding error against a multi-day baseline.
+pub fn store_battery_drain(drain: crate::battery::Drain) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_i32(KEY_DRAIN_SUM, drain.sum_mv as i32)?;
+    nvs.set_i32(KEY_DRAIN_SECONDS, drain.seconds as i32)?;
     nvs.commit()
 }

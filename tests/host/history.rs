@@ -143,6 +143,18 @@ fn main() {
     check("mean score averages the two", (820..=840).contains(&mean));
     check("an empty bucket has no mean", Bucket::default().mean_score_milli().is_none());
 
+    // --- the numbers ui.rs draws its time axis on -------------------------
+    //
+    // `ChartPeriod::bucket_minutes` hard-codes these three, because importing
+    // the rings into the layout module to fetch one number each would tie the
+    // two together for no other reason. That duplication is only safe while
+    // something fails when they diverge, and this is that something: change a
+    // ring's bucket without changing the axis and the gridlines silently start
+    // labelling the wrong columns.
+    check("day buckets are 15 min, as the axis assumes", FINE_MINUTES == 15);
+    check("week buckets are 60 min, as the axis assumes", MEDIUM_MINUTES == 60);
+    check("month buckets are 6 h, as the axis assumes", COARSE_MINUTES == 6 * 60);
+
     println!(
         "\n{} passed, {} failed",
         PASS.load(Ordering::Relaxed),

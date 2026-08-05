@@ -206,7 +206,172 @@ fn read_u16(i2c: &mut I2cDriver<'_>, register: u8) -> Result<u16, EspError> {
 /// Deliberately narrow rather than the chemistry's full 3.0–4.2 V: a range that
 /// starts wide can only ever be confirmed, never learned, and would report a
 /// confident span this unit has never actually reached.
-pub const SEED_RANGE: (u16, u16) = (3600, 4100);
+pub const SEED_RANGE: (u16, u16) = (3500, 4100);
+
+// === How long is left ========================================================
+//
+// ## Why `CRATE` cannot answer this, however the display is written
+//
+// The MAX17048 reports its charge rate in units of **0.208 %/hr** — one LSB, and
+// [`Reading::from_raw`] converts by exactly that. Put §7's measured draw beside
+// it:
+//
+// | policy | measured | implied rate | in LSBs |
+// |---|---|---|---|
+// | Awake, 160 MHz | 33.5 mA, ~2.5 d | 1.68 %/hr | 8 |
+// | Frugal, 80/10 MHz + light sleep | 2.5–3.0 mA, ~28–33 d | **0.13–0.15 %/hr** | **under 1** |
+//
+// So on the policy this device spends its life in, the true discharge is finer
+// than the gauge can count. `CRATE` reads exactly zero — not briefly, but for
+// the whole run — and every estimate derived from it is `None`. The 13× power
+// win is precisely what put the discharge under the gauge's resolution.
+//
+// The answer therefore has to come from voltage over a long baseline. [`Trend`]
+// cannot supply it either: five minutes and an 8 mV threshold, built to tell
+// direction, not to be divided by.
+//
+// ## Two tiers, and why both exist
+//
+// * **Position** ([`hours_from_position`]) — where `cur` sits between the
+//   learned borders, times how long a full span is known to take. Coarse,
+//   because it assumes this cell drains like the measured one, but available
+//   *immediately* — including in the window after a charge, when the
+//   accumulator has just been reset and has nothing to say.
+// * **Measured** ([`hours_from_drain`]) — millivolts actually shed per hour by
+//   *this* cell under *this* load. Strictly better once it has data, and the
+//   reason the accumulator exists at all.
+//
+// The measured one wins where it exists, which is the same rule the learned
+// range already follows over the gauge's own percentage.
+
+/// How long a full span takes at each of §7's two policies, in hours.
+///
+/// Measured at the USB port, not modelled: 2.5–3.0 mA frugal and 33.5 mA awake,
+/// against the 2000 mAh cell §7 specifies. These are only ever used by the
+/// coarse tier — the moment the accumulator has a real rate, this device's own
+/// number replaces them.
+///
+/// They differ by 13×, which is why the policy has to be passed in rather than
+/// averaged: a single constant would be wrong by an order of magnitude in
+/// whichever state the device was not in.
+pub const NOMINAL_HOURS_FRUGAL: u32 = 30 * 24;
+pub const NOMINAL_HOURS_AWAKE: u32 = 60;
+
+/// Below this, an accumulated fall is indistinguishable from noise.
+///
+/// A resting cell drifts a millivolt or two over five minutes and a panel
+/// refresh dips the rail briefly — see [`TREND_THRESHOLD_MV`], which sets 8 mV
+/// over five minutes for the same reason. At the frugal policy's ~20 mV/day this
+/// is reached in half a day.
+pub const MIN_DRAIN_MV: u32 = 10;
+
+/// And below this much elapsed time, a real fall is still too short a lever.
+///
+/// Both gates must pass. Voltage alone is not enough: a sag under load can shed
+/// 10 mV in seconds, and dividing by that span would claim the cell has hours
+/// left when it has weeks.
+pub const MIN_DRAIN_S: u32 = 6 * 3600;
+
+/// How often the accumulator is written back to NVS.
+///
+/// Fifteen minutes, matching [`crate::clock::SAVE_INTERVAL_S`] and for the same
+/// reason: the gauge is polled every ten seconds, and writing flash at that
+/// cadence to protect a number that averages over *days* would spend endurance
+/// to buy nothing. A power cut costs the last interval.
+pub const DRAIN_SAVE_S: u32 = 15 * 60;
+
+/// A rise this large means the cell is being charged, not resting.
+///
+/// Comfortably above the few millivolts a cell rebounds when a load drops, and
+/// far below what a charger does. Crossing it throws the accumulation away and
+/// starts a new one, because a rate averaged across a charge is not a rate.
+pub const DRAIN_RESET_MV: u16 = 20;
+
+/// Millivolts shed, and over how many seconds — the accumulator behind the
+/// accurate tier.
+///
+/// **Sum and count rather than a start-anchor.** An anchor would need only two
+/// numbers too, but it measures net change, so a cell that sags and recovers
+/// reports having shed nothing. Summing the falls charges every real decline to
+/// the total and lets `seconds` carry the whole elapsed span, including the flat
+/// parts — which is what makes the quotient an average rate rather than a
+/// best-case one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Drain {
+    /// Total millivolts fallen since the last reset.
+    pub sum_mv: u32,
+    /// Total seconds observed since the last reset, falling or not.
+    pub seconds: u32,
+}
+
+/// Fold one reading into the accumulator.
+///
+/// `previous` is the last voltage seen, which lives in RAM rather than NVS: a
+/// reboot costs one sample of resolution, where persisting it would cost a flash
+/// write per poll to protect a number that is re-established on the next one.
+///
+/// Returns the new accumulator, and whether the caller should treat this as a
+/// reset — the one event worth reporting, since it discards history.
+pub fn drained(drain: Drain, previous: u16, now_mv: u16, elapsed_s: u32) -> (Drain, bool) {
+    // Going back up. Charging, or a rebound big enough to be indistinguishable
+    // from one -- either way the run being averaged has ended.
+    if now_mv > previous.saturating_add(DRAIN_RESET_MV) {
+        return (Drain::default(), true);
+    }
+
+    // Time always accrues; millivolts only when they actually fall. A flat hour
+    // is evidence about the rate and belongs in the denominator.
+    let fall = previous.saturating_sub(now_mv) as u32;
+    (
+        Drain {
+            sum_mv: drain.sum_mv.saturating_add(fall),
+            seconds: drain.seconds.saturating_add(elapsed_s),
+        },
+        false,
+    )
+}
+
+/// Hours left at the rate this cell has actually been shedding.
+///
+/// `None` until both gates in [`MIN_DRAIN_MV`] and [`MIN_DRAIN_S`] pass, or once
+/// the reading is at or below the learned floor — at which point the honest
+/// answer is that it is over, not a number.
+pub fn hours_from_drain(drain: Drain, now_mv: u16, low: u16) -> Option<u32> {
+    if drain.sum_mv < MIN_DRAIN_MV || drain.seconds < MIN_DRAIN_S {
+        return None;
+    }
+    let above_floor = now_mv.checked_sub(low)?;
+    if above_floor == 0 {
+        return None;
+    }
+    // Seconds first, hours after: dividing to hours up front would round a
+    // multi-day span through a one-hour quantum before it is multiplied.
+    let seconds_left = above_floor as u64 * drain.seconds as u64 / drain.sum_mv as u64;
+    Some((seconds_left / 3600) as u32)
+}
+
+/// Hours left from position in the learned range alone.
+///
+/// The coarse tier: what fraction of the span is left, times how long a whole
+/// span is known to take. It assumes this cell behaves like the one §7 metered,
+/// which is exactly the assumption [`hours_from_drain`] removes once it can.
+pub fn hours_from_position(range: (u16, u16), now_mv: u16, light_sleep: bool) -> Option<u32> {
+    let (low, high) = range;
+    let span = high.checked_sub(low)?;
+    if span == 0 {
+        return None;
+    }
+    let above_floor = now_mv.min(high).checked_sub(low)?;
+    if above_floor == 0 {
+        return None;
+    }
+    let full = if light_sleep {
+        NOMINAL_HOURS_FRUGAL
+    } else {
+        NOMINAL_HOURS_AWAKE
+    };
+    Some(above_floor as u32 * full / span as u32)
+}
 
 /// Readings outside this are not the cell, whatever they say.
 ///

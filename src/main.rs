@@ -561,6 +561,17 @@ fn listen(
         trend = Some(battery::Trend::new(reading.millivolts, now_ms() / 1000));
     }
     let mut last_gauge_ms: u32 = now_ms();
+
+    // The discharge accumulator (§7). Restored rather than started fresh: it
+    // averages over days, so a device that reset an hour ago must not go back
+    // to "no estimate" -- that is exactly the window in which somebody is
+    // watching it and wants one.
+    let mut drain = settings::battery_drain().unwrap_or_default();
+    // Seeded from the reading taken above, so the first interval measured is a
+    // real one rather than the gap between boot and the first poll.
+    let mut previous_mv: Option<u16> = reading.map(|r| r.millivolts);
+    let mut last_drain_s: u32 = now_ms() / 1000;
+    let mut last_drain_save_s: u32 = now_ms() / 1000;
     match power::apply(policy) {
         Ok(()) => match power::config() {
             Some((max, min, sleep)) => println!(
@@ -933,6 +944,50 @@ fn listen(
                     Some(trend) => trend.observe(reading.millivolts, now_s),
                     None => trend = Some(battery::Trend::new(reading.millivolts, now_s)),
                 }
+
+                // The long-baseline accumulator behind the runtime estimate.
+                // `CRATE` cannot supply one -- on the frugal policy this cell
+                // drains at ~0.14 %/hr against a gauge whose LSB is 0.208, so
+                // the register reads a hard zero for the whole run. Millivolts
+                // over hours is the only measurement left, and it lives here
+                // rather than in the redraw path because it must see *every*
+                // sample: a rate assembled from the handful of polls that
+                // happened to coincide with a repaint would be an average of
+                // nothing in particular.
+                //
+                // `previous_mv` is deliberately RAM-only. Persisting it would
+                // cost a flash write every ten seconds to protect a value the
+                // very next poll re-establishes.
+                match previous_mv {
+                    None => previous_mv = Some(reading.millivolts),
+                    Some(previous) => {
+                        let elapsed = now_s.saturating_sub(last_drain_s);
+                        let (next, reset) =
+                            battery::drained(drain, previous, reading.millivolts, elapsed);
+                        previous_mv = Some(reading.millivolts);
+                        last_drain_s = now_s;
+                        drain = next;
+
+                        // A reset is the one event worth both saying and saving
+                        // immediately: it throws away the baseline, and a power
+                        // cut that restored the discarded one would put a stale
+                        // rate back into service.
+                        if reset {
+                            println!("bat:  charging or rebounding -- discharge baseline reset");
+                            if let Err(e) = settings::store_battery_drain(drain) {
+                                println!("bat:  baseline reset but NOT saved -- {e}");
+                            }
+                            last_drain_save_s = now_s;
+                        } else if now_s.saturating_sub(last_drain_save_s)
+                            >= battery::DRAIN_SAVE_S
+                        {
+                            last_drain_save_s = now_s;
+                            if let Err(e) = settings::store_battery_drain(drain) {
+                                println!("bat:  baseline NOT saved -- {e}");
+                            }
+                        }
+                    }
+                }
             }
             if let Some(reading) = reading {
                 println!(
@@ -1089,6 +1144,7 @@ fn listen(
                         disturbers_total: totals.disturbers,
                         last_hour: history.last_hour(),
                         battery_range: range,
+                        battery_drain: drain,
                         chart_period,
                         chart_counts: &chart_counts[..chart_len],
                         chart_scores: &chart_scores[..chart_len],
