@@ -33,14 +33,57 @@ use esp_idf_hal::units::Hertz;
 use as3935::{As3935, Location};
 use session::{collect, report, toggle_location, tune, Batch, Drawn, Totals};
 
-/// I2C bus speed.
+/// I2C bus speed. **200 kHz: off the sensor's passband, and half of what broke
+/// it.**
 ///
-/// 100 kHz rather than the 400 kHz the MicroPython reference uses. This is
-/// bring-up over hand-soldered wires and a QT cable chain, where the bus
-/// capacitance is unknown and a marginal rise time shows up as intermittent
-/// NACKs that look exactly like a missing device. Neither part needs the speed:
-/// §3's register accesses are single bytes.
-const I2C_HZ: u32 = 100_000;
+/// 500 kHz is not a harmonic of 200 — 500/200 is 2.5 — so this keeps the
+/// harmonic away from the antenna while asking only 2× the rate that is known to
+/// work, rather than the 4× that is known not to.
+///
+/// The rest of this comment is the record of how that was established.
+///
+/// ## The device was listening to its own bus
+///
+/// The AS3935 receives at 500 kHz with a Q worth tuning to ±3.5 %, and **the
+/// fifth harmonic of 100 kHz is exactly 500 kHz** — carried on lines that run to
+/// the sensor's own package. The bus rate was not a neutral choice here; it put
+/// an interferer precisely on the passband.
+///
+/// **Measured, at maximum sensitivity, same board and same afternoon:**
+///
+/// | bus | `nf 0, wdth 0, srej 0` |
+/// |---|---|
+/// | 100 kHz | 8–10 `NoiseTooHigh` per second, continuously |
+/// | 200 kHz | **none at all** |
+///
+/// So the "ambient noise floor" the chip kept reporting was self-inflicted, and
+/// every configuration that looked quiet at `wdth 2` was quiet because the gate
+/// was rejecting it — along with anything else weak enough to need that gate
+/// open, which is what a distant strike is.
+///
+/// ## Why 200 and not 400
+///
+/// 400 was tried first, being what the MicroPython reference used. It fails
+/// outright — the boot scan finds the gauge and nothing else:
+///
+/// ```text
+/// scan: 1 device(s)
+///       0x36  MAX17048 fuel gauge
+/// FATAL: no AS3935 answered a reset at 0x01/0x02/0x03
+/// ```
+///
+/// Note *which* part dropped out. The gauge kept answering on the same wires, so
+/// this is not simply "too fast for the wiring" — the two devices differ in what
+/// they tolerate and the AS3935 is the one that stops, on short well-soldered
+/// leads under 10 cm. Whether that is its position on the chain or something in
+/// the Gravity board's front end is not established.
+///
+/// 200 kHz needs neither answer: 500 / 200 is 2.5, so no harmonic lands on the
+/// passband, and it asks only 2× the rate already known to work rather than the
+/// 4× known not to. Lower rates would serve equally on the harmonic argument —
+/// 500/80 and 500/40 are not integers either — but there is nothing to buy with
+/// the extra slowness.
+const I2C_HZ: u32 = 200_000;
 
 /// Where the sensor is when nothing has ever been stored (§4.1).
 ///
