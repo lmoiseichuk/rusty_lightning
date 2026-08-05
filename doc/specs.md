@@ -246,6 +246,64 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 > channel). The **main task** does the ≥3 ms wait, the I2C register reads, and event batching. (The
 > MicroPython reference does I2C inside the callback; that pattern must not be copied on esp-idf.)
 
+> #### ⚠⚠ AS BUILT: the sensor was hearing our own I2C bus — **100 kHz puts a harmonic on 500**
+>
+> The device detected nothing through two storms. The AS3935 receives at **500 kHz**, with a Q worth
+> tuning to ±3.5 %. The I2C bus ran at **100 kHz**, and **5 × 100 kHz = 500 kHz exactly** — carried on
+> wires that run to the sensor's own package. The bus rate was never a neutral choice on this board;
+> it parked an interferer in the middle of the passband.
+>
+> Measured at maximum sensitivity, same board, minutes apart:
+>
+> | bus | `nf 0, wdth 0, srej 0` |
+> |---|---|
+> | 100 kHz | **8–10 `NoiseTooHigh` per second, continuously** |
+> | **200 kHz** | **none at all** |
+>
+> **What this explains, and what it invalidates.** The "ambient noise floor" the chip kept reporting
+> was self-inflicted. Every configuration that looked quiet at `WDTH 2` was quiet because the
+> watchdog gate was rejecting the interferer — *and with it anything else weak enough to need that
+> gate open, which is exactly what a distant strike is*. So the device was not insensitive by
+> misconfiguration; it was jammed, and then gated against its own jamming.
+>
+> Ruled out along the way, each by measurement rather than argument:
+>
+> | suspected | test | result |
+> |---|---|---|
+> | MCU clock radiating | 160 MHz vs 80 MHz | 6.8/s vs 6.5/s — no effect |
+> | USB charger / supply | run on battery, `-1.24 %/hr` | unchanged |
+> | e-paper panel shielding the antenna | antenna self-test | 499 kHz, in tune — not detuned |
+> | dead or faulty sensor | self-test drives the LC tank | oscillates on frequency; coil intact |
+>
+> The mounting suspicion in particular deserves retiring explicitly: the sensor is stuck to the back
+> of the panel, which looked like an obvious culprit, and nothing ever supported it. Replacing the
+> sensor — the next step under consideration — would have put a working part on a bus that was
+> jamming it.
+>
+> **Why 200 and not 400.** 400 kHz is what the reference used and it fails outright here: the boot
+> scan finds the MAX17048 at 0x36 and nothing at 0x03, `FATAL: no AS3935 answered a reset`.
+>
+> Which part drops out is the clue, and §2.1's own cascade explains it:
+>
+> ```
+> XIAO C3 ── STEMMA QT ──► MAX17048 ── STEMMA-to-Gravity ──► AS3935
+> ```
+>
+> **The sensor is the far end of the chain.** The gauge sits between it and the driver, so the
+> AS3935 sees every segment's capacitance and the slowest edges on the bus — it is the first device
+> that a rate increase should break, and it is the one that broke. The leads are well soldered and
+> under 10 cm, so this is the topology rather than sloppy wiring, and it predicts that reordering
+> the chain — sensor first, gauge behind it — would move the limit. Untested, and not worth testing
+> for its own sake, because the rate was only ever wanted to dodge the harmonic.
+>
+> 200 kHz dodges it without asking: 500/200 = 2.5, so no harmonic lands on the passband, at 2× the
+> rate known to work rather than the 4× known not to.
+>
+> **The general rule this board earns:** on any design carrying a narrowband receiver, every periodic
+> digital signal near it is a candidate transmitter, and the ones to check first are the ones whose
+> harmonics are integer multiples of the passband. A 100 kHz bus beside a 500 kHz receiver is a
+> five-times multiplier, and nothing in either datasheet mentions the other part.
+
 ---
 
 ## 4. Behaviour
@@ -253,9 +311,39 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 ### 4.1 Indoor/outdoor
 Set the AFE gain at startup (`0x24` indoor / `0x1C` outdoor). Selectable via config.
 
-### 4.2 Noise-floor auto-tune — a 31-rung ladder, not `NF_LEV` alone
+### 4.2 Noise-floor auto-tune — `NF_LEV` only, 8 rungs
 Asymmetric, per the reference: **any** disturber/noise IRQ in the ~1 s processing batch → **+1
 immediately**; **60 s with no events** → **−1**. Quick to defend, slow to relax.
+
+> #### ⚠⚠ AS BUILT: the ladder was 31 rungs and is now 7 — the extra 24 rejected lightning
+>
+> The three registers below are not three grades of the same thing, and treating them as one integer
+> was the error:
+>
+> * **`NF_LEV`** is a *noise-floor* gate. It decides when the chip complains the band is noisy, and
+>   **cannot reject a lightning waveform** — which is why sweeping its full range is safe, and why
+>   the MicroPython reference sweeps exactly this and nothing else.
+> * **`WDTH`** is the watchdog *amplitude* gate. Raising it discards weaker arrivals, distant
+>   strikes first.
+> * **`SREJ`** compares the signal against the chip's lightning *waveform template*. Raising it
+>   discards anything imperfectly shaped.
+>
+> So rungs 8–31 tuned only knobs that can throw lightning away, and the climb rule guaranteed they
+> would be reached: +1 for any batch with activity, −1 only after a *full minute* of total silence.
+> A storm never grants that minute. Neither did the 100 kHz bus harmonic above, which produced
+> batches of noise on a clear day — so the ladder ratcheted to maximum rejection and stayed there.
+>
+> `MAX_LEVEL` is now the noise floor's own range. `WDTH` and `SREJ` hold at the power-on defaults
+> the reference leaves them at. Deliberate over-sensitivity is still reachable by hand — `sensitive
+> on` — which is the right shape for it: a visible, temporary act rather than an automatic ratchet.
+>
+> **Is 31 worth restoring now the harmonic is fixed?** No, and the reason is stronger than the one
+> that prompted the cap. The cap was made urgent by constant self-inflicted noise; with that gone
+> the ladder sits at 0 and would rarely climb at all. But the *argument* never depended on the noise
+> source — `NF_LEV` is simply the only one of the three that buys rejection without spending
+> sensitivity. Extra headroom bought by going deaf to lightning is not headroom, and this device's
+> own note below already says so: a detector that hears nothing is worse than one that hears noise,
+> because the noise is at least visible.
 
 > #### ⚠ AS BUILT: `NF_LEV` alone runs out, measured in seconds
 >
@@ -273,10 +361,11 @@ immediately**; **60 s with no events** → **−1**. Quick to defend, slow to re
 > | `WDTH` 2–15 | `0x01` | events that do not look like a strike's envelope |
 > | `SREJ` 0–11 | `0x02` | spikes that pass the watchdog but fail the shape test |
 >
-> 31 rungs rather than 7. `SREJ` stops at 11 of its possible 15 deliberately: the datasheet's curves
-> flatten past there and the last settings reject hard enough to discard a genuine nearby strike. A
-> detector that hears nothing is worse than one that hears noise, because the noise is at least
-> visible.
+> This is the reasoning as it stood, and the block above is what became of it. The saturation
+> complaint it was solving is real — `NF_LEV` genuinely does run out beside an access point — but
+> walking into `WDTH` and `SREJ` answered "the detector has stopped defending" by making it stop
+> detecting. The right response to a band too noisy for the chip is to say so, which the
+> *"cannot defend further"* line already did.
 >
 > **The step is per batch, not per event.** An earlier version escalated per interrupt and saturated
 > the whole ladder in under two seconds — a counter racing the interrupt rate, not tuning.
@@ -527,31 +616,31 @@ the reference had, including the ones not yet on the wake path (`set_min_strikes
 `clear_statistics`, `power_down`) — ported before deletion precisely so that nothing lived only in
 a file about to be removed.
 
-> #### ⚠⚠ AS BUILT: the reference's comment and its code disagree, and the code is right
+> #### ⚠⚠ RETRACTED: the "30 ms settle" was based on a line that is not in the reference
 >
-> Retiring the reference nearly cost a real bug. During a storm the device reported **disturbers and
-> never once a strike**, on hardware where the same sensor had reported strikes under MicroPython.
-> Everything checked out: `irq_display 000` (the IRQ pin was a real interrupt line, not the LCO
-> clock), RCO calibration complete including the `DISP_SRCO` pulse, `MIN_NUM_LIGH` = 1, indoor gain,
-> antenna at 500 kHz, and disturbers arriving in batches — so the sensor was demonstrably alive.
->
-> The divergence was one number. The reference reads the reason register after:
+> **This block previously claimed** that the reference reads the reason register after
+> `utime.sleep(0.03)` — "30 ms, ten times what its own comment claims" — and the settle was raised
+> from 3 ms to 30 ms to match. **No such line exists.** Recovered from `a4e0b42bd67c^`, the file
+> says:
 >
 > ```python
-> utime.sleep(0.03) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
+> def getInterruptSrc(self) -> int:
+>     utime.sleep_ms(3) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
 > ```
 >
-> **That is 30 ms, ten times what its own comment claims.** The port took the comment — 3 ms, the
-> datasheet minimum plus margin — and 3 ms is enough for the interrupt *bits* to be legible but not
-> for the chip to finish its energy calculation and strike validation. An event sampled
-> mid-classification presents as a disturber.
+> `sleep_ms(3)` is three milliseconds and the comment agrees with the code. There was never a
+> divergence. The reasoning built on it — that 3 ms leaves the chip mid-classification so a strike
+> presents as a disturber — was plausible, was never tested against lightning, and rested on a
+> quotation that was not there.
 >
-> Now 30 ms, matching the reference's behaviour rather than its documentation. It costs nothing:
-> once per interrupt, on a device that spends its life asleep.
+> Restored to **3 ms**, the reference's value and the datasheet's 2 ms minimum plus margin. Measured
+> consequence of the 30 ms version: through half an hour of audible thunder the device produced no
+> interrupt of any kind.
 >
-> **The lesson for the rest of this port:** the reference was treated as the behavioural spec, and a
-> behavioural spec is what the code *does*. Anywhere a ported constant came from a comment rather
-> than from the executed value, it is unverified.
+> **The lesson survives its own example, and is sharper for it.** A behavioural spec is what the code
+> *does* — and checking that means reading the file, not remembering it. This block was itself the
+> failure it warned about: an assertion about executed behaviour, written from recollection, that
+> then justified a change and stood for four commits. The reference is in git; quote it from there.
 >
 > #### The full re-audit that lesson prompted
 >
@@ -660,10 +749,24 @@ than applied unconditionally: an always-frugal build is an unflashable one.
    than wrapping: that is the only choice that cannot lose data already recorded, and at ~40 000
    records the question is years away. Note the charts self-clean (24 h / 7 d / 30 d windows) while
    the file does not.
-6. **A real strike.** Everything below `Interrupt::Lightning` has run only on synthetic input. A
-   piezo lighter cannot provoke one — the AS3935 validates a waveform against a lightning signature,
-   so a spark raises a *disturber* by design, which is the chip working correctly. Hence the
-   `strike` console command; hence also that the chip's own classification remains unverified.
+6. **A real strike** — *still open, and now the only thing left to prove.* Everything below
+   `Interrupt::Lightning` has run only on synthetic input. A piezo lighter cannot provoke one — the
+   AS3935 validates a waveform against a lightning signature, so a spark raises a *disturber* by
+   design, which is the chip working correctly. Hence the `strike` console command; hence also that
+   the chip's own classification remains unverified.
+
+   **Three defects were found and fixed while chasing this, none of them confirmed to be the last
+   one.** In the order they mattered: the 100 kHz bus harmonic sitting on the 500 kHz passband (§3);
+   the auto-tune ladder climbing into `WDTH`/`SREJ` (§4.2); and the IRQ settle raised to 30 ms on a
+   misquotation (§8). Each was real, each is fixed, and **none has yet been validated against
+   lightning** — which is the same trap that produced the 30 ms change, so it is worth stating
+   plainly rather than assuming the problem is now solved.
+   
+   What *is* established: the sensor is electrically sound (self-test drives its LC tank and reads
+   499 kHz), the IRQ wire is confirmed, everything below the interrupt logs and renders correctly on
+   synthetic input, and the log now distinguishes injected records from real ones by a `simulated`
+   column — added because four historical records of unknown provenance made this very question
+   unanswerable from the device's own data.
 
 ---
 
@@ -673,7 +776,8 @@ than applied unconditionally: an always-frugal build is an unflashable one.
 2. ✅ I2C on GPIO6/7 → scan → confirm AS3935 @ 0x03; port the register driver.
 3. ✅ Wire IRQ — on **GPIO21 (D6)**, not GPIO20; ISR-notifies pattern; decode reason → distance and
    intensity on lightning.
-4. ✅ Storm logic + noise auto-tune, as a 31-rung ladder (§4.2). Pure logic, host-tested.
+4. ✅ Storm logic + noise auto-tune, `NF_LEV` only (§4.2 — it was 31 rungs and the extra 24 rejected
+   lightning). Pure logic, host-tested.
 5. ✅ CSV logging on LittleFS; clock over the console rather than SNTP; **rings rebuilt from the file
    on boot**.
 6. ✅ e-paper bring-up → UI, change-gated refresh, day/week/month charts.
