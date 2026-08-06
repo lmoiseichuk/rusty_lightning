@@ -146,41 +146,36 @@ const TUNING_CAPS_PF: u8 = 120;
 /// How long to collect events before summarising them (§4.2's "~1 s batch").
 const BATCH_MS: u32 = 1000;
 
-/// How often the noise floor is reconsidered, in seconds (§4.2).
+/// The one measurement window (§4.2).
 ///
-/// **One decision a minute, up or down**, replacing a rule that climbed +1 for
-/// every one-second batch with any activity and only relaxed after 60 s of
-/// total silence. That was asymmetric by a factor of sixty: seven rungs could be
-/// climbed in seven seconds and each one cost a minute to give back, so a single
-/// noisy minute left the receiver desensitised for the following seven.
+/// **A single period for everything**: the noise level is reconsidered once per
+/// window, and the same window's counts are what the screen reports. One
+/// constant rather than three, so the ladder can never be deciding on evidence
+/// the display is not showing.
 ///
-/// A minute is also the shortest window that means anything. The question the
-/// ladder is really asking — "is this band persistently noisy?" — cannot be
-/// answered by one second of evidence, and answering it anyway is what made the
-/// level oscillate 0 -> 1 -> 0 in ninety seconds in a marginal room.
-const NOISE_TUNE_INTERVAL_S: u32 = 60;
+/// **60 seconds, so the counts *are* per-minute figures.** No scaling, no factor
+/// to keep in step with the period — change this and the arithmetic downstream
+/// stays correct only at whole divisors of 60, which is a trap worth not
+/// setting.
+const MEASURE_INTERVAL_S: u32 = 60;
 
-/// How often to measure the noise floor by opening the watchdog gate, and for
-/// how long.
+
+
+/// How often to read the reason register with no interrupt having asked for it.
 ///
-/// **The gate has to be opened or there is nothing to count.** `WDTH 2`
-/// suppresses noise interrupts without suppressing noise, so at the normal
-/// operating point a thoroughly jammed band reports zero events — see
-/// `session::Totals::noise_per_min` for the measurements. The only way to ask
-/// the question is to briefly stop rejecting the answer.
+/// **Plan B, and a diagnostic.** The register holds its reason until something
+/// reads it, so an event whose `INT` edge was missed is still sitting there
+/// afterwards. Thirty seconds is far slower than a storm but far faster than
+/// never, and it costs one I2C transaction — against a device that already polls
+/// a fuel gauge three times as often.
 ///
-/// Two seconds is ample: a jammed band on this board produces 5–8 events a
-/// second, so a probe sees ten or more, while a clean one produces exactly zero
-/// however long it is watched. Five minutes between probes lines the value up
-/// with the baseline redraw, so what reaches the glass is at most one refresh
-/// stale.
-///
-/// **The cost is nothing that matters.** `WDTH 0` is *more* sensitive than
-/// `WDTH 2`, so a strike arriving mid-probe is if anything more likely to be
-/// caught — this trades noise rejection, not detection, and only for 2 s in
-/// every 300.
-const NOISE_PROBE_INTERVAL_S: u32 = 5 * 60;
-const NOISE_PROBE_MS: u32 = 2000;
+/// What makes it worth having is the asymmetry every measurement here has shown:
+/// hundreds of `NoiseTooHigh`, which is a near-continuous condition, and never
+/// once a disturber or a strike, which are impulsive and whose pulse is brief.
+/// If polling starts finding events, the interrupt path is losing them — a
+/// different defect from a sensor that hears nothing, and one that has been
+/// indistinguishable from outside.
+const IRQ_POLL_INTERVAL_S: u32 = 30;
 
 /// How often to read the fuel gauge.
 ///
@@ -569,7 +564,7 @@ fn configure(
     // its first tweak brought forward, not a new deviation -- unlike `WDTH` and
     // `SREJ`, which stay untouched at their power-on defaults.
     let level = 0;
-    session::apply_defence(sensor, i2c, level)?;
+    session::configure_defaults(sensor, i2c)?;
 
     println!(
         "as:   {}, {} pF, defence {}/{} ({}), report after {} strike(s)",
@@ -600,17 +595,11 @@ fn listen(
     start_level: u8,
 ) {
     let mut level: u8 = start_level;
-    // Whether the minute now being judged heard anything, and when it started.
-    let mut heard_this_minute = false;
+    // Counted in the window now being judged, and when it started.
+    let mut window_events: u32 = 0;
+    let mut window_disturbers: u32 = 0;
     let mut tune_window_ms: u32 = now_ms();
-    // When the running noise probe ends, and when the last one finished.
-    //
-    // `None` for "never probed" rather than a zero sentinel, so the first probe
-    // can run early instead of five minutes into the session. A screen showing
-    // `0/min` for the first five minutes would be indistinguishable from a
-    // quiet band, which is the exact confusion this measurement exists to end.
-    let mut probe_until_ms: Option<u32> = None;
-    let mut last_probe_s: Option<u32> = None;
+    let mut last_irq_poll_ms: u32 = now_ms();
     // Set by `sensitive on`; see `session::force_max_sensitivity`. Deliberately
     // not persisted to NVS -- it is a diagnostic override for a storm happening
     // now, and a device that silently came back from a power cut with its noise
@@ -783,6 +772,22 @@ fn listen(
         // Not yet at the end of the window -- go back and keep listening.
         if now_ms().saturating_sub(batch_started) < BATCH_MS {
             continue;
+        }
+
+        // Plan B: look for events the interrupt line never announced. Before
+        // `report`, so anything found is summarised in this batch rather than
+        // the next one.
+        if now_ms().saturating_sub(last_irq_poll_ms) >= IRQ_POLL_INTERVAL_S * 1000 {
+            last_irq_poll_ms = now_ms();
+            session::poll(
+                sensor,
+                i2c,
+                &mut batch,
+                &mut totals,
+                &mut history,
+                minute_now(),
+                strike_log.as_deref_mut(),
+            );
         }
 
         report(&batch);
@@ -1012,10 +1017,8 @@ fn listen(
                     // level happened to be: the auto-tune was frozen, so `level`
                     // is stale by however long the override was on.
                     level = 0;
-                    // Restart the minute too, so the first decision after the
-                    // override gets a full window of evidence rather than
-                    // whatever fraction of one was left.
-                    heard_this_minute = false;
+                    window_events = 0;
+                    window_disturbers = 0;
                     tune_window_ms = now_ms();
                     session::apply_defence(sensor, i2c, 0)
                 };
@@ -1159,88 +1162,32 @@ fn listen(
         // Frozen while `sensitive on` is in force: the override sits below the
         // ladder's floor, so the first disturber would otherwise climb straight
         // off it and undo exactly what was asked for.
-        // --- the noise probe ------------------------------------------------
-        //
-        // Under `sensitive on` the gate is already open, so the events can be
-        // counted directly and no probe is needed -- the batch is a second, so
-        // scaling it is the rate.
-        if max_sensitivity {
-            totals.noise_per_min = batch.noise * 60_000 / BATCH_MS;
-        } else {
-            match probe_until_ms {
-                Some(until) if now_ms() >= until => {
-                    // Close the gate again, whatever happened, before reporting.
-                    let settings = defence::settings(level);
-                    if let Err(e) = sensor.set_watchdog_threshold(i2c, settings.watchdog) {
-                        println!("probe: could NOT restore the watchdog -- {e}");
-                    }
-                    totals.noise_per_min = totals.probe_noise * 60_000 / NOISE_PROBE_MS;
-                    probe_until_ms = None;
-                    last_probe_s = Some(now_ms() / 1000);
-                    if totals.noise_per_min > 0 {
-                        println!(
-                            "probe: {} noise/min with the gate open{}",
-                            totals.noise_per_min,
-                            if totals.noise_per_min >= session::NOISE_JAMMED_PER_MIN {
-                                " -- JAMMED"
-                            } else {
-                                ""
-                            }
-                        );
-                    }
-                }
-                Some(_) => {}
-                // First probe once the sensor has settled; then on the
-                // interval.
-                None if last_probe_s.map_or(
-                    now_ms() / 1000 >= 30,
-                    |last| now_ms() / 1000 >= last + NOISE_PROBE_INTERVAL_S,
-                ) =>
-                {
-                    match sensor.set_watchdog_threshold(i2c, 0) {
-                        Ok(()) => {
-                            totals.probe_noise = 0;
-                            probe_until_ms = Some(now_ms() + NOISE_PROBE_MS);
-                        }
-                        // Do not retry in a tight loop on a bus that is failing.
-                        Err(e) => {
-                            println!("probe: could not open the gate -- {e}");
-                            last_probe_s = Some(now_ms() / 1000);
-                        }
-                    }
-                }
-                None => {}
-            }
-        }
+        // Everything this batch heard goes into the window. The window is both
+        // the measurement and the decision -- the rate on screen used to come
+        // from a separate 5-minute probe, so it read `0/min` while the ladder
+        // was visibly climbing on events it had just counted.
+        window_events += batch.noise + batch.disturbers;
+        window_disturbers += batch.disturbers;
 
-        // Remember whether *this minute* has heard anything. Accumulated per
-        // batch, decided once a minute -- the two are deliberately separate, so
-        // one noisy second and sixty noisy seconds move the level by the same
-        // single rung.
-        if batch.heard_interference() {
-            heard_this_minute = true;
-        }
-
-        // The ladder must not react to a probe: those events are ones we asked
-        // for by opening the gate, and letting them climb the level would turn a
-        // measurement into a change of state.
-        if max_sensitivity || probe_until_ms.is_some() {
-            // nothing to do -- the knobs are held where `force_max_sensitivity`
-            // or the probe put them.
-        } else if now_ms().saturating_sub(tune_window_ms) >= NOISE_TUNE_INTERVAL_S * 1000 {
+        if !max_sensitivity
+            && now_ms().saturating_sub(tune_window_ms) >= MEASURE_INTERVAL_S * 1000
+        {
             tune_window_ms = now_ms();
+            // The window is a minute, so the counts are already per-minute.
+            totals.noise_per_min = window_events;
+            totals.disturbers_per_min = window_disturbers;
+
             let previous = level;
-            if heard_this_minute {
+            if window_events > 0 {
                 level = level.saturating_add(1).min(defence::MAX_LEVEL);
             } else {
                 level = level.saturating_sub(1);
             }
-            heard_this_minute = false;
+            window_events = 0;
+            window_disturbers = 0;
 
-            // Only on a real move. At the ends of the range the decision is
-            // taken every minute and changes nothing, and a tune line every
-            // minute saying the level is still 0 is how a console becomes
-            // unreadable.
+            // Written only when it moves. At either end of the range the
+            // decision is taken every window and changes nothing.
             if level != previous {
                 tune(sensor, i2c, level, if level > previous { "up" } else { "down" });
             }
@@ -1335,7 +1282,7 @@ fn listen(
                         noise_per_min: totals.noise_per_min,
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,
-                        disturbers_total: totals.disturbers,
+                        disturbers_per_min: totals.disturbers_per_min,
                         last_hour: history.last_hour(),
                         battery_range: range,
                         battery_drain: drain,

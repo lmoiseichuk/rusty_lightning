@@ -44,8 +44,15 @@ pub struct Totals {
     pub strikes: u32,
     pub disturbers: u32,
     pub last_strike: Option<(Distance, u32, Option<u64>)>,
-    /// Noise interrupts per minute, from the last probe — the number the screen
-    /// shows.
+    /// **Interference** per minute — noise *and* disturbers — from the last
+    /// probe. The number the screen shows.
+    ///
+    /// Both, because the ladder responds to both ([`Batch::heard_interference`])
+    /// and a rate that disagreed with the bar beside it is worse than no rate.
+    /// Counting only `NoiseTooHigh` produced exactly that: once the floor
+    /// climbed to 7 the noise stopped and disturbers took over at 9 a second, so
+    /// the screen read a full bar next to `0/min` — "defending at maximum"
+    /// beside "nothing to defend against", each true of a different thing.
     ///
     /// **A measurement, where the defence level beside it is a setting.** The
     /// ladder's level is a bad proxy for a jammed band in three ways: capped at
@@ -73,6 +80,9 @@ pub struct Totals {
     /// way to ask "would this band be noisy if I were listening" without
     /// listening all the time.
     pub noise_per_min: u32,
+    /// Disturbers in the same window. Same period as everything else on screen,
+    /// so the two numbers can be read against each other.
+    pub disturbers_per_min: u32,
     /// Events counted during the probe now running. Zeroed when one starts.
     pub probe_noise: u32,
 }
@@ -129,12 +139,60 @@ pub fn collect(
     totals: &mut Totals,
     history: &mut history::History,
     minute: u32,
-    mut strike_log: Option<&mut log::Log>,
+    strike_log: Option<&mut log::Log>,
 ) {
     // The datasheet's settle time, and the reason this is in the main task
     // rather than the ISR (§3).
     FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
+    read_and_handle(sensor, i2c, batch, totals, history, minute, strike_log, false);
+}
 
+/// Read the reason register without an edge having announced it (§3, plan B).
+///
+/// **A safety net for events whose interrupt never arrives.** Every measurement
+/// on this board has shown the same asymmetry: hundreds of `NoiseTooHigh`, which
+/// is effectively a continuous condition, and never once a disturber or a strike
+/// — which are *impulsive*, and whose `INT` pulse is correspondingly brief. If
+/// the edge is being missed rather than never generated, polling finds the event
+/// sitting in `0x03` afterwards, because the register holds its reason until
+/// something reads it.
+///
+/// So this is a diagnostic first and a fallback second. A poll that keeps
+/// finding events proves the interrupt path is losing them, which is a different
+/// defect from a sensor that hears nothing — and the two have been
+/// indistinguishable from outside all week.
+///
+/// No settle delay: there is no edge to settle from, and whatever is in the
+/// register has been there for however long it took this poll to come round.
+pub fn poll(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    batch: &mut Batch,
+    totals: &mut Totals,
+    history: &mut history::History,
+    minute: u32,
+    strike_log: Option<&mut log::Log>,
+) {
+    read_and_handle(sensor, i2c, batch, totals, history, minute, strike_log, true);
+}
+
+/// Read `0x03` and fold whatever it says into the batch.
+///
+/// Shared by the interrupt path and the poll so the two cannot drift: an event
+/// found by polling must be counted, logged and rendered exactly as one
+/// announced by an edge, or the fallback would quietly report a different
+/// device from the one being debugged.
+#[allow(clippy::too_many_arguments)]
+fn read_and_handle(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    batch: &mut Batch,
+    totals: &mut Totals,
+    history: &mut history::History,
+    minute: u32,
+    mut strike_log: Option<&mut log::Log>,
+    polled: bool,
+) {
     let reason = match sensor.interrupt_reason(i2c) {
         Ok(reason) => reason,
         Err(e) => {
@@ -142,6 +200,15 @@ pub fn collect(
             return;
         }
     };
+
+    // Nothing pending is the overwhelmingly common answer to a poll, and saying
+    // so once every thirty seconds would bury everything else.
+    if polled && matches!(reason, Interrupt::Unknown(0)) {
+        return;
+    }
+    if polled {
+        println!("poll: found {reason:?} with no interrupt -- the edge was missed");
+    }
 
     match reason {
         Interrupt::Lightning => {
@@ -165,6 +232,9 @@ pub fn collect(
         Interrupt::Disturber => {
             batch.disturbers += 1;
             totals.disturbers += 1;
+            // Disturbers count toward the rate as well as noise -- see
+            // `Totals::noise_per_min` for why the screen must not separate them.
+            totals.probe_noise += 1;
         }
         Interrupt::NoiseTooHigh => {
             batch.noise += 1;
@@ -301,21 +371,32 @@ pub fn apply_defence(
     i2c: &mut I2cDriver<'_>,
     level: u8,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
-    // **`NF_LEV` only, and nothing else is written — ever.**
+    // **`NF_LEV` only at runtime**, matching the reference's `tweakNoiseLevel`,
+    // which is the single register it moves once running. `WDTH` and `SREJ` are
+    // set once at start-up by [`configure_defaults`] and never touched again.
     //
-    // The working reference tunes exactly one register at runtime and leaves
-    // `WDTH`, `SREJ` and `MIN_NUM_LIGH` at their power-on defaults for the whole
-    // of its life. It never writes them, not even once at start-up. This used to
-    // write all three on every rung, which meant a device that had merely
-    // changed noise level had also silently reconfigured the two registers that
-    // decide what counts as lightning.
-    //
-    // `SREJ` is the one that mattered: the chip powers up at **2** and this
-    // forced it to **0** on the first tune. Lower is not safer here — spike
-    // rejection is part of the validation chain, not a sensitivity knob, and the
-    // reference's whole detection record was made at the default.
+    // This used to write all three on every rung, so a device that had merely
+    // changed noise level had also rewritten the two registers deciding what
+    // counts as lightning. Harmless while the values matched the start-up ones,
+    // and exactly the kind of coupling that stops being harmless quietly.
     let settings = defence::settings(level);
     sensor.set_noise_floor(i2c, settings.noise_floor)
+}
+
+/// Every threshold at its absolute minimum, written once at start-up.
+///
+/// `NF_LEV` 0, `WDTH` 0, `SREJ` 0 — the most sensitive the part can be. The
+/// chip powers up at `NF_LEV` 2 and `SREJ` 2, so none of these are defaults.
+///
+/// The noise floor does not stay here: the ladder walks it from this starting
+/// point (§4.2). `WDTH` and `SREJ` do stay, and are not written again.
+pub fn configure_defaults(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+) -> Result<(), esp_idf_hal::sys::EspError> {
+    sensor.set_noise_floor(i2c, 0)?;
+    sensor.set_watchdog_threshold(i2c, 0)?;
+    sensor.set_spike_rejection(i2c, 0)
 }
 
 

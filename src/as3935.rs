@@ -141,8 +141,20 @@ pub const LCO_DIVISOR: u32 = 16;
 ///     utime.sleep_ms(3) #wait 3ms before reading (min 2ms per pg 22 of datasheet)
 /// ```
 ///
-/// `sleep_ms(3)` is three milliseconds and the comment agrees with the code.
-/// That is the configuration which detected real strikes on this hardware.
+/// `sleep_ms(3)` is three milliseconds and the comment agrees with the code —
+/// **but it is not the whole wait.** `deep_demo.py`'s interrupt handler sleeps
+/// again before calling it:
+///
+/// ```python
+/// def callback_handle(channel):
+///     utime.sleep(0.005)
+///     source = Core.sensor.getInterruptSrc()
+/// ```
+///
+/// 5 ms in the handler plus 3 ms inside the read is **8 ms** between the edge
+/// and the register access, and 8 ms is therefore the value that has detected
+/// real strikes on this hardware. Reading either sleep on its own gets a
+/// different number, which is how this constant has now been wrong twice.
 ///
 /// It was 30 ms between `ff8f3714aad7` and here, on the claim that the
 /// reference's comment said 3 ms while its code said `utime.sleep(0.03)`. **No
@@ -156,7 +168,7 @@ pub const LCO_DIVISOR: u32 = 16;
 /// again, it needs evidence from a storm rather than from a misread reference:
 /// §9 item 6 is still open precisely because nothing below
 /// [`Interrupt::Lightning`] has been confirmed by one.
-pub const IRQ_SETTLE_MS: u32 = 3;
+pub const IRQ_SETTLE_MS: u32 = 8;
 
 /// Where the sensor is, which sets the AFE gain (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

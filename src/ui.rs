@@ -149,10 +149,9 @@ pub struct Status<'a> {
     /// The most recent strike: distance, intensity, and when — if there has
     /// been one, and if the clock was set at the time.
     pub last_strike: Option<(Distance, u32, Option<u64>)>,
-    /// Disturbers counted since boot — the honest measure of how hostile the
-    /// location is, and the number that decides whether a quiet screen means
-    /// "no storms" or "this spot is unusable".
-    pub disturbers_total: u32,
+    /// Disturbers in the last measurement window — the same minute the event
+    /// rate and the ladder decision use, so all three can be read together.
+    pub disturbers_per_min: u32,
     /// Device health, drawn as the status line.
     pub health: Health,
     /// `None` when the gauge is absent or did not answer.
@@ -287,7 +286,7 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     // means a quiet spot the ladder has not relaxed from yet, and a low level
     // with thousands means the auto-tune is losing.
     let mut count = Text16::new();
-    let _ = write!(count, "{}", s.disturbers_total);
+    let _ = write!(count, "{}/min", s.disturbers_per_min);
     field(frame, Point::new(600, 62), "Disturbers: ", &count);
 
     let _ = Line::new(Point::new(16, 84), Point::new(WIDTH as i32 - 16, 84))
@@ -373,7 +372,8 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     let _ = antenna.push_str(" kHz · IRQ ");
     let _ = antenna.push_str(if s.irq_confirmed { "OK" } else { "NOT CONFIRMED" });
     let _ = antenna.push_str(" · disturbers ");
-    let _ = write!(antenna, "{}", s.disturbers_total);
+    let _ = write!(antenna, "{}", s.disturbers_per_min);
+    let _ = antenna.push_str("/min");
     // The learned cell range, small and at the foot. It is a slow-moving
     // diagnostic rather than a reading — but it is the number that says whether
     // the runtime prediction above it has anything behind it, and a pack whose
