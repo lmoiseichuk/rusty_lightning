@@ -202,48 +202,42 @@ impl<W: Copy> Ladder<W> {
     /// returns to the most sensitive setting that was still working; advancing
     /// the cursor lets the next register refine from there.
     ///
-    /// This is the speed fix. Waiting for each register to reach its *maximum*
-    /// before moving on was accurate and far too slow — the noise floor alone
-    /// took seven windows to exhaust, and three registers behind it made the
-    /// walk minutes long. Silence is the boundary, and the boundary is the
-    /// answer; there is no reason to keep climbing past it.
+    /// Waiting for each register to reach its *maximum* before moving on was
+    /// accurate and far too slow — the noise floor alone took seven windows.
+    /// Silence is the boundary, and the boundary is the answer.
     ///
-    /// When the register is already at its minimum there is nothing to hand
-    /// over — the machine is as sensitive as this register can make it — so the
-    /// cursor **retreats** instead, giving back the dearer register behind it.
-    /// That is the only route back to full sensitivity when a room goes quiet.
+    /// **A register already at its minimum does nothing.** It emphatically does
+    /// not retreat the cursor. An earlier version did, and it broke the whole
+    /// model: after handing over to the watchdog at 0, the next silent window
+    /// found nothing to give back, walked the cursor home to the noise floor and
+    /// returned `false` — logging nothing. The following noisy window then
+    /// raised the noise floor again, and the machine oscillated `nf 0/1` forever
+    /// with a wasted window every cycle. Observed on hardware as a perfectly
+    /// regular 30-second loop.
+    ///
+    /// The cost of not retreating is that a room which goes quiet after a noisy
+    /// spell does not walk its expensive registers all the way back. It does
+    /// relax: every silent window steps the current register down before handing
+    /// over, so the machine sheds one notch per register as the cursor advances.
+    /// Full recovery needs a restart, which is a separate decision.
     pub fn down(&mut self) -> bool {
-        let reversed = self.last_up == Some(true);
-        // Whether this call has already had to retreat. A retreat is the
-        // machine giving a register back, so it must NOT then hand over to the
-        // one it just came from -- that bounces the cursor between two
-        // registers and never actually unwinds.
-        let mut retreated = false;
-        loop {
-            let cursor = self.cursor;
-            if self.params[cursor].cur > self.params[cursor].min {
-                if reversed {
-                    self.params[cursor].slow();
-                } else {
-                    self.params[cursor].restore();
-                }
-                self.params[cursor].down();
-                self.last_up = Some(false);
-                // Hand over: the next register refines from here. Not after a
-                // retreat -- see `retreated`.
-                if !retreated && cursor + 1 < PARAMS {
-                    self.cursor += 1;
-                    self.zero_after_cursor();
-                }
-                return true;
-            }
-            // Already at its minimum. Give back the dearer register behind it.
-            if cursor == 0 {
-                return false;
-            }
-            self.cursor -= 1;
-            retreated = true;
+        let cursor = self.cursor;
+        if self.params[cursor].cur <= self.params[cursor].min {
+            return false;
         }
+        if self.last_up == Some(true) {
+            self.params[cursor].slow();
+        } else {
+            self.params[cursor].restore();
+        }
+        self.params[cursor].down();
+        self.last_up = Some(false);
+        // Hand over: the next register refines from here.
+        if cursor + 1 < PARAMS {
+            self.cursor += 1;
+            self.zero_after_cursor();
+        }
+        true
     }
 
     /// Hold every register past the cursor at 0.

@@ -102,15 +102,29 @@ fn main() {
     check("...and hands over to the watchdog", l.cursor == 1);
     check("...which starts from 0", l.params[1].cur == 0);
 
-    // With nothing to hand over, the cursor retreats instead -- the only route
-    // back to full sensitivity when a room goes quiet.
+    // **The cursor never goes backwards.** An earlier version retreated when the
+    // current register had nothing left to give, which silently undid the
+    // hand-over: the machine walked home to the noise floor, raised it again on
+    // the next noisy window, and oscillated `nf 0/1` forever. Observed on
+    // hardware as a regular 30-second loop.
     let mut l = ladder();
     for _ in 0..9 { l.up(); }
     check("the cursor reached the watchdog", l.cursor == 1 && l.params[1].cur > 0);
     l.params[1].cur = 0;
+    let before = l.params[0].cur;
+    check("a register with nothing left reports no movement", !l.down());
+    check("...and does NOT retreat the cursor", l.cursor == 1);
+    check("...leaving the register behind it fixed where it worked",
+        l.params[0].cur == before);
+
+    // Silence walks the cursor forward, shedding one notch per register on the
+    // way -- that is how the machine relaxes without ever going backwards.
+    let mut l = ladder();
+    for _ in 0..3 { l.up(); }
+    let floor_was = l.params[0].cur;
     l.down();
-    check("a cursor with nothing left retreats", l.cursor == 0);
-    check("...and keeps reducing the register behind it", l.params[0].cur < 7);
+    check("silence sheds one notch and hands over", l.params[0].cur == floor_was - 1
+        && l.cursor == 1);
 
     let mut l = ladder();
     check("down at the bottom reports no movement", !l.down());

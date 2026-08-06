@@ -319,6 +319,7 @@ pub fn tune(
     i2c: &mut I2cDriver<'_>,
     ladder: &defence::Ladder<Writer>,
     direction: &str,
+    moved: &str,
 ) {
     match apply_defence(sensor, i2c, ladder) {
         // Only `nf` is reported, because only `nf` is written. Printing the
@@ -330,7 +331,7 @@ pub fn tune(
             "tune: {direction} to {}/{} ({}) -- {} {}, {} {}, {} {}, {} {}",
             ladder.position(),
             ladder.total() - 1,
-            ladder.rung(),
+            moved,
             ladder.params[0].name, ladder.params[0].cur,
             ladder.params[1].name, ladder.params[1].cur,
             ladder.params[2].name, ladder.params[2].cur,

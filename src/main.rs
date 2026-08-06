@@ -1206,6 +1206,10 @@ fn listen(
             totals.noise_per_min = window_events * EVENTS_PER_MIN_SCALE;
             totals.disturbers_per_min = window_disturbers * EVENTS_PER_MIN_SCALE;
 
+            // Which register actually changed, captured before the move --
+            // `rung()` afterwards names the cursor's *new* home, which on a
+            // hand-over is not the register that moved at all.
+            let acting = ladder.rung();
             let moved = if window_events > 0 {
                 ladder.up().then_some("up")
             } else {
@@ -1217,7 +1221,7 @@ fn listen(
             // Programmed only when the machine actually moved. At either end the
             // decision is taken every window and changes nothing.
             if let Some(direction) = moved {
-                tune(sensor, i2c, &ladder, direction);
+                tune(sensor, i2c, &ladder, direction, acting);
             }
 
             // Persist the point, rarely. The machine can move every window, and
