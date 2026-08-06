@@ -149,6 +149,28 @@ const BATCH_MS: u32 = 1000;
 /// Quiet time before the noise floor relaxes by one (§4.2).
 const NOISE_DECAY_S: u32 = 60;
 
+/// How often to measure the noise floor by opening the watchdog gate, and for
+/// how long.
+///
+/// **The gate has to be opened or there is nothing to count.** `WDTH 2`
+/// suppresses noise interrupts without suppressing noise, so at the normal
+/// operating point a thoroughly jammed band reports zero events — see
+/// `session::Totals::noise_per_min` for the measurements. The only way to ask
+/// the question is to briefly stop rejecting the answer.
+///
+/// Two seconds is ample: a jammed band on this board produces 5–8 events a
+/// second, so a probe sees ten or more, while a clean one produces exactly zero
+/// however long it is watched. Five minutes between probes lines the value up
+/// with the baseline redraw, so what reaches the glass is at most one refresh
+/// stale.
+///
+/// **The cost is nothing that matters.** `WDTH 0` is *more* sensitive than
+/// `WDTH 2`, so a strike arriving mid-probe is if anything more likely to be
+/// caught — this trades noise rejection, not detection, and only for 2 s in
+/// every 300.
+const NOISE_PROBE_INTERVAL_S: u32 = 5 * 60;
+const NOISE_PROBE_MS: u32 = 2000;
+
 /// How often to read the fuel gauge.
 ///
 /// Slower than the batch loop because it is an I2C transaction for values that
@@ -533,6 +555,14 @@ fn listen(
     mut strike_log: Option<&mut log::Log>,
 ) {
     let mut level: u8 = 0;
+    // When the running noise probe ends, and when the last one finished.
+    //
+    // `None` for "never probed" rather than a zero sentinel, so the first probe
+    // can run early instead of five minutes into the session. A screen showing
+    // `0/min` for the first five minutes would be indistinguishable from a
+    // quiet band, which is the exact confusion this measurement exists to end.
+    let mut probe_until_ms: Option<u32> = None;
+    let mut last_probe_s: Option<u32> = None;
     // Set by `sensitive on`; see `session::force_max_sensitivity`. Deliberately
     // not persisted to NVS -- it is a diagnostic override for a storm happening
     // now, and a device that silently came back from a power cut with its noise
@@ -709,12 +739,6 @@ fn listen(
         }
 
         report(&batch);
-
-        // Roll the noise-rate window. Here rather than inside `collect`, because
-        // a minute with *no* interrupts at all is the most important reading
-        // this counter takes -- it is what says the band went quiet -- and
-        // `collect` only runs when something arrived.
-        totals.tick_noise_window(now_ms() / 1000);
 
         // Keep the rings' idea of "now" current even in a lull, so a chart drawn
         // during quiet weather shows the quiet rather than the last storm shoved
@@ -1084,9 +1108,66 @@ fn listen(
         // Frozen while `sensitive on` is in force: the override sits below the
         // ladder's floor, so the first disturber would otherwise climb straight
         // off it and undo exactly what was asked for.
+        // --- the noise probe ------------------------------------------------
+        //
+        // Under `sensitive on` the gate is already open, so the events can be
+        // counted directly and no probe is needed -- the batch is a second, so
+        // scaling it is the rate.
         if max_sensitivity {
+            totals.noise_per_min = batch.noise * 60_000 / BATCH_MS;
+        } else {
+            match probe_until_ms {
+                Some(until) if now_ms() >= until => {
+                    // Close the gate again, whatever happened, before reporting.
+                    let settings = defence::settings(level);
+                    if let Err(e) = sensor.set_watchdog_threshold(i2c, settings.watchdog) {
+                        println!("probe: could NOT restore the watchdog -- {e}");
+                    }
+                    totals.noise_per_min = totals.probe_noise * 60_000 / NOISE_PROBE_MS;
+                    probe_until_ms = None;
+                    last_probe_s = Some(now_ms() / 1000);
+                    if totals.noise_per_min > 0 {
+                        println!(
+                            "probe: {} noise/min with the gate open{}",
+                            totals.noise_per_min,
+                            if totals.noise_per_min >= session::NOISE_JAMMED_PER_MIN {
+                                " -- JAMMED"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                }
+                Some(_) => {}
+                // First probe once the sensor has settled; then on the
+                // interval.
+                None if last_probe_s.map_or(
+                    now_ms() / 1000 >= 30,
+                    |last| now_ms() / 1000 >= last + NOISE_PROBE_INTERVAL_S,
+                ) =>
+                {
+                    match sensor.set_watchdog_threshold(i2c, 0) {
+                        Ok(()) => {
+                            totals.probe_noise = 0;
+                            probe_until_ms = Some(now_ms() + NOISE_PROBE_MS);
+                        }
+                        // Do not retry in a tight loop on a bus that is failing.
+                        Err(e) => {
+                            println!("probe: could not open the gate -- {e}");
+                            last_probe_s = Some(now_ms() / 1000);
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+
+        // The ladder must not react to a probe: the events are ones we asked
+        // for by opening the gate, and letting them climb the level would turn a
+        // measurement into a change of state.
+        if max_sensitivity || probe_until_ms.is_some() {
             // nothing to do -- the knobs are held where `force_max_sensitivity`
-            // put them.
+            // or the probe put them.
         } else if batch.heard_interference() {
             quiet_ms = 0;
             if level < defence::MAX_LEVEL {
@@ -1188,7 +1269,7 @@ fn listen(
                         irq_confirmed,
                         defence_level: level,
                         defence_max: defence::MAX_LEVEL,
-                        noise_per_min: totals.noise_last_minute,
+                        noise_per_min: totals.noise_per_min,
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,
                         disturbers_total: totals.disturbers,

@@ -38,47 +38,39 @@ pub struct Totals {
     pub strikes: u32,
     pub disturbers: u32,
     pub last_strike: Option<(Distance, u32, Option<u64>)>,
-    /// Noise interrupts in the minute now being counted, and in the last one
-    /// that completed.
+    /// Noise interrupts per minute, from the last probe — the number the screen
+    /// shows.
     ///
-    /// **A measurement, unlike the defence level beside it on screen.** The
-    /// ladder's level is a *setting* — what the receiver has decided to do — and
-    /// it is a bad proxy for how jammed the band is: capped at 7, frozen
-    /// entirely under `sensitive on`, and reading 0 in exactly the case that
-    /// matters, a wide-open gate drowning in interference. This counts the
-    /// events themselves, so it has no ceiling and costs no sensitivity.
+    /// **A measurement, where the defence level beside it is a setting.** The
+    /// ladder's level is a bad proxy for a jammed band in three ways: capped at
+    /// 7, frozen entirely under `sensitive on`, and reading 0 in exactly the
+    /// case that matters.
     ///
-    /// Two fields because a partial minute is not a rate. `noise_last_minute`
-    /// is what the screen shows; the accumulator is never displayed.
-    pub noise_this_minute: u32,
-    pub noise_last_minute: u32,
-    /// Uptime second at which the current minute started.
-    pub noise_window_s: u32,
+    /// ## Why it has to be probed rather than simply counted
+    ///
+    /// Counting `NoiseTooHigh` as it arrives does not work at the normal
+    /// operating point, and the whole measurement turns on this. `WDTH 2`
+    /// suppresses the noise *interrupts* without suppressing the noise, so a
+    /// jammed band produces **zero** events. Measured on this board, every
+    /// combination agreeing:
+    ///
+    /// | bus | supply | `WDTH` | events |
+    /// |---|---|---|---|
+    /// | 100 kHz | USB | **2** | 0, over 31 minutes |
+    /// | 100 kHz | USB | 0 | 8/s |
+    /// | 200 kHz | USB | 0 | 5–8/s |
+    /// | 200 kHz | USB | **2** | **0** |
+    /// | 200 kHz | battery | 0 | 0 |
+    ///
+    /// So the gate is opened deliberately for a moment, the events are counted,
+    /// and it is closed again — see `NOISE_PROBE_MS` in `main`. That is the only
+    /// way to ask "would this band be noisy if I were listening" without
+    /// listening all the time.
+    pub noise_per_min: u32,
+    /// Events counted during the probe now running. Zeroed when one starts.
+    pub probe_noise: u32,
 }
 
-impl Totals {
-    /// Roll the noise counter if a minute has passed. Call once per batch.
-    ///
-    /// Rolled on a real clock rather than by counting batches: a batch is
-    /// nominally a second but slips under load, and a rate whose denominator
-    /// drifts is not a rate.
-    pub fn tick_noise_window(&mut self, now_s: u32) {
-        if now_s.saturating_sub(self.noise_window_s) < 60 {
-            return;
-        }
-        self.noise_last_minute = self.noise_this_minute;
-        self.noise_this_minute = 0;
-        self.noise_window_s = now_s;
-    }
-}
-
-/// How much noise per minute counts as the band being unusable.
-///
-/// Measured on this board: a clean environment produces **zero** — not "a few",
-/// zero — while the 100 kHz bus harmonic or a USB charger produced 5–8 events
-/// *per second*, which is 300–480 a minute. There is no ambiguous middle in the
-/// data, so this sits low enough to catch a fraction of that and still never
-/// fire on a quiet band.
 pub const NOISE_JAMMED_PER_MIN: u32 = 60;
 
 
@@ -170,9 +162,10 @@ pub fn collect(
         }
         Interrupt::NoiseTooHigh => {
             batch.noise += 1;
-            // Counted into the totals as well as the batch, because the screen
-            // needs a *rate* and a batch is only a second of it.
-            totals.noise_this_minute += 1;
+            // Into the probe accumulator too. Between probes this collects
+            // events nobody asked for, which is harmless: it is zeroed at the
+            // start of the next one.
+            totals.probe_noise += 1;
         }
         Interrupt::Unknown(_) => batch.unknown += 1,
     }
