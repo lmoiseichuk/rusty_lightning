@@ -84,7 +84,8 @@
 /// How many registers the machine walks.
 pub const PARAMS: usize = 4;
 
-/// One tunable register: its range, where it is now, and how to program it.
+/// One tunable register: its range, where it is now, how far it jumps, and how
+/// to program it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Param<W> {
     /// What this register is called, for the console and the screen.
@@ -92,38 +93,91 @@ pub struct Param<W> {
     pub min: u8,
     pub cur: u8,
     pub max: u8,
-    /// Programs the chip with `cur`. See `session::WRITERS`.
+    /// The stride this register moves by when travelling — halved on every
+    /// reversal, restored on every continuation. See [`Param::slow`].
+    pub step: u8,
+    /// The stride at full speed, **2^(distance from the least significant row)**.
+    ///
+    /// The noise floor steps by 1, the watchdog by 2, spike rejection by 4, min
+    /// strikes by 8. A more significant register is one the machine reaches for
+    /// only when the cheaper ones are exhausted — so when it finally does move,
+    /// creeping is wasted time and it should take a decisive bite.
+    ///
+    /// It also shrinks the reachable space by roughly an order of magnitude,
+    /// which is what makes a position readable as a percentage at all.
+    pub base_step: u8,
+    /// Programs the chip with `cur`. See `session::new_ladder`.
     pub write: W,
 }
 
 impl<W> Param<W> {
     /// One step harder. `false` when already at `max`.
+    ///
+    /// Clamped rather than refused at the top of a stride, so a register whose
+    /// range is not a whole number of steps still reaches its maximum exactly —
+    /// the watchdog steps 0, 2, 4 … 14 and then lands on 15.
     pub fn up(&mut self) -> bool {
-        if self.cur < self.max {
-            self.cur += 1;
-            true
-        } else {
-            false
+        if self.cur >= self.max {
+            return false;
         }
+        self.cur = self.cur.saturating_add(self.step).min(self.max);
+        true
     }
 
     /// One step easier. `false` when already at `min`.
     pub fn down(&mut self) -> bool {
-        if self.cur > self.min {
-            self.cur -= 1;
-            true
-        } else {
-            false
+        if self.cur <= self.min {
+            return false;
         }
+        self.cur = self.cur.saturating_sub(self.step).max(self.min);
+        true
     }
 
     pub fn reset(&mut self) {
         self.cur = self.min;
+        self.step = self.base_step;
     }
 
-    /// How many distinct values this register can take.
+    /// Halve the stride, to a floor of 1.
+    ///
+    /// **Called on a direction reversal**, which is the signature of having
+    /// overshot: the machine went up, the band went quiet, it came back down,
+    /// and the band got noisy again. That is the sweet spot being straddled, and
+    /// continuing to arrive at it in strides of 8 would straddle it forever.
+    /// Each reversal halves the stride until it is 1 and the register can settle
+    /// exactly.
+    pub fn slow(&mut self) {
+        self.step = (self.step / 2).max(1);
+    }
+
+    /// Double the stride back toward [`Param::base_step`].
+    ///
+    /// Called whenever a move continues in the same direction as the last. A
+    /// sustained climb means the setting is nowhere near right, and creeping
+    /// there in ones after an earlier reversal would be slow for no reason.
+    pub fn restore(&mut self) {
+        self.step = self.step.saturating_mul(2).min(self.base_step.max(1));
+    }
+
+    /// How many positions this register can occupy, counting both ends.
+    ///
+    /// Ceiling division, because the last stride is usually short: 0..=15 by 2
+    /// is nine positions, not eight — the eight full strides plus the clamped
+    /// landing on 15.
+    /// Measured against [`Param::base_step`], not the live stride: the gauge
+    /// must not change scale underneath the reader every time the machine slows
+    /// down.
     pub fn span(&self) -> u32 {
-        (self.max - self.min) as u32 + 1
+        let range = (self.max - self.min) as u32;
+        let step = self.base_step.max(1) as u32;
+        range.div_ceil(step) + 1
+    }
+
+    /// Which of those positions `cur` currently is.
+    pub fn index(&self) -> u32 {
+        let offset = (self.cur - self.min) as u32;
+        let step = self.base_step.max(1) as u32;
+        offset.div_ceil(step).min(self.span() - 1)
     }
 }
 
@@ -131,6 +185,9 @@ impl<W> Param<W> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ladder<W> {
     pub params: [Param<W>; PARAMS],
+    /// Which way the last move went, for the stride adaptation in
+    /// [`Param::slow`]. `None` before the first move.
+    pub last_up: Option<bool>,
 }
 
 impl<W: Copy> Ladder<W> {
@@ -139,8 +196,18 @@ impl<W: Copy> Ladder<W> {
     /// `false` only at the very top, where every register is at its maximum and
     /// there is nothing left to try.
     pub fn up(&mut self) -> bool {
+        let reversed = self.last_up == Some(false);
         for index in (0..PARAMS).rev() {
-            if self.params[index].up() {
+            if self.params[index].cur < self.params[index].max {
+                // Slow down if this is a turn, speed up if it is a continuation
+                // -- decided before the move, so the new stride is the one used.
+                if reversed {
+                    self.params[index].slow();
+                } else {
+                    self.params[index].restore();
+                }
+                self.params[index].up();
+                self.last_up = Some(true);
                 // The carry, and the reason this shape exists: everything less
                 // significant starts its sweep again, so the registers that can
                 // reject lightning are handed back each time a more significant
@@ -162,8 +229,16 @@ impl<W: Copy> Ladder<W> {
     /// would relax one register by winding every cheaper one to its maximum,
     /// which is the opposite of relaxing.
     pub fn down(&mut self) -> bool {
+        let reversed = self.last_up == Some(true);
         for index in (0..PARAMS).rev() {
-            if self.params[index].down() {
+            if self.params[index].cur > self.params[index].min {
+                if reversed {
+                    self.params[index].slow();
+                } else {
+                    self.params[index].restore();
+                }
+                self.params[index].down();
+                self.last_up = Some(false);
                 return true;
             }
         }
@@ -175,6 +250,7 @@ impl<W: Copy> Ladder<W> {
         for param in self.params.iter_mut() {
             param.reset();
         }
+        self.last_up = None;
     }
 
     /// Total positions the machine can occupy — the product of every span.
@@ -193,7 +269,7 @@ impl<W: Copy> Ladder<W> {
     pub fn position(&self) -> u32 {
         let mut position = 0u32;
         for param in self.params.iter() {
-            position = position * param.span() + (param.cur - param.min) as u32;
+            position = position * param.span() + param.index();
         }
         position
     }

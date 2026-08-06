@@ -412,6 +412,8 @@ pub fn new_ladder() -> defence::Ladder<Writer> {
                 name: "min strikes",
                 min: 0,
                 cur: 0,
+                step: 8,
+                base_step: 8,
                 max: 3,
                 // MIN_NUM_LIGH takes a strike *count*, not the selector the
                 // machine walks, so this is the one row that translates.
@@ -432,6 +434,8 @@ pub fn new_ladder() -> defence::Ladder<Writer> {
                 name: "spike rejection",
                 min: 0,
                 cur: 0,
+                step: 4,
+                base_step: 4,
                 max: 11,
                 write: |sensor, i2c, value| sensor.set_spike_rejection(i2c, value),
             },
@@ -439,6 +443,8 @@ pub fn new_ladder() -> defence::Ladder<Writer> {
                 name: "watchdog",
                 min: 0,
                 cur: 0,
+                step: 2,
+                base_step: 2,
                 max: 15,
                 write: |sensor, i2c, value| sensor.set_watchdog_threshold(i2c, value),
             },
@@ -446,10 +452,13 @@ pub fn new_ladder() -> defence::Ladder<Writer> {
                 name: "noise floor",
                 min: 0,
                 cur: 0,
+                step: 1,
+                base_step: 1,
                 max: 7,
                 write: |sensor, i2c, value| sensor.set_noise_floor(i2c, value),
             },
         ],
+        last_up: None,
     }
 }
 
