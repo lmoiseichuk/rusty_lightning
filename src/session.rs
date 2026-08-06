@@ -331,10 +331,10 @@ pub fn tune(
             ladder.position(),
             ladder.total() - 1,
             ladder.rung(),
-            ladder.params[3].name, ladder.params[3].cur,
-            ladder.params[2].name, ladder.params[2].cur,
+            ladder.params[0].name, ladder.params[0].cur,
             ladder.params[1].name, ladder.params[1].cur,
-            ladder.params[0].name, ladder.params[0].cur
+            ladder.params[2].name, ladder.params[2].cur,
+            ladder.params[3].name, ladder.params[3].cur
         ),
         Err(e) => println!("tune: could not move -- {e}"),
     }
@@ -407,14 +407,47 @@ pub type Writer = fn(&As3935, &mut I2cDriver<'_>, u8) -> Result<(), esp_idf_hal:
 /// that cannot reject a strike — moves on every step.
 pub fn new_ladder() -> defence::Ladder<Writer> {
     defence::Ladder {
+        // **Cheapest first.** The cursor tunes index 0 until it is exhausted,
+        // fixes it there and moves on -- so this order is the order the machine
+        // is willing to spend sensitivity in.
         params: [
+            defence::Param {
+                name: "noise floor",
+                min: 0,
+                cur: 0,
+                max: 7,
+                step: 1,
+                base_step: 1,
+                write: |sensor, i2c, value| sensor.set_noise_floor(i2c, value),
+            },
+            defence::Param {
+                name: "watchdog",
+                min: 0,
+                cur: 0,
+                max: 15,
+                step: 2,
+                base_step: 2,
+                write: |sensor, i2c, value| sensor.set_watchdog_threshold(i2c, value),
+            },
+            // Capped below its 4-bit maximum on purpose: the datasheet's curves
+            // flatten past ~11, and the last settings reject hard enough to
+            // discard a genuine nearby strike.
+            defence::Param {
+                name: "spike rejection",
+                min: 0,
+                cur: 0,
+                max: 11,
+                step: 4,
+                base_step: 4,
+                write: |sensor, i2c, value| sensor.set_spike_rejection(i2c, value),
+            },
             defence::Param {
                 name: "min strikes",
                 min: 0,
                 cur: 0,
+                max: 3,
                 step: 8,
                 base_step: 8,
-                max: 3,
                 // MIN_NUM_LIGH takes a strike *count*, not the selector the
                 // machine walks, so this is the one row that translates.
                 write: |sensor, i2c, selector| {
@@ -427,37 +460,8 @@ pub fn new_ladder() -> defence::Ladder<Writer> {
                     sensor.set_min_strikes(i2c, strikes).map(|_| ())
                 },
             },
-            // Capped below its 4-bit maximum on purpose: the datasheet's curves
-            // flatten past ~11, and the last settings reject hard enough to
-            // discard a genuine nearby strike.
-            defence::Param {
-                name: "spike rejection",
-                min: 0,
-                cur: 0,
-                step: 4,
-                base_step: 4,
-                max: 11,
-                write: |sensor, i2c, value| sensor.set_spike_rejection(i2c, value),
-            },
-            defence::Param {
-                name: "watchdog",
-                min: 0,
-                cur: 0,
-                step: 2,
-                base_step: 2,
-                max: 15,
-                write: |sensor, i2c, value| sensor.set_watchdog_threshold(i2c, value),
-            },
-            defence::Param {
-                name: "noise floor",
-                min: 0,
-                cur: 0,
-                step: 1,
-                base_step: 1,
-                max: 7,
-                write: |sensor, i2c, value| sensor.set_noise_floor(i2c, value),
-            },
         ],
+        cursor: 0,
         last_up: None,
     }
 }

@@ -8,66 +8,40 @@
 //! events for a minute, show the count, decide up or down, program the next
 //! combination, repeat. See `listen` in `main`.
 //!
-//! ## Why an odometer, and what the two earlier shapes got wrong
+//! ## One parameter at a time, in order of what it costs
 //!
 //! The registers are not grades of the same thing:
 //!
 //! * **`NF_LEV`** is a *noise-floor* gate. It decides when the chip complains
-//!   the band is noisy, and **cannot reject a lightning waveform** — the safest
-//!   knob on the part.
+//!   the band is noisy, and **cannot reject a lightning waveform** — the only
+//!   free knob on the part, which is why it is tuned first.
 //! * **`WDTH`** is the watchdog *amplitude* gate. Raising it discards weaker
 //!   arrivals, distant strikes first.
 //! * **`SREJ`** compares the signal against the chip's lightning *waveform
 //!   template*. Raising it discards anything imperfectly shaped.
 //! * **`MIN_NUM_LIGH`** makes the chip wait for a *pattern* — 1, 5, 9 or 16
-//!   strikes — before reporting anything at all. The most destructive of the
-//!   four by a wide margin: at 16 the first fifteen strikes of a storm are
-//!   silent.
+//!   strikes — before reporting anything. The most destructive of the four: at
+//!   16, the first fifteen strikes of a storm are silent.
 //!
-//! ## The order is the design
+//! So a **cursor** walks that list. Only the register under the cursor moves:
 //!
-//! **In an odometer the least significant digit moves on every single step**, so
-//! the ordering decides which register the machine reaches for first. Cheapest
-//! last, most damaging first:
+//! * **Noisy** — step it up. If it is already at its maximum, **leave it there**
+//!   and advance the cursor to the next register, which starts from 0.
+//! * **Silent** — step it down. If it is already at 0, retreat the cursor and
+//!   keep reducing the cheaper register behind it.
 //!
-//! | Significance | Register | Moves |
-//! |---|---|---|
-//! | most | `MIN_NUM_LIGH` | rarest — only when everything else is exhausted |
-//! | | `SREJ` | |
-//! | | `WDTH` | |
-//! | least | `NF_LEV` | every step |
+//! **Fixing rather than resetting is the whole point.** An earlier version swept
+//! every combination as an odometer, which threw the noise floor back to 0 each
+//! time it reached the watchdog — discarding the calibration it had just spent
+//! minutes finding. Here a register that has done its job keeps its value, and
+//! the machine only ever reaches for a more expensive one when the cheaper ones
+//! are genuinely exhausted.
 //!
-//! So the floor sweeps 0→7 before the watchdog is touched at all, and
-//! `MIN_NUM_LIGH` is not reached until the other three have been swept in full.
-//! Putting a high-impact register in the last row would have it changing
-//! constantly and suppressing everything above it.
-//!
-//! **Sequential, 31 rungs.** `NF_LEV` 0→7, then `WDTH` 2→15, then `SREJ` 1→11.
-//! Past rung 7 it moved only registers that reject lightning, and never gave
-//! them back, so a storm's own disturbers ratcheted it to maximum and pinned it
-//! there. That is a plausible mechanism for the "disturbers but never lightning"
-//! this device showed for two days.
-//!
-//! **Capped at 7.** `NF_LEV` alone, which is what the MicroPython reference
-//! tunes — and what finally produced disturbers here. Safe, but `NF_LEV` does
-//! run out beside a strong interferer, and then there is nothing left to try.
-//!
-//! The odometer takes both: every combination is reachable, but the cheap
-//! register is exhausted before an expensive one is touched, and everything
-//! cheaper **resets to 0 whenever an expensive one moves** — so the machine
-//! re-tries the whole cheap range at each new expensive setting rather than
-//! ratcheting.
-//!
-//! ## The rules
-//!
-//! * **Up** — increment the least significant register that has room (the noise
-//!   floor); on overflow, carry into the next one up and reset everything below
-//!   it to 0.
-//! * **Down** — decrement the least significant register that is not already 0.
-//!
-//! Down is deliberately *not* the exact inverse of up. A true borrow would
-//! relax one register by winding every cheaper one to its maximum, which is the
-//! opposite of relaxing.
+//! Two earlier shapes failed from opposite directions. A **sequential 31-rung
+//! ladder** ran `NF_LEV` 0→7 then `WDTH` then `SREJ`, never giving the
+//! lightning-rejecting registers back, so a storm's own disturbers ratcheted it
+//! deaf. A **cap at `NF_LEV` alone** was safe and is what first produced
+//! disturbers here — but `NF_LEV` does run out, and then there was nothing left.
 //!
 //! ## One object per register
 //!
@@ -184,7 +158,11 @@ impl<W> Param<W> {
 /// The machine: the four registers, most significant first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ladder<W> {
+    /// Cheapest first: `NF_LEV`, `WDTH`, `SREJ`, `MIN_NUM_LIGH`.
     pub params: [Param<W>; PARAMS],
+    /// Which register is currently being tuned. Everything before it is fixed
+    /// at the value that stopped working; everything after it is at 0.
+    pub cursor: usize,
     /// Which way the last move went, for the stride adaptation in
     /// [`Param::slow`]. `None` before the first move.
     pub last_up: Option<bool>,
@@ -193,56 +171,94 @@ pub struct Ladder<W> {
 impl<W: Copy> Ladder<W> {
     /// Defend harder. Returns whether anything moved.
     ///
-    /// `false` only at the very top, where every register is at its maximum and
-    /// there is nothing left to try.
+    /// `false` only when the last register is also at its maximum and there is
+    /// nothing left to try.
     pub fn up(&mut self) -> bool {
         let reversed = self.last_up == Some(false);
-        for index in (0..PARAMS).rev() {
-            if self.params[index].cur < self.params[index].max {
-                // Slow down if this is a turn, speed up if it is a continuation
-                // -- decided before the move, so the new stride is the one used.
-                if reversed {
-                    self.params[index].slow();
-                } else {
-                    self.params[index].restore();
-                }
-                self.params[index].up();
+        loop {
+            let cursor = self.cursor;
+            if reversed {
+                self.params[cursor].slow();
+            } else {
+                self.params[cursor].restore();
+            }
+            if self.params[cursor].up() {
+                self.zero_after_cursor();
                 self.last_up = Some(true);
-                // The carry, and the reason this shape exists: everything less
-                // significant starts its sweep again, so the registers that can
-                // reject lightning are handed back each time a more significant
-                // one takes the strain.
-                for lower in index + 1..PARAMS {
-                    self.params[lower].reset();
-                }
                 return true;
             }
+            // Exhausted. **Leave it where it is** -- that value is the
+            // calibration this register earned -- and move on to the next.
+            if cursor + 1 >= PARAMS {
+                return false;
+            }
+            self.cursor += 1;
         }
-        false
     }
 
-    /// Relax. Returns whether anything moved.
+    /// Silence — the register under the cursor has done its job.
     ///
-    /// Walks back the least significant register that is not already at its
-    /// minimum — the noise floor first, since that is what the machine reached
-    /// for first. Deliberately *not* the inverse of [`Ladder::up`]: a true borrow
-    /// would relax one register by winding every cheaper one to its maximum,
-    /// which is the opposite of relaxing.
+    /// **One step back, then hand over to the next register.** Stepping back
+    /// returns to the most sensitive setting that was still working; advancing
+    /// the cursor lets the next register refine from there.
+    ///
+    /// This is the speed fix. Waiting for each register to reach its *maximum*
+    /// before moving on was accurate and far too slow — the noise floor alone
+    /// took seven windows to exhaust, and three registers behind it made the
+    /// walk minutes long. Silence is the boundary, and the boundary is the
+    /// answer; there is no reason to keep climbing past it.
+    ///
+    /// When the register is already at its minimum there is nothing to hand
+    /// over — the machine is as sensitive as this register can make it — so the
+    /// cursor **retreats** instead, giving back the dearer register behind it.
+    /// That is the only route back to full sensitivity when a room goes quiet.
     pub fn down(&mut self) -> bool {
         let reversed = self.last_up == Some(true);
-        for index in (0..PARAMS).rev() {
-            if self.params[index].cur > self.params[index].min {
+        // Whether this call has already had to retreat. A retreat is the
+        // machine giving a register back, so it must NOT then hand over to the
+        // one it just came from -- that bounces the cursor between two
+        // registers and never actually unwinds.
+        let mut retreated = false;
+        loop {
+            let cursor = self.cursor;
+            if self.params[cursor].cur > self.params[cursor].min {
                 if reversed {
-                    self.params[index].slow();
+                    self.params[cursor].slow();
                 } else {
-                    self.params[index].restore();
+                    self.params[cursor].restore();
                 }
-                self.params[index].down();
+                self.params[cursor].down();
                 self.last_up = Some(false);
+                // Hand over: the next register refines from here. Not after a
+                // retreat -- see `retreated`.
+                if !retreated && cursor + 1 < PARAMS {
+                    self.cursor += 1;
+                    self.zero_after_cursor();
+                }
                 return true;
             }
+            // Already at its minimum. Give back the dearer register behind it.
+            if cursor == 0 {
+                return false;
+            }
+            self.cursor -= 1;
+            retreated = true;
         }
-        false
+    }
+
+    /// Hold every register past the cursor at 0.
+    ///
+    /// The invariant the whole model rests on: **everything before the cursor is
+    /// fixed at the value that stopped working, the cursor is being tuned, and
+    /// everything after it is untouched.** It falls out of the walk naturally —
+    /// the cursor only advances when the register behind it is exhausted — but
+    /// asserting it here means a restored point or a future edit cannot quietly
+    /// leave an expensive register engaged while a cheap one is still being
+    /// tuned.
+    fn zero_after_cursor(&mut self) {
+        for param in self.params.iter_mut().skip(self.cursor + 1) {
+            param.reset();
+        }
     }
 
     /// Back to the most sensitive position.
@@ -250,6 +266,7 @@ impl<W: Copy> Ladder<W> {
         for param in self.params.iter_mut() {
             param.reset();
         }
+        self.cursor = 0;
         self.last_up = None;
     }
 
@@ -285,6 +302,17 @@ impl<W: Copy> Ladder<W> {
             param.cur = param.min + (offset / stride) * stride;
             param.step = param.base_step;
         }
+        // The cursor goes to the dearest register still engaged **after the
+        // rounding**, not before: a register whose stored value rounds down to
+        // its minimum was never really engaged, and letting it hold the cursor
+        // would leave the machine tuning something already at 0 while a cheaper
+        // register carried the whole calibration.
+        self.cursor = 0;
+        for index in 0..PARAMS {
+            if self.params[index].cur > self.params[index].min {
+                self.cursor = index;
+            }
+        }
         self.last_up = None;
     }
 
@@ -303,21 +331,14 @@ impl<W: Copy> Ladder<W> {
     /// what makes it meaningful as a bar.
     pub fn position(&self) -> u32 {
         let mut position = 0u32;
-        for param in self.params.iter() {
+        for param in self.params.iter().rev() {
             position = position * param.span() + param.index();
         }
         position
     }
 
-    /// Which register is currently doing the work, for the console.
+    /// Which register the cursor is on, for the console.
     pub fn rung(&self) -> &'static str {
-        // The least significant register that is off its minimum is the one
-        // being leaned on; if none is, the cheapest is where the machine starts.
-        for param in self.params.iter().rev() {
-            if param.cur > param.min {
-                return param.name;
-            }
-        }
-        self.params[PARAMS - 1].name
+        self.params[self.cursor].name
     }
 }
