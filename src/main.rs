@@ -153,11 +153,18 @@ const BATCH_MS: u32 = 1000;
 /// constant rather than three, so the ladder can never be deciding on evidence
 /// the display is not showing.
 ///
-/// **60 seconds, so the counts *are* per-minute figures.** No scaling, no factor
-/// to keep in step with the period — change this and the arithmetic downstream
-/// stays correct only at whole divisors of 60, which is a trap worth not
-/// setting.
-const MEASURE_INTERVAL_S: u32 = 60;
+/// **10 seconds**, so the machine adapts six times faster than it did at a
+/// minute. That matters because the state space is thousands of combinations
+/// wide: at one step a minute a genuinely hostile band would take hours to walk
+/// away from, and a storm does not wait.
+///
+/// **A whole divisor of 60**, so the same window doubles as the event count the
+/// screen reports — multiplied by [`EVENTS_PER_MIN_SCALE`], which is exact only
+/// at 10, 15, 20, 30 or 60.
+const MEASURE_INTERVAL_S: u32 = 10;
+
+/// What a window's event count is multiplied by to read as events per minute.
+const EVENTS_PER_MIN_SCALE: u32 = 60 / MEASURE_INTERVAL_S;
 
 
 
@@ -370,15 +377,10 @@ fn main() {
         }
     };
 
-    // The chip's own starting noise floor, which the ladder continues from
-    // rather than overwriting. See `configure`.
-    let start_level = match configure(&sensor, &mut i2c, location) {
-        Ok(level) => level,
-        Err(e) => {
-            println!("FATAL: sensor configuration failed -- {e}");
-            return;
-        }
-    };
+    if let Err(e) = configure(&sensor, &mut i2c, location) {
+        println!("FATAL: sensor configuration failed -- {e}");
+        return;
+    }
 
     // --- the IRQ ---------------------------------------------------------
     //
@@ -500,7 +502,6 @@ fn main() {
         gauge.as_ref(),
         die_temperature.as_ref(),
         strike_log.as_mut(),
-        start_level,
     );
 }
 
@@ -509,7 +510,7 @@ fn configure(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     location: Location,
-) -> Result<u8, esp_idf_hal::sys::EspError> {
+) -> Result<(), esp_idf_hal::sys::EspError> {
     sensor.power_up(i2c)?;
     sensor.set_location(i2c, location)?;
 
@@ -563,19 +564,19 @@ fn configure(
     // `NF_LEV` is the one register the reference tunes, so writing it here is
     // its first tweak brought forward, not a new deviation -- unlike `WDTH` and
     // `SREJ`, which stay untouched at their power-on defaults.
-    let level = 0;
+    let ladder = session::new_ladder();
     session::configure_defaults(sensor, i2c)?;
 
     println!(
         "as:   {}, {} pF, defence {}/{} ({}), report after {} strike(s)",
         location.label(),
         TUNING_CAPS_PF,
-        level,
-        defence::MAX_LEVEL,
-        defence::rung(level),
+        ladder.position(),
+        ladder.total() - 1,
+        ladder.rung(),
         min_strikes
     );
-    Ok(level)
+    Ok(())
 }
 
 /// The event loop: batch what arrives, then tune once per batch (§4.2).
@@ -592,9 +593,8 @@ fn listen(
     gauge: Option<&battery::Max17048>,
     die_temperature: Option<&system::DieTemperature>,
     mut strike_log: Option<&mut log::Log>,
-    start_level: u8,
 ) {
-    let mut level: u8 = start_level;
+    let mut ladder = session::new_ladder();
     // Counted in the window now being judged, and when it started.
     let mut window_events: u32 = 0;
     let mut window_disturbers: u32 = 0;
@@ -814,7 +814,8 @@ fn listen(
                     chart_period: &mut chart_period,
                     reading,
                     range,
-                    level,
+                    level: ladder.position(),
+                    defence_max: ladder.total() - 1,
                     die_temperature,
                     antenna_khz,
                     irq_confirmed,
@@ -1016,11 +1017,11 @@ fn listen(
                     // Back to the bottom of the ladder, not to wherever the
                     // level happened to be: the auto-tune was frozen, so `level`
                     // is stale by however long the override was on.
-                    level = 0;
+                    ladder.reset();
                     window_events = 0;
                     window_disturbers = 0;
                     tune_window_ms = now_ms();
-                    session::apply_defence(sensor, i2c, 0)
+                    session::apply_defence(sensor, i2c, &ladder)
                 };
                 match outcome {
                     Ok(()) if on => println!(
@@ -1173,23 +1174,21 @@ fn listen(
             && now_ms().saturating_sub(tune_window_ms) >= MEASURE_INTERVAL_S * 1000
         {
             tune_window_ms = now_ms();
-            // The window is a minute, so the counts are already per-minute.
-            totals.noise_per_min = window_events;
-            totals.disturbers_per_min = window_disturbers;
+            totals.noise_per_min = window_events * EVENTS_PER_MIN_SCALE;
+            totals.disturbers_per_min = window_disturbers * EVENTS_PER_MIN_SCALE;
 
-            let previous = level;
-            if window_events > 0 {
-                level = level.saturating_add(1).min(defence::MAX_LEVEL);
+            let moved = if window_events > 0 {
+                ladder.up().then_some("up")
             } else {
-                level = level.saturating_sub(1);
-            }
+                ladder.down().then_some("down")
+            };
             window_events = 0;
             window_disturbers = 0;
 
-            // Written only when it moves. At either end of the range the
+            // Programmed only when the machine actually moved. At either end the
             // decision is taken every window and changes nothing.
-            if level != previous {
-                tune(sensor, i2c, level, if level > previous { "up" } else { "down" });
+            if let Some(direction) = moved {
+                tune(sensor, i2c, &ladder, direction);
             }
         }
 
@@ -1204,7 +1203,7 @@ fn listen(
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
                 location: *location,
-                defence: level,
+                defence: ladder.position(),
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
@@ -1277,8 +1276,8 @@ fn listen(
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
                         irq_confirmed,
-                        defence_level: level,
-                        defence_max: defence::MAX_LEVEL,
+                        defence_level: ladder.position(),
+                        defence_max: ladder.total() - 1,
                         noise_per_min: totals.noise_per_min,
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,

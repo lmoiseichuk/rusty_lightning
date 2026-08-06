@@ -12,7 +12,7 @@
 use crate::as3935::{Distance, Location, Strike};
 use crate::session;
 use crate::console::Command;
-use crate::{battery, clock, defence, history, log, system, ui};
+use crate::{battery, clock, history, log, system, ui};
 
 /// Everything a command may read or change.
 ///
@@ -31,7 +31,9 @@ pub struct Ctx<'a> {
     pub chart_period: &'a mut ui::ChartPeriod,
     pub reading: Option<battery::Reading>,
     pub range: (u16, u16),
-    pub level: u8,
+    /// Position in the tuning state machine (§4.2), and its ceiling.
+    pub level: u32,
+    pub defence_max: u32,
     pub die_temperature: Option<&'a system::DieTemperature>,
     pub antenna_khz: u32,
     pub irq_confirmed: bool,
@@ -219,7 +221,7 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
 
         // The screen's second line, plus what it cannot fit.
         Command::Status => {
-            let settings = defence::settings(ctx.level);
+
             println!("status: mode {}", ctx.location.label());
             if ctx.max_sensitivity {
                 // Not just "level 0": the ladder is overridden and frozen.
@@ -235,12 +237,12 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 // `regs` reads the hardware and is the place to look for what
                 // the chip actually holds -- this line says what the firmware
                 // chose, and the two are different questions.
+                // The position alone. `regs` reads the hardware, and which
+                // register the machine is leaning on is a fact about the
+                // implementation rather than about the weather.
                 println!(
-                    "status: noise {}/{} ({}) -- nf {}, wdth/srej at chip defaults",
-                    ctx.level,
-                    defence::MAX_LEVEL,
-                    defence::rung(ctx.level),
-                    settings.noise_floor
+                    "status: defence {}/{} -- `regs` for the register values",
+                    ctx.level, ctx.defence_max
                 );
             }
             println!(

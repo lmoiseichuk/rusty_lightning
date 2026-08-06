@@ -127,7 +127,7 @@ pub struct Drawn {
     /// Everywhere else it **converges**: it climbs until the noise is rejected
     /// and then stops, so the churn is a property of one environment rather
     /// than of the value.
-    pub defence: u8,
+    pub defence: u32,
 }
 
 
@@ -314,20 +314,29 @@ pub fn report(batch: &Batch) {
 
 
 /// Move the defence level and say what it did in terms of the knob it is on.
-pub fn tune(sensor: &As3935, i2c: &mut I2cDriver<'_>, level: u8, direction: &str) {
-    let settings = defence::settings(level);
-    match apply_defence(sensor, i2c, level) {
+pub fn tune(
+    sensor: &As3935,
+    i2c: &mut I2cDriver<'_>,
+    ladder: &defence::Ladder<Writer>,
+    direction: &str,
+) {
+    match apply_defence(sensor, i2c, ladder) {
         // Only `nf` is reported, because only `nf` is written. Printing the
         // watchdog and spike-rejection values from `settings` used to imply
         // they had just been applied, which stopped being true when this became
         // a one-register tune -- and a log line asserting a register write that
         // did not happen is worse than no line at all.
         Ok(()) => println!(
-            "tune: {direction} to {level}/{} -- noise floor {}",
-            defence::MAX_LEVEL,
-            settings.noise_floor
+            "tune: {direction} to {}/{} ({}) -- {} {}, {} {}, {} {}, {} {}",
+            ladder.position(),
+            ladder.total() - 1,
+            ladder.rung(),
+            ladder.params[3].name, ladder.params[3].cur,
+            ladder.params[2].name, ladder.params[2].cur,
+            ladder.params[1].name, ladder.params[1].cur,
+            ladder.params[0].name, ladder.params[0].cur
         ),
-        Err(e) => println!("tune: could not move to level {level} -- {e}"),
+        Err(e) => println!("tune: could not move -- {e}"),
     }
 }
 
@@ -369,18 +378,79 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
 pub fn apply_defence(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
-    level: u8,
+    ladder: &defence::Ladder<Writer>,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
-    // **`NF_LEV` only at runtime**, matching the reference's `tweakNoiseLevel`,
-    // which is the single register it moves once running. `WDTH` and `SREJ` are
-    // set once at start-up by [`configure_defaults`] and never touched again.
-    //
-    // This used to write all three on every rung, so a device that had merely
-    // changed noise level had also rewritten the two registers deciding what
-    // counts as lightning. Harmless while the values matched the start-up ones,
-    // and exactly the kind of coupling that stops being harmless quietly.
-    let settings = defence::settings(level);
-    sensor.set_noise_floor(i2c, settings.noise_floor)
+    // Every register, every time. The machine *lowers* the cheaper ones back to
+    // 0 whenever a more expensive one moves, and that only happens if they are
+    // actually written.
+    for param in ladder.params.iter() {
+        (param.write)(sensor, i2c, param.cur)?;
+    }
+    Ok(())
+}
+
+/// One writer per row of the state machine, in [`defence::PARAM_MAX`] order.
+///
+/// **The table is the wiring.** `defence` owns each register's range and current
+/// value; this owns how to program it. A row here lines up with a row there, so
+/// adding a tweakable register is one entry in each — no `match`, no fourth
+/// hand-written call to forget.
+///
+/// Function pointers rather than closures: these capture nothing, so a `const`
+/// array of `fn` costs no storage and no indirection beyond the call.
+pub type Writer = fn(&As3935, &mut I2cDriver<'_>, u8) -> Result<(), esp_idf_hal::sys::EspError>;
+
+/// The state machine, built with each register's range and its writer.
+///
+/// **Most significant first means most destructive first**: `MIN_NUM_LIGH` is
+/// reached only when everything else is exhausted, and `NF_LEV` — the one knob
+/// that cannot reject a strike — moves on every step.
+pub fn new_ladder() -> defence::Ladder<Writer> {
+    defence::Ladder {
+        params: [
+            defence::Param {
+                name: "min strikes",
+                min: 0,
+                cur: 0,
+                max: 3,
+                // MIN_NUM_LIGH takes a strike *count*, not the selector the
+                // machine walks, so this is the one row that translates.
+                write: |sensor, i2c, selector| {
+                    let strikes = match selector {
+                        0 => 1,
+                        1 => 5,
+                        2 => 9,
+                        _ => 16,
+                    };
+                    sensor.set_min_strikes(i2c, strikes).map(|_| ())
+                },
+            },
+            // Capped below its 4-bit maximum on purpose: the datasheet's curves
+            // flatten past ~11, and the last settings reject hard enough to
+            // discard a genuine nearby strike.
+            defence::Param {
+                name: "spike rejection",
+                min: 0,
+                cur: 0,
+                max: 11,
+                write: |sensor, i2c, value| sensor.set_spike_rejection(i2c, value),
+            },
+            defence::Param {
+                name: "watchdog",
+                min: 0,
+                cur: 0,
+                max: 15,
+                write: |sensor, i2c, value| sensor.set_watchdog_threshold(i2c, value),
+            },
+            defence::Param {
+                name: "noise floor",
+                min: 0,
+                cur: 0,
+                max: 7,
+                write: |sensor, i2c, value| sensor.set_noise_floor(i2c, value),
+            },
+        ],
+    }
 }
 
 /// Every threshold at its absolute minimum, written once at start-up.
@@ -394,9 +464,7 @@ pub fn configure_defaults(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
-    sensor.set_noise_floor(i2c, 0)?;
-    sensor.set_watchdog_threshold(i2c, 0)?;
-    sensor.set_spike_rejection(i2c, 0)
+    apply_defence(sensor, i2c, &new_ladder())
 }
 
 
@@ -427,5 +495,5 @@ pub fn force_max_sensitivity(
     // it out of that state. Pinning the floor at 0 in a noisy band therefore
     // guarantees the chip never detects anything — which is exactly what it did
     // here, through a storm close enough to shake doors.
-    sensor.set_noise_floor(i2c, 0)
+    apply_defence(sensor, i2c, &new_ladder())
 }

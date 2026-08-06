@@ -139,9 +139,9 @@ pub struct Status<'a> {
     /// Measured antenna resonance, kHz — from the LCO self-test.
     pub antenna_khz: u32,
     pub irq_confirmed: bool,
-    /// §4.2's defence level and its ceiling.
-    pub defence_level: u8,
-    pub defence_max: u8,
+    /// §4.2's position in the tuning state machine, and its ceiling.
+    pub defence_level: u32,
+    pub defence_max: u32,
     /// Noise interrupts in the last completed minute — a *measurement*, where
     /// `defence_level` beside it is a setting. See `session::Totals`.
     pub noise_per_min: u32,
@@ -253,8 +253,8 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     gauge(
         frame,
         Point::new(180, 62),
-        s.defence_level as u32,
-        s.defence_max as u32,
+        s.defence_level,
+        s.defence_max,
         warning,
     );
 
@@ -459,10 +459,14 @@ fn gauge(
     // The rung name -- "noise floor" -- stays on the console. That is which
     // register the ladder is working on, a fact about the implementation rather
     // than about the weather.
+    // **A percentage, not a position.** The state machine has thousands of
+    // combinations, so `2/6143` is unreadable as a number and invisible as a
+    // bar; "how hard is it defending, out of everything it could do" is the
+    // question a person actually has.
     let mut caption = Text32::new();
-    let _ = write!(caption, "{}", value);
-    let _ = caption.push('/');
-    let _ = write!(caption, "{}", max);
+    let percent = if max > 0 { value * 100 / max } else { 0 };
+    let _ = write!(caption, "{percent}");
+    let _ = caption.push('%');
     let _ = Text::with_baseline(
         &caption,
         Point::new(bar_x + BAR_WIDTH as i32 + GAP, at.y - 14),

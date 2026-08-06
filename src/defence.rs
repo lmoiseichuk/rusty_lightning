@@ -1,94 +1,212 @@
 //! How hard the sensor is trying to reject noise (§4.2).
 //!
-//! One integer, 0..=[`MAX_LEVEL`], walking **`NF_LEV` and nothing else**. Up by
-//! one per *batch* in which anything was heard, down by one after a whole
-//! minute of silence: quick to defend, slow to relax.
+//! A **state machine over every rejection register the AS3935 exposes**, walked
+//! as an odometer — and **ordered by how much damage each register does**, which
+//! is the whole design.
 //!
-//! **See §4.2 for why** the step is per batch rather than per event.
+//! The loop around it is deliberately plain — configure the registers, count
+//! events for a minute, show the count, decide up or down, program the next
+//! combination, repeat. See `listen` in `main`.
 //!
-//! ## Why the ladder stops at the noise floor
+//! ## Why an odometer, and what the two earlier shapes got wrong
 //!
-//! It did not always. It ran to 31 rungs: `NF_LEV` 0→7, then `WDTH` 3→15, then
-//! `SREJ` 1→11 — and in that form the device reported disturbers during a storm
-//! and never a strike, on hardware whose MicroPython reference had detected
-//! strikes on the same bench.
-//!
-//! The reference tunes **only `NF_LEV`, 0 through 7**. That turns out to be the
-//! whole difference, because the three registers are not three grades of the
-//! same thing:
+//! The registers are not grades of the same thing:
 //!
 //! * **`NF_LEV`** is a *noise-floor* gate. It decides when the chip complains
-//!   that the band is noisy. It cannot reject a lightning waveform, which is
-//!   why sweeping it over its full range is safe.
-//! * **`WDTH`** is the watchdog *amplitude* gate on the incoming signal.
-//!   Raising it discards weaker arrivals — distant strikes first.
-//! * **`SREJ`** compares the signal against the chip's lightning *waveform*
-//!   template. Raising it discards anything imperfectly shaped, and the
-//!   datasheet's own curves flatten past ~11 while the last few settings reject
-//!   so aggressively that a genuine nearby strike goes with them.
+//!   the band is noisy, and **cannot reject a lightning waveform** — the safest
+//!   knob on the part.
+//! * **`WDTH`** is the watchdog *amplitude* gate. Raising it discards weaker
+//!   arrivals, distant strikes first.
+//! * **`SREJ`** compares the signal against the chip's lightning *waveform
+//!   template*. Raising it discards anything imperfectly shaped.
+//! * **`MIN_NUM_LIGH`** makes the chip wait for a *pattern* — 1, 5, 9 or 16
+//!   strikes — before reporting anything at all. The most destructive of the
+//!   four by a wide margin: at 16 the first fifteen strikes of a storm are
+//!   silent.
 //!
-//! So the two rungs above the noise floor tuned exactly the knobs that can
-//! throw lightning away, and the climb rule guaranteed they would be reached:
-//! +1 for any batch with activity, −1 only after a *full minute* of total
-//! silence. A storm never grants that minute — and neither does a sensor
-//! mounted against an e-paper panel, which produced batches of noise events on
-//! a clear day. The ladder ratcheted to maximum rejection and stayed there.
+//! ## The order is the design
 //!
-//! `WDTH` and `SREJ` therefore hold at their power-on defaults now, which is
-//! what the working reference leaves them at. Deliberate over-sensitivity is
-//! still reachable, but only by hand: `sensitive on`, via
-//! `session::force_max_sensitivity`.
+//! **In an odometer the least significant digit moves on every single step**, so
+//! the ordering decides which register the machine reaches for first. Cheapest
+//! last, most damaging first:
 //!
-//! This module is deliberately free of ESP-IDF imports, which is what lets
-//! `tests/host/defence.rs` compile it directly rather than copying it. The
-//! register writes live in `session::apply_defence`.
+//! | Significance | Register | Moves |
+//! |---|---|---|
+//! | most | `MIN_NUM_LIGH` | rarest — only when everything else is exhausted |
+//! | | `SREJ` | |
+//! | | `WDTH` | |
+//! | least | `NF_LEV` | every step |
+//!
+//! So the floor sweeps 0→7 before the watchdog is touched at all, and
+//! `MIN_NUM_LIGH` is not reached until the other three have been swept in full.
+//! Putting a high-impact register in the last row would have it changing
+//! constantly and suppressing everything above it.
+//!
+//! **Sequential, 31 rungs.** `NF_LEV` 0→7, then `WDTH` 2→15, then `SREJ` 1→11.
+//! Past rung 7 it moved only registers that reject lightning, and never gave
+//! them back, so a storm's own disturbers ratcheted it to maximum and pinned it
+//! there. That is a plausible mechanism for the "disturbers but never lightning"
+//! this device showed for two days.
+//!
+//! **Capped at 7.** `NF_LEV` alone, which is what the MicroPython reference
+//! tunes — and what finally produced disturbers here. Safe, but `NF_LEV` does
+//! run out beside a strong interferer, and then there is nothing left to try.
+//!
+//! The odometer takes both: every combination is reachable, but the cheap
+//! register is exhausted before an expensive one is touched, and everything
+//! cheaper **resets to 0 whenever an expensive one moves** — so the machine
+//! re-tries the whole cheap range at each new expensive setting rather than
+//! ratcheting.
+//!
+//! ## The rules
+//!
+//! * **Up** — increment the least significant register that has room (the noise
+//!   floor); on overflow, carry into the next one up and reset everything below
+//!   it to 0.
+//! * **Down** — decrement the least significant register that is not already 0.
+//!
+//! Down is deliberately *not* the exact inverse of up. A true borrow would
+//! relax one register by winding every cheaper one to its maximum, which is the
+//! opposite of relaxing.
+//!
+//! ## One object per register
+//!
+//! Each [`Param`] owns its own `min`, `cur`, `max` and the callback that
+//! programs it, and knows how to step itself — so [`Ladder`] is only the carry
+//! logic between them, and adding a fifth register is one more object rather
+//! than an edit in four places.
+//!
+//! The writer is a **type parameter** rather than a concrete signature. This
+//! module is deliberately free of ESP-IDF imports so `tests/host/defence.rs` can
+//! compile it directly, and a callback naming `&As3935` would end that; `session`
+//! supplies the real one.
 
-/// Where the ladder starts, from §3 step 6.
-pub const NOISE_FLOOR_BASE: u8 = 0;
+/// How many registers the machine walks.
+pub const PARAMS: usize = 4;
 
-/// What `WDTH` and `SREJ` hold at, at every rung.
-///
-/// These are the chip's power-on defaults and the values the MicroPython
-/// reference never moves. They are constants rather than rungs — see the module
-/// comment for what happened when they were rungs.
-pub const WATCHDOG_BASE: u8 = 2;
-pub const SPIKE_REJECT_BASE: u8 = 0;
-
-/// Where the ladder stops. `NF_LEV` is a 3-bit field and uses its full range.
-pub const NOISE_FLOOR_MAX: u8 = 7;
-
-/// Total rungs — now exactly the noise floor's own range.
-pub const MAX_LEVEL: u8 = NOISE_FLOOR_MAX - NOISE_FLOOR_BASE;
-
-/// The three register values a defence level maps to.
+/// One tunable register: its range, where it is now, and how to program it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Settings {
-    pub noise_floor: u8,
-    pub watchdog: u8,
-    pub spike_reject: u8,
+pub struct Param<W> {
+    /// What this register is called, for the console and the screen.
+    pub name: &'static str,
+    pub min: u8,
+    pub cur: u8,
+    pub max: u8,
+    /// Programs the chip with `cur`. See `session::WRITERS`.
+    pub write: W,
 }
 
-/// Translate a level into register values.
-///
-/// Pure, total, and the only place the ladder's shape is written down. It is
-/// now one arm rather than three: saturating at [`MAX_LEVEL`] is what keeps a
-/// caller that still thinks in 31 rungs — a stale console command, a value read
-/// back from an older build — from indexing past the noise floor.
-pub fn settings(level: u8) -> Settings {
-    Settings {
-        noise_floor: NOISE_FLOOR_BASE + level.min(MAX_LEVEL),
-        watchdog: WATCHDOG_BASE,
-        spike_reject: SPIKE_REJECT_BASE,
+impl<W> Param<W> {
+    /// One step harder. `false` when already at `max`.
+    pub fn up(&mut self) -> bool {
+        if self.cur < self.max {
+            self.cur += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// One step easier. `false` when already at `min`.
+    pub fn down(&mut self) -> bool {
+        if self.cur > self.min {
+            self.cur -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.cur = self.min;
+    }
+
+    /// How many distinct values this register can take.
+    pub fn span(&self) -> u32 {
+        (self.max - self.min) as u32 + 1
     }
 }
 
-/// A short name for which knob a level is working on, for the console and the
-/// screen.
-///
-/// One answer now, and kept as a function rather than folded into its callers
-/// so the two display sites do not have to learn that the ladder became
-/// single-knob — and so a future second rung has somewhere to be named.
-pub fn rung(_level: u8) -> &'static str {
-    "noise floor"
+/// The machine: the four registers, most significant first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ladder<W> {
+    pub params: [Param<W>; PARAMS],
 }
 
+impl<W: Copy> Ladder<W> {
+    /// Defend harder. Returns whether anything moved.
+    ///
+    /// `false` only at the very top, where every register is at its maximum and
+    /// there is nothing left to try.
+    pub fn up(&mut self) -> bool {
+        for index in (0..PARAMS).rev() {
+            if self.params[index].up() {
+                // The carry, and the reason this shape exists: everything less
+                // significant starts its sweep again, so the registers that can
+                // reject lightning are handed back each time a more significant
+                // one takes the strain.
+                for lower in index + 1..PARAMS {
+                    self.params[lower].reset();
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Relax. Returns whether anything moved.
+    ///
+    /// Walks back the least significant register that is not already at its
+    /// minimum — the noise floor first, since that is what the machine reached
+    /// for first. Deliberately *not* the inverse of [`Ladder::up`]: a true borrow
+    /// would relax one register by winding every cheaper one to its maximum,
+    /// which is the opposite of relaxing.
+    pub fn down(&mut self) -> bool {
+        for index in (0..PARAMS).rev() {
+            if self.params[index].down() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Back to the most sensitive position.
+    pub fn reset(&mut self) {
+        for param in self.params.iter_mut() {
+            param.reset();
+        }
+    }
+
+    /// Total positions the machine can occupy — the product of every span.
+    ///
+    /// Computed rather than written down, so changing a ceiling or adding a
+    /// register cannot leave a stale constant behind.
+    pub fn total(&self) -> u32 {
+        self.params.iter().map(|p| p.span()).product()
+    }
+
+    /// Where the machine sits in its whole space, for the gauge.
+    ///
+    /// The odometer read as one number — most significant digit first, each
+    /// weighted by the spans below it. Monotonic with [`Ladder::up`], which is
+    /// what makes it meaningful as a bar.
+    pub fn position(&self) -> u32 {
+        let mut position = 0u32;
+        for param in self.params.iter() {
+            position = position * param.span() + (param.cur - param.min) as u32;
+        }
+        position
+    }
+
+    /// Which register is currently doing the work, for the console.
+    pub fn rung(&self) -> &'static str {
+        // The least significant register that is off its minimum is the one
+        // being leaned on; if none is, the cheapest is where the machine starts.
+        for param in self.params.iter().rev() {
+            if param.cur > param.min {
+                return param.name;
+            }
+        }
+        self.params[PARAMS - 1].name
+    }
+}

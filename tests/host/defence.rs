@@ -1,9 +1,10 @@
 //! Host checks for §4.2's noise-rejection ladder.
 //!
-//! Worth testing because the ladder decides how deaf the sensor is, and the
-//! interesting cases are its two ends: that level 0 is the chip's own defaults,
-//! and that no level can ever reach past the noise floor into the two knobs
-//! that reject lightning rather than noise.
+//! Worth testing because the machine decides how deaf the sensor is, and its
+//! *ordering* is the whole design: the cheapest register must move on every
+//! step and the most destructive one only when everything else is exhausted.
+//! An ordering mistake would be invisible by inspection and would suppress
+//! detection in exactly the conditions the device exists for.
 //!
 //! **This compiles the real `src/defence.rs`**, included by path — not a copy
 //! of it. Keeping that module free of ESP-IDF imports is what makes this
@@ -30,59 +31,80 @@ fn check(name: &str, ok: bool) {
     println!("  {:<4} {name}", if ok { "ok" } else { "FAIL" });
 }
 
+/// The real machine's shape, with a placeholder writer.
+///
+/// The writer is a type parameter precisely so this can be built without
+/// ESP-IDF — `()` carries no behaviour and the checks below are about the carry
+/// logic, not about programming a chip. The ranges are kept in step with
+/// `session::new_ladder` by hand; a divergence would show up as a failing count.
+fn ladder() -> Ladder<()> {
+    Ladder {
+        params: [
+            Param { name: "min strikes", min: 0, cur: 0, max: 3, write: () },
+            Param { name: "spike rejection", min: 0, cur: 0, max: 11, write: () },
+            Param { name: "watchdog", min: 0, cur: 0, max: 15, write: () },
+            Param { name: "noise floor", min: 0, cur: 0, max: 7, write: () },
+        ],
+    }
+}
+
 fn main() {
     println!("defence:");
 
-    check("level 0 is every knob at its base", settings(0) == Settings {
-        noise_floor: NOISE_FLOOR_BASE, watchdog: WATCHDOG_BASE, spike_reject: SPIKE_REJECT_BASE });
+    let mut l = ladder();
+    check("starts at every minimum", l.params.iter().all(|p| p.cur == p.min));
+    check("position 0", l.position() == 0);
+    check("total is the product of the spans", l.total() == 4 * 12 * 16 * 8);
 
-    // --- the whole ladder is the noise floor ------------------------------
-    check("level 7 tops out the noise floor", settings(7).noise_floor == NOISE_FLOOR_MAX);
-    check("...without touching the watchdog", settings(7).watchdog == WATCHDOG_BASE);
-    check("...or spike rejection", settings(7).spike_reject == SPIKE_REJECT_BASE);
-
-    // --- the cap, which is what this file now exists for ------------------
+    // --- the ordering, which is the design --------------------------------
     //
-    // WDTH and SREJ reject lightning, not noise -- see the module comment. A
-    // ladder that can reach them is the defect these three checks exist to
-    // catch, so they assert the *absence* of the old rungs 8..31.
-    check("MAX_LEVEL is 7 -- the noise floor's own range", MAX_LEVEL == 7);
-    check("no level ever moves the watchdog off its default",
-        (0..=255u8).all(|l| settings(l).watchdog == WATCHDOG_BASE));
-    check("no level ever moves spike rejection off its default",
-        (0..=255u8).all(|l| settings(l).spike_reject == SPIKE_REJECT_BASE));
-    check("past the top saturates rather than wrapping", settings(255) == settings(MAX_LEVEL));
+    // The noise floor is the only register that cannot reject a strike, so it
+    // must move on every step. `min strikes` is the most destructive and must
+    // not move until everything else is exhausted.
+    l.up();
+    check("the first step moves the noise floor", l.params[3].cur == 1);
+    check("...and nothing else", l.params[0].cur == 0 && l.params[1].cur == 0 && l.params[2].cur == 0);
 
-    // --- properties that must hold across the whole ladder ----------------
-    let mut monotonic = true;
-    let mut in_range = true;
-    for level in 0..=MAX_LEVEL {
-        let s = settings(level);
-        if level > 0 {
-            let previous = settings(level - 1);
-            // Exactly one knob moves per rung, and only ever upward.
-            let moved = (s.noise_floor != previous.noise_floor) as u8
-                + (s.watchdog != previous.watchdog) as u8
-                + (s.spike_reject != previous.spike_reject) as u8;
-            if moved != 1
-                || s.noise_floor < previous.noise_floor
-                || s.watchdog < previous.watchdog
-                || s.spike_reject < previous.spike_reject
-            {
-                monotonic = false;
-            }
-        }
-        // Field widths: NF_LEV is 3 bits, WDTH and SREJ are 4.
-        if s.noise_floor > 7 || s.watchdog > 15 || s.spike_reject > 15 {
-            in_range = false;
-        }
-    }
-    check("every rung moves exactly one knob, upward only", monotonic);
-    check("no setting ever exceeds its register field", in_range);
+    let mut l = ladder();
+    for _ in 0..7 { l.up(); }
+    check("seven steps top out the noise floor", l.params[3].cur == 7);
+    l.up();
+    check("the eighth carries into the watchdog", l.params[2].cur == 1);
+    check("...and hands the noise floor back", l.params[3].cur == 0);
 
-    // --- the rung labels --------------------------------------------------
-    check("every rung is a noise-floor rung",
-        (0..=255u8).all(|l| rung(l) == "noise floor"));
+    let mut l = ladder();
+    let mut steps = 0u32;
+    while l.params[0].cur == 0 && l.up() { steps += 1; }
+    check("min strikes waits for the other three to be exhausted", steps == 8 * 16 * 12);
+
+    // --- exhaustion and relaxation ----------------------------------------
+    let mut l = ladder();
+    let total = l.total();
+    let mut count = 0u32;
+    while l.up() { count += 1; }
+    check("up reaches every position exactly once", count == total - 1);
+    check("the top maxes every register", l.params.iter().all(|p| p.cur == p.max));
+    check("up at the top reports no movement", !l.up());
+
+    // Down walks back the cheapest register first -- never a reverse carry,
+    // which would relax one register by maxing every cheaper one.
+    let mut l = ladder();
+    l.up();
+    l.up();
+    l.down();
+    check("down retreats the noise floor", l.params[3].cur == 1);
+    check("down at the bottom reports no movement", !ladder().down());
+
+    let mut l = ladder();
+    for _ in 0..20 { l.up(); }
+    l.reset();
+    check("reset returns to full sensitivity", l.position() == 0);
+
+    // --- a single register in isolation ------------------------------------
+    let mut p = Param { name: "x", min: 0, cur: 0, max: 2, write: () };
+    check("param up stops at max", p.up() && p.up() && !p.up() && p.cur == 2);
+    check("param down stops at min", p.down() && p.down() && !p.down() && p.cur == 0);
+    check("span counts both ends", p.span() == 3);
 
     println!(
         "\n{} passed, {} failed",
