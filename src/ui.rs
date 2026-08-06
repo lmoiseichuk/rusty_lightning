@@ -142,6 +142,9 @@ pub struct Status<'a> {
     /// §4.2's defence level and its ceiling.
     pub defence_level: u8,
     pub defence_max: u8,
+    /// Noise interrupts in the last completed minute — a *measurement*, where
+    /// `defence_level` beside it is a setting. See `session::Totals`.
+    pub noise_per_min: u32,
     pub strikes_total: u32,
     /// The most recent strike: distance, intensity, and when — if there has
     /// been one, and if the clock was set at the time.
@@ -230,13 +233,31 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     )
     .draw(frame);
 
-    // The gauge sits on this row rather than in the middle of the screen: it is
-    // a setting, not a measurement, and it belongs beside the other one.
+    // The gauge sits on this row rather than in the middle of the screen: the
+    // ladder it draws is a setting, and it belongs beside the other one.
+    //
+    // It carries both halves of the noise picture, which is why there is no
+    // second field next to it: the **bar** is what the receiver has decided to
+    // do, and the **caption** is what the band is actually doing. Neither
+    // substitutes for the other -- the level saturates and the rate does not,
+    // and the rate cannot be inferred from a level that is frozen under
+    // `sensitive on`.
+    let jammed = s.noise_per_min >= crate::session::NOISE_JAMMED_PER_MIN;
+    let warning = match (jammed, s.battery_flow) {
+        // Charging named explicitly: it is the source that gets switched on
+        // casually, and the one that silently costs the device its whole
+        // purpose while looking like ordinary housekeeping.
+        (true, crate::battery::Flow::Charging) => Some("JAMMED -- UNPLUG USB"),
+        (true, _) => Some("JAMMED -- FIND THE SOURCE"),
+        (false, _) => None,
+    };
     gauge(
         frame,
         Point::new(180, 62),
         s.defence_level as u32,
         s.defence_max as u32,
+        s.noise_per_min,
+        warning,
     );
 
     // Disturbers for this session. It belongs beside the noise gauge because it
@@ -361,7 +382,14 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
 /// Deliberately a bar rather than a number: the question these answer is "how
 /// close to the limit", which a filled proportion says at a glance and a
 /// figure makes you compute.
-fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
+fn gauge(
+    frame: &mut Display7in5,
+    at: Point,
+    value: u32,
+    max: u32,
+    per_min: u32,
+    warning: Option<&str>,
+) {
     const BAR_WIDTH: u32 = 200;
     const BAR_HEIGHT: u32 = 22;
 
@@ -401,14 +429,22 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
         .draw(frame);
     }
 
-    // The number alone. The rung name -- "noise floor", "watchdog", "spike
-    // rejection" -- is which register the ladder happens to be working on, and
-    // that is a fact about the implementation rather than about the weather. It
-    // stays on the console, where it is a debugging aid.
+    // **The caption is the measurement, the bar is the setting.** It used to
+    // read `value/max` -- the ladder's own level twice over, once as a bar and
+    // once as digits -- which spent the most legible part of the widget saying
+    // nothing the bar had not already said.
+    //
+    // The rate is what a person can act on. It also has no ceiling, where the
+    // level saturates at `max` and then stops moving however much worse the
+    // band gets; a screen reading `0/7` beside `Disturbers: 0` looked perfectly
+    // healthy while the chip was taking eight noise interrupts a second.
+    //
+    // The rung name -- "noise floor", "watchdog", "spike rejection" -- stays on
+    // the console. That is which register the ladder happens to be working on,
+    // a fact about the implementation rather than about the weather.
     let mut caption = Text32::new();
-    let _ = write!(caption, "{}", value);
-    let _ = caption.push('/');
-    let _ = write!(caption, "{}", max);
+    let _ = write!(caption, "{}", per_min);
+    let _ = caption.push_str("/min");
     let _ = Text::with_baseline(
         &caption,
         Point::new(bar_x + BAR_WIDTH as i32 + GAP, at.y - 14),
@@ -416,6 +452,20 @@ fn gauge(frame: &mut Display7in5, at: Point, value: u32, max: u32) {
         Baseline::Top,
     )
     .draw(frame);
+
+    // What to do about it, under the bar it belongs to. A rate without a remedy
+    // is a number to worry about rather than one to act on, and both known
+    // sources of a jammed band on this device are things the person standing in
+    // front of it can change.
+    if let Some(warning) = warning {
+        let _ = Text::with_baseline(
+            warning,
+            Point::new(bar_x, at.y + 8),
+            MonoTextStyle::new(&FONT_6X10, INK),
+            Baseline::Top,
+        )
+        .draw(frame);
+    }
 }
 
 /// Append a decimal `u32` without `format!`.

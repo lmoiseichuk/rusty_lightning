@@ -710,6 +710,12 @@ fn listen(
 
         report(&batch);
 
+        // Roll the noise-rate window. Here rather than inside `collect`, because
+        // a minute with *no* interrupts at all is the most important reading
+        // this counter takes -- it is what says the band went quiet -- and
+        // `collect` only runs when something arrived.
+        totals.tick_noise_window(now_ms() / 1000);
+
         // Keep the rings' idea of "now" current even in a lull, so a chart drawn
         // during quiet weather shows the quiet rather than the last storm shoved
         // against its right edge.
@@ -1182,6 +1188,7 @@ fn listen(
                         irq_confirmed,
                         defence_level: level,
                         defence_max: defence::MAX_LEVEL,
+                        noise_per_min: totals.noise_last_minute,
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,
                         disturbers_total: totals.disturbers,
