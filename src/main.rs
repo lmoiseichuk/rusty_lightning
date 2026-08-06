@@ -843,8 +843,7 @@ fn listen(
                     chart_period: &mut chart_period,
                     reading,
                     range,
-                    level: ladder.position(),
-                    defence_max: ladder.total() - 1,
+                    level: ladder.defence_percent(),
                     die_temperature,
                     antenna_khz,
                     irq_confirmed,
@@ -1034,6 +1033,26 @@ fn listen(
                     }
                     Err(e) => println!("regs: read failed -- {e}"),
                 }
+            }
+
+            // The sweep owns the loop while it runs: it needs the sensor, the
+            // bus and the notification, and it deliberately holds bad settings
+            // between probes.
+            if effects.calibrate {
+                session::calibrate(sensor, i2c, notification, &mut ladder);
+                match settings::store_defence_point(ladder.point()) {
+                    Ok(()) => {
+                        stored_point = ladder.point();
+                        last_point_save_s = now_ms() / 1000;
+                        println!("cal:  point stored");
+                    }
+                    Err(e) => println!("cal:  point NOT stored -- {e}"),
+                }
+                // Judge the settled point on a fresh window rather than on
+                // whatever the sweep left in the counters.
+                window_events = 0;
+                window_disturbers = 0;
+                tune_window_ms = now_ms();
             }
 
             // Applied here rather than in the command handler because `Ctx` has
@@ -1324,8 +1343,8 @@ fn listen(
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
                         irq_confirmed,
-                        defence_level: ladder.position(),
-                        defence_max: ladder.total() - 1,
+                        defence_level: ladder.defence_percent(),
+                        defence_max: 100,
                         noise_per_min: totals.noise_per_min,
                         strikes_total: totals.strikes,
                         last_strike: totals.last_strike,

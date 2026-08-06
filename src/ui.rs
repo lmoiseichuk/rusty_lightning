@@ -139,7 +139,11 @@ pub struct Status<'a> {
     /// Measured antenna resonance, kHz — from the LCO self-test.
     pub antenna_khz: u32,
     pub irq_confirmed: bool,
-    /// §4.2's position in the tuning state machine, and its ceiling.
+    /// How hard §4.2 is defending, 0–100, and the ceiling (always 100).
+    ///
+    /// A percentage rather than a position: the state machine has hundreds of
+    /// combinations, so an index is unreadable as a number and invisible as a
+    /// bar.
     pub defence_level: u32,
     pub defence_max: u32,
     /// Noise interrupts in the last completed minute — a *measurement*, where

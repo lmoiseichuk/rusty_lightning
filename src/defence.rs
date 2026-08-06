@@ -331,6 +331,22 @@ impl<W: Copy> Ladder<W> {
         position
     }
 
+    /// How hard the machine is defending, 0–100.
+    ///
+    /// **The inverse of [`Ladder::position`], because the params are in
+    /// sensitivity units.** `position` counts upward toward *more sensitive*,
+    /// so a freshly reset machine sits at the top of its range — and a gauge
+    /// wired straight to it reads 100 % while the device is at its most
+    /// receptive, which is the opposite of what a bar labelled "Noise" means to
+    /// anyone reading it.
+    pub fn defence_percent(&self) -> u32 {
+        let top = self.total().saturating_sub(1);
+        if top == 0 {
+            return 0;
+        }
+        100 - (self.position() * 100 / top)
+    }
+
     /// Which register the cursor is on, for the console.
     pub fn rung(&self) -> &'static str {
         self.params[self.cursor].name

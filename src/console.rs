@@ -75,6 +75,8 @@ pub enum Command {
     Regs,
     /// `sensitive on|off` — force every rejection knob to its minimum and
     /// freeze the §4.2 auto-tune there.
+    /// Search every parameter for the quietest combination (§4.2).
+    Calibrate,
     Sensitive(bool),
     /// Typed, but not understood. Still counts as activity.
     Unknown,
@@ -200,6 +202,7 @@ fn parse(line: &str) -> Command {
             _ => Command::Unknown,
         },
 
+        "calibrate" | "cal" => Command::Calibrate,
         "sensitive" | "sens" => match arg {
             Some("on") => Command::Sensitive(true),
             Some("off") => Command::Sensitive(false),
@@ -256,6 +259,7 @@ pub fn print_help() {
     println!("diagnostics:");
     println!("  regs                  the sensor's registers, off the chip and decoded");
     println!("  battery               level, voltage, charging/idle/discharging, raw gauge");
+    println!("  calibrate             search every parameter for the quietest combination");
     println!("  sensitive on|off      every knob below the ladder's floor, ladder frozen");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");

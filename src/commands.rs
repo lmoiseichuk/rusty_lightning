@@ -31,9 +31,8 @@ pub struct Ctx<'a> {
     pub chart_period: &'a mut ui::ChartPeriod,
     pub reading: Option<battery::Reading>,
     pub range: (u16, u16),
-    /// Position in the tuning state machine (§4.2), and its ceiling.
+    /// How hard the tuning state machine is defending, 0–100 (§4.2).
     pub level: u32,
-    pub defence_max: u32,
     pub die_temperature: Option<&'a system::DieTemperature>,
     pub antenna_khz: u32,
     pub irq_confirmed: bool,
@@ -53,6 +52,10 @@ pub struct Ctx<'a> {
 pub struct Effects {
     pub clock_saved: bool,
     pub redraw_now: bool,
+    /// Set by `calibrate`. Applied by the caller for the same reason
+    /// `sensitivity` is: the sweep needs the sensor, the bus and the IRQ
+    /// notification, and `Ctx` deliberately has none of them.
+    pub calibrate: bool,
     /// `Some(on)` when `sensitive` was used. Applied by the caller rather than
     /// here, because `Ctx` deliberately has no sensor or bus — every other
     /// console command is pure, and one hardware command should not change that
@@ -241,8 +244,8 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 // register the machine is leaning on is a fact about the
                 // implementation rather than about the weather.
                 println!(
-                    "status: defence {}/{} -- `regs` for the register values",
-                    ctx.level, ctx.defence_max
+                    "status: defending {} % -- `regs` for the register values",
+                    ctx.level
                 );
             }
             println!(
@@ -271,6 +274,13 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             Some(log) => log::dump_csv(log),
             None => println!("dump: no log -- the storage partition is missing"),
         },
+        Command::Calibrate => {
+            // Acknowledged here so the reply lands before the sweep starts
+            // holding the loop for minutes.
+            println!("cal:  queued -- the sensor is deliberately mis-set while");
+            println!("cal:  it searches, and this takes a while");
+            effects.calibrate = true;
+        }
         Command::Sensitive(on) => {
             effects.sensitivity = Some(on);
             effects.redraw_now = true;
