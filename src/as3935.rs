@@ -77,6 +77,8 @@ const MASK_POWER_DOWN: u8 = 0x01;
 const MASK_AFE_GAIN: u8 = 0x3E;
 const MASK_NOISE_FLOOR: u8 = 0x70;
 const MASK_WATCHDOG: u8 = 0x0F;
+/// Only written by `set_spike_rejection`, which nothing calls -- see there.
+#[allow(dead_code)]
 const MASK_SPIKE_REJECT: u8 = 0x0F;
 const MASK_MIN_STRIKES: u8 = 0x30;
 const MASK_CLEAR_STATS: u8 = 0x40;
@@ -364,6 +366,14 @@ impl As3935 {
         self.modify(i2c, REG_CONFIG1, MASK_NOISE_FLOOR, (level & 0x07) << 4)
     }
 
+    /// The chip's current noise floor.
+    ///
+    /// **Uncalled since the ladder began enforcing its own floor at boot**, so
+    /// the firmware always knows the value without asking. Kept because it is
+    /// the only way to check the chip against what we believe about it, and a
+    /// read-modify-write over a marginal bus is exactly the thing that can leave
+    /// the two disagreeing.
+    #[allow(dead_code)]
     pub fn noise_floor(&self, i2c: &mut I2cDriver<'_>) -> Result<u8, EspError> {
         Ok((self.read(i2c, REG_CONFIG1)? & MASK_NOISE_FLOOR) >> 4)
     }
@@ -375,6 +385,12 @@ impl As3935 {
     }
 
     /// Spike rejection, 0–15. Same trade as the watchdog, on a different stage.
+    /// **Deliberately uncalled.** The reference never writes `SREJ`, and forcing
+    /// it from its power-on 2 to 0 was one of the changes that left the chip
+    /// unable to validate a strike. Kept because it is a complete, correct
+    /// operation and the datasheet exposes the field — but nothing should call
+    /// it without evidence from a storm.
+    #[allow(dead_code)]
     pub fn set_spike_rejection(&self, i2c: &mut I2cDriver<'_>, level: u8) -> Result<(), EspError> {
         self.modify(i2c, REG_CONFIG2, MASK_SPIKE_REJECT, level & 0x0F)
     }
@@ -391,6 +407,10 @@ impl As3935 {
     /// The cost is that the first four strikes of a real storm are silent —
     /// unacceptable for a device whose job is early warning, which is why this
     /// is exposed but left at 1.
+    /// **Uncalled**: the chip powers up at one strike, so writing it asserts a
+    /// preference the datasheet already guarantees. `min_strikes` reads it back
+    /// instead. Kept for the day something wants the pattern-matching behaviour.
+    #[allow(dead_code)]
     pub fn set_min_strikes(&self, i2c: &mut I2cDriver<'_>, strikes: u8) -> Result<u8, EspError> {
         let (bits, actual) = match strikes {
             0..=4 => (0x00, 1),
@@ -400,6 +420,22 @@ impl As3935 {
         };
         self.modify(i2c, REG_CONFIG2, MASK_MIN_STRIKES, bits)?;
         Ok(actual)
+    }
+
+    /// How many strikes the chip will wait for before reporting, read back.
+    ///
+    /// A reader rather than a writer, because the reference never writes this
+    /// and the power-on value is already 1 — so the honest thing is to report
+    /// what the chip is doing rather than to assert a preference it already
+    /// holds. See the init in `main` for why the write was removed.
+    pub fn min_strikes(&self, i2c: &mut I2cDriver<'_>) -> Result<u8, EspError> {
+        let bits = self.read(i2c, REG_CONFIG2)? & MASK_MIN_STRIKES;
+        Ok(match bits {
+            0x00 => 1,
+            0x10 => 5,
+            0x20 => 9,
+            _ => 16,
+        })
     }
 
     /// Discard the accumulated distance estimate.

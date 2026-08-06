@@ -26,6 +26,12 @@ impl Batch {
         self.disturbers > 0 || self.noise > 0
     }
 
+    /// **Uncalled since the ladder moved to a once-a-minute decision.** It
+    /// answered "did this one-second batch hear nothing", which was the trigger
+    /// for the old per-batch decay; the minute window asks the same question of
+    /// a span long enough for the answer to mean something. Kept as the natural
+    /// complement to `heard_interference`.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.strikes == 0 && !self.heard_interference() && self.unknown == 0
     }
@@ -241,13 +247,15 @@ pub fn report(batch: &Batch) {
 pub fn tune(sensor: &As3935, i2c: &mut I2cDriver<'_>, level: u8, direction: &str) {
     let settings = defence::settings(level);
     match apply_defence(sensor, i2c, level) {
+        // Only `nf` is reported, because only `nf` is written. Printing the
+        // watchdog and spike-rejection values from `settings` used to imply
+        // they had just been applied, which stopped being true when this became
+        // a one-register tune -- and a log line asserting a register write that
+        // did not happen is worse than no line at all.
         Ok(()) => println!(
-            "tune: {direction} to {level}/{} -- {} (nf {}, wdth {}, srej {})",
+            "tune: {direction} to {level}/{} -- noise floor {}",
             defence::MAX_LEVEL,
-            defence::rung(level),
-            settings.noise_floor,
-            settings.watchdog,
-            settings.spike_reject
+            settings.noise_floor
         ),
         Err(e) => println!("tune: could not move to level {level} -- {e}"),
     }
@@ -293,10 +301,21 @@ pub fn apply_defence(
     i2c: &mut I2cDriver<'_>,
     level: u8,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
+    // **`NF_LEV` only, and nothing else is written — ever.**
+    //
+    // The working reference tunes exactly one register at runtime and leaves
+    // `WDTH`, `SREJ` and `MIN_NUM_LIGH` at their power-on defaults for the whole
+    // of its life. It never writes them, not even once at start-up. This used to
+    // write all three on every rung, which meant a device that had merely
+    // changed noise level had also silently reconfigured the two registers that
+    // decide what counts as lightning.
+    //
+    // `SREJ` is the one that mattered: the chip powers up at **2** and this
+    // forced it to **0** on the first tune. Lower is not safer here — spike
+    // rejection is part of the validation chain, not a sensitivity knob, and the
+    // reference's whole detection record was made at the default.
     let settings = defence::settings(level);
-    sensor.set_noise_floor(i2c, settings.noise_floor)?;
-    sensor.set_watchdog_threshold(i2c, settings.watchdog)?;
-    sensor.set_spike_rejection(i2c, settings.spike_reject)
+    sensor.set_noise_floor(i2c, settings.noise_floor)
 }
 
 
@@ -316,9 +335,16 @@ pub fn force_max_sensitivity(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
-    sensor.set_noise_floor(i2c, 0)?;
-    sensor.set_watchdog_threshold(i2c, 0)?;
-    sensor.set_spike_rejection(i2c, 0)?;
-    sensor.set_min_strikes(i2c, 1)?;
-    Ok(())
+    // `NF_LEV` only, for the same reason `apply_defence` writes only that: the
+    // other two registers have never been moved by a configuration that
+    // detected a real strike, and this command exists to be *more* sensitive,
+    // not to enter untested territory.
+    //
+    // **It also freezes the ladder, which is the dangerous half.** The AS3935
+    // cannot validate lightning while it is reporting `NoiseTooHigh`, and
+    // climbing `NF_LEV` until the noise stops is the entire mechanism that gets
+    // it out of that state. Pinning the floor at 0 in a noisy band therefore
+    // guarantees the chip never detects anything — which is exactly what it did
+    // here, through a storm close enough to shake doors.
+    sensor.set_noise_floor(i2c, 0)
 }

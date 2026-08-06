@@ -115,3 +115,4 @@ pub fn store_battery_drain(drain: crate::battery::Drain) -> Result<(), EspError>
     nvs.set_i32(KEY_DRAIN_SECONDS, drain.seconds as i32)?;
     nvs.commit()
 }
+

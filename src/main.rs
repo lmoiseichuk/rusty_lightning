@@ -146,8 +146,19 @@ const TUNING_CAPS_PF: u8 = 120;
 /// How long to collect events before summarising them (§4.2's "~1 s batch").
 const BATCH_MS: u32 = 1000;
 
-/// Quiet time before the noise floor relaxes by one (§4.2).
-const NOISE_DECAY_S: u32 = 60;
+/// How often the noise floor is reconsidered, in seconds (§4.2).
+///
+/// **One decision a minute, up or down**, replacing a rule that climbed +1 for
+/// every one-second batch with any activity and only relaxed after 60 s of
+/// total silence. That was asymmetric by a factor of sixty: seven rungs could be
+/// climbed in seven seconds and each one cost a minute to give back, so a single
+/// noisy minute left the receiver desensitised for the following seven.
+///
+/// A minute is also the shortest window that means anything. The question the
+/// ladder is really asking — "is this band persistently noisy?" — cannot be
+/// answered by one second of evidence, and answering it anyway is what made the
+/// level oscillate 0 -> 1 -> 0 in ninety seconds in a marginal room.
+const NOISE_TUNE_INTERVAL_S: u32 = 60;
 
 /// How often to measure the noise floor by opening the watchdog gate, and for
 /// how long.
@@ -364,10 +375,15 @@ fn main() {
         }
     };
 
-    if let Err(e) = configure(&sensor, &mut i2c, location) {
-        println!("FATAL: sensor configuration failed -- {e}");
-        return;
-    }
+    // The chip's own starting noise floor, which the ladder continues from
+    // rather than overwriting. See `configure`.
+    let start_level = match configure(&sensor, &mut i2c, location) {
+        Ok(level) => level,
+        Err(e) => {
+            println!("FATAL: sensor configuration failed -- {e}");
+            return;
+        }
+    };
 
     // --- the IRQ ---------------------------------------------------------
     //
@@ -489,6 +505,7 @@ fn main() {
         gauge.as_ref(),
         die_temperature.as_ref(),
         strike_log.as_mut(),
+        start_level,
     );
 }
 
@@ -497,7 +514,7 @@ fn configure(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     location: Location,
-) -> Result<(), esp_idf_hal::sys::EspError> {
+) -> Result<u8, esp_idf_hal::sys::EspError> {
     sensor.power_up(i2c)?;
     sensor.set_location(i2c, location)?;
 
@@ -509,34 +526,61 @@ fn configure(
     FreeRtos::delay_ms(500);
 
     sensor.set_tuning_caps(i2c, TUNING_CAPS_PF)?;
-    session::apply_defence(sensor, i2c, 0)?;
 
-    // Explicit rather than relying on the reset default. One strike reports
-    // immediately; the alternatives make the sensor wait for a pattern before
-    // saying anything, and the first four strikes of a real storm are exactly
-    // the ones an early-warning device cannot afford to sit on.
-    let min_strikes = sensor.set_min_strikes(i2c, 1)?;
+    // **And that is the end of the init, deliberately.**
+    //
+    // The reference's whole configuration is the six calls above — power up,
+    // indoor/outdoor, disturbers on, IRQ source, 500 ms, tuning caps. It never
+    // writes `NF_LEV`, `WDTH`, `SREJ` or `MIN_NUM_LIGH` at start-up, and never
+    // writes the last three at all. That is the configuration which has actually
+    // detected lightning on this hardware.
+    //
+    // Two calls used to live here and have been removed:
+    //
+    // * `apply_defence(0)`, which wrote all three registers and in particular
+    //   forced **`SREJ` from its power-on 2 down to 0**. Spike rejection is part
+    //   of the validation chain rather than a sensitivity knob, so "lower is
+    //   more sensitive" was the wrong model — and no configuration that ever
+    //   detected a strike had it anywhere but the default.
+    // * `set_min_strikes(1)`, which is a no-op against a chip that powers up at
+    //   one strike, and was therefore paying a bus transaction to state a
+    //   preference the datasheet already guarantees.
+    //
+    // What the runtime still does is exactly what the reference does: walk
+    // `NF_LEV` between 0 and 7 and touch nothing else (§4.2).
+    let min_strikes = sensor.min_strikes(i2c)?;
 
-    // Read the noise floor back rather than trusting the write. Every register
-    // access here is a read-modify-write over I2C, and a bus that NACKs
-    // mid-sequence leaves the sensor running settings nobody chose -- which
-    // presents as "the auto-tune does nothing", one of the harder things to
-    // notice from the outside.
-    let readback = sensor.noise_floor(i2c)?;
-    let expected = defence::settings(0).noise_floor;
-    if readback != expected {
-        println!("as:   ⚠ noise floor read back as {readback}, expected {expected}");
-    }
+    // **Every boot starts at the most sensitive noise floor**, written
+    // explicitly so the chip and the ladder's idea of it cannot disagree.
+    //
+    // The chip powers up at `NF_LEV` 2, and leaving it there meant a `level`
+    // variable of 0 describing hardware set to 2 -- so the first "climb" would
+    // have written a *lower* floor than was already in force, making the
+    // receiver more sensitive in response to noise. Reading the chip back would
+    // fix the disagreement; starting from a known floor fixes it *and* makes
+    // every session begin identically, which is worth more on a device whose
+    // whole difficulty has been telling configuration apart from environment.
+    //
+    // Nothing is persisted. The ladder re-finds the room's noise floor within a
+    // few minutes, so storing it would buy a few minutes of accuracy at the cost
+    // of a flash write on a value that changes with the weather.
+    //
+    // `NF_LEV` is the one register the reference tunes, so writing it here is
+    // its first tweak brought forward, not a new deviation -- unlike `WDTH` and
+    // `SREJ`, which stay untouched at their power-on defaults.
+    let level = 0;
+    session::apply_defence(sensor, i2c, level)?;
 
     println!(
-        "as:   {}, {} pF, defence 0/{} ({}), report after {} strike(s)",
+        "as:   {}, {} pF, defence {}/{} ({}), report after {} strike(s)",
         location.label(),
         TUNING_CAPS_PF,
+        level,
         defence::MAX_LEVEL,
-        defence::rung(0),
+        defence::rung(level),
         min_strikes
     );
-    Ok(())
+    Ok(level)
 }
 
 /// The event loop: batch what arrives, then tune once per batch (§4.2).
@@ -553,8 +597,12 @@ fn listen(
     gauge: Option<&battery::Max17048>,
     die_temperature: Option<&system::DieTemperature>,
     mut strike_log: Option<&mut log::Log>,
+    start_level: u8,
 ) {
-    let mut level: u8 = 0;
+    let mut level: u8 = start_level;
+    // Whether the minute now being judged heard anything, and when it started.
+    let mut heard_this_minute = false;
+    let mut tune_window_ms: u32 = now_ms();
     // When the running noise probe ends, and when the last one finished.
     //
     // `None` for "never probed" rather than a zero sentinel, so the first probe
@@ -569,7 +617,6 @@ fn listen(
     // rejection disabled would be a trap. (`///` here would be a doc comment on
     // a local, which Rust warns about: locals have no docs to attach to.)
     let mut max_sensitivity = false;
-    let mut quiet_ms: u32 = 0;
     let mut last_button_ms: u32 = 0;
     // Set by a button press, cleared by the redraw it causes.
     let mut user_acted = false;
@@ -965,7 +1012,11 @@ fn listen(
                     // level happened to be: the auto-tune was frozen, so `level`
                     // is stale by however long the override was on.
                     level = 0;
-                    quiet_ms = 0;
+                    // Restart the minute too, so the first decision after the
+                    // override gets a full window of evidence rather than
+                    // whatever fraction of one was left.
+                    heard_this_minute = false;
+                    tune_window_ms = now_ms();
                     session::apply_defence(sensor, i2c, 0)
                 };
                 match outcome {
@@ -1162,24 +1213,36 @@ fn listen(
             }
         }
 
-        // The ladder must not react to a probe: the events are ones we asked
+        // Remember whether *this minute* has heard anything. Accumulated per
+        // batch, decided once a minute -- the two are deliberately separate, so
+        // one noisy second and sixty noisy seconds move the level by the same
+        // single rung.
+        if batch.heard_interference() {
+            heard_this_minute = true;
+        }
+
+        // The ladder must not react to a probe: those events are ones we asked
         // for by opening the gate, and letting them climb the level would turn a
         // measurement into a change of state.
         if max_sensitivity || probe_until_ms.is_some() {
             // nothing to do -- the knobs are held where `force_max_sensitivity`
             // or the probe put them.
-        } else if batch.heard_interference() {
-            quiet_ms = 0;
-            if level < defence::MAX_LEVEL {
-                level += 1;
-                tune(sensor, i2c, level, "up");
+        } else if now_ms().saturating_sub(tune_window_ms) >= NOISE_TUNE_INTERVAL_S * 1000 {
+            tune_window_ms = now_ms();
+            let previous = level;
+            if heard_this_minute {
+                level = level.saturating_add(1).min(defence::MAX_LEVEL);
+            } else {
+                level = level.saturating_sub(1);
             }
-        } else if batch.is_empty() {
-            quiet_ms += BATCH_MS;
-            if quiet_ms >= NOISE_DECAY_S * 1000 && level > 0 {
-                quiet_ms = 0;
-                level -= 1;
-                tune(sensor, i2c, level, "down");
+            heard_this_minute = false;
+
+            // Only on a real move. At the ends of the range the decision is
+            // taken every minute and changes nothing, and a tune line every
+            // minute saying the level is still 0 is how a console becomes
+            // unreadable.
+            if level != previous {
+                tune(sensor, i2c, level, if level > previous { "up" } else { "down" });
             }
         }
 

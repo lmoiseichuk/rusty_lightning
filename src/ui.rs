@@ -256,8 +256,30 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
         Point::new(180, 62),
         s.defence_level as u32,
         s.defence_max as u32,
-        s.noise_per_min,
         warning,
+    );
+
+    // The measured rate, plain, beside the gauge it explains. No label: the
+    // gauge next to it already says "Noise", and a second word competing with it
+    // was what made this row unreadable.
+    //
+    // It is separate from the bar because the bar is a *setting* -- capped, and
+    // frozen entirely under `sensitive on` -- so it reads 0 in exactly the case
+    // that matters, a wide-open gate drowning in interference. This has no
+    // ceiling: it read ~480/min under the conditions that showed `0/7`.
+    let mut events = Text16::new();
+    let _ = write!(events, "{}/min", s.noise_per_min);
+    // **x=500, and the arithmetic is why.** `gauge` draws "Noise" at x=180, then
+    // a 200 px bar after it, then its `level/max` caption -- which puts the bar
+    // at roughly 230..430 and the caption at ~440. Anything before ~490 lands on
+    // top of one or the other, which is what x=430 did. `Disturbers:` starts at
+    // 600, so this has the gap between them to itself.
+    let _ = FIELD_VALUE.render(
+        events.as_str(),
+        Point::new(500, 62),
+        VerticalPosition::Baseline,
+        FontColor::Transparent(INK),
+        frame,
     );
 
     // Disturbers for this session. It belongs beside the noise gauge because it
@@ -387,7 +409,6 @@ fn gauge(
     at: Point,
     value: u32,
     max: u32,
-    per_min: u32,
     warning: Option<&str>,
 ) {
     const BAR_WIDTH: u32 = 200;
@@ -429,22 +450,19 @@ fn gauge(
         .draw(frame);
     }
 
-    // **The caption is the measurement, the bar is the setting.** It used to
-    // read `value/max` -- the ladder's own level twice over, once as a bar and
-    // once as digits -- which spent the most legible part of the widget saying
-    // nothing the bar had not already said.
+    // The caption is the level, matching the bar. The *rate* is a separate
+    // field to the right -- see `Events` in `status_screen` -- because the two
+    // answer different questions and neither substitutes for the other: the
+    // level says what the receiver has decided to do and saturates at `max`,
+    // while the rate says what the band is doing and has no ceiling.
     //
-    // The rate is what a person can act on. It also has no ceiling, where the
-    // level saturates at `max` and then stops moving however much worse the
-    // band gets; a screen reading `0/7` beside `Disturbers: 0` looked perfectly
-    // healthy while the chip was taking eight noise interrupts a second.
-    //
-    // The rung name -- "noise floor", "watchdog", "spike rejection" -- stays on
-    // the console. That is which register the ladder happens to be working on,
-    // a fact about the implementation rather than about the weather.
+    // The rung name -- "noise floor" -- stays on the console. That is which
+    // register the ladder is working on, a fact about the implementation rather
+    // than about the weather.
     let mut caption = Text32::new();
-    let _ = write!(caption, "{}", per_min);
-    let _ = caption.push_str("/min");
+    let _ = write!(caption, "{}", value);
+    let _ = caption.push('/');
+    let _ = write!(caption, "{}", max);
     let _ = Text::with_baseline(
         &caption,
         Point::new(bar_x + BAR_WIDTH as i32 + GAP, at.y - 14),

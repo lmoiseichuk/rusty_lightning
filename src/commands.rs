@@ -222,20 +222,25 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             let settings = defence::settings(ctx.level);
             println!("status: mode {}", ctx.location.label());
             if ctx.max_sensitivity {
-                // Not just "level 0": the ladder is overridden and frozen, and
-                // `wdth 0` is below anything `settings()` can produce. Printing
-                // the ordinary line here would misreport the hardware.
-                println!("status: MAX SENSITIVITY -- nf 0, wdth 0, srej 0, min strikes 1");
-                println!("status: auto-tune frozen; `sensitive off` restores the ladder");
+                // Not just "level 0": the ladder is overridden and frozen.
+                println!("status: MAX SENSITIVITY -- nf 0, auto-tune frozen");
+                println!("status: `sensitive off` restores the ladder");
             } else {
+                // **Only `nf`, because only `nf` is written.** This used to
+                // print `settings().watchdog` and `.spike_reject` beside it,
+                // which stopped being true the moment the ladder became a
+                // one-register tune: the chip holds those at its power-on
+                // defaults and the line was reporting values nobody had sent it.
+                //
+                // `regs` reads the hardware and is the place to look for what
+                // the chip actually holds -- this line says what the firmware
+                // chose, and the two are different questions.
                 println!(
-                    "status: noise {}/{} ({}) -- nf {}, wdth {}, srej {}",
+                    "status: noise {}/{} ({}) -- nf {}, wdth/srej at chip defaults",
                     ctx.level,
                     defence::MAX_LEVEL,
                     defence::rung(ctx.level),
-                    settings.noise_floor,
-                    settings.watchdog,
-                    settings.spike_reject
+                    settings.noise_floor
                 );
             }
             println!(
