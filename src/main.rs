@@ -166,6 +166,15 @@ const MEASURE_INTERVAL_S: u32 = 10;
 /// What a window's event count is multiplied by to read as events per minute.
 const EVENTS_PER_MIN_SCALE: u32 = 60 / MEASURE_INTERVAL_S;
 
+/// How often the learned tuning point may be written back to NVS.
+///
+/// Fifteen minutes, matching `clock::SAVE_INTERVAL_S` and for the same reason:
+/// the value it protects re-learns in minutes, so a power cut costs almost
+/// nothing while a write every window would cost flash endurance for real. A
+/// settled room stops moving the point at all, and then this writes once and
+/// never again.
+const DEFENCE_SAVE_S: u32 = 15 * 60;
+
 
 
 /// How often to read the reason register with no interrupt having asked for it.
@@ -377,10 +386,13 @@ fn main() {
         }
     };
 
-    if let Err(e) = configure(&sensor, &mut i2c, location) {
-        println!("FATAL: sensor configuration failed -- {e}");
-        return;
-    }
+    let start_point = match configure(&sensor, &mut i2c, location) {
+        Ok(point) => point,
+        Err(e) => {
+            println!("FATAL: sensor configuration failed -- {e}");
+            return;
+        }
+    };
 
     // --- the IRQ ---------------------------------------------------------
     //
@@ -502,6 +514,7 @@ fn main() {
         gauge.as_ref(),
         die_temperature.as_ref(),
         strike_log.as_mut(),
+        start_point,
     );
 }
 
@@ -510,7 +523,7 @@ fn configure(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     location: Location,
-) -> Result<(), esp_idf_hal::sys::EspError> {
+) -> Result<[u8; defence::PARAMS], esp_idf_hal::sys::EspError> {
     sensor.power_up(i2c)?;
     sensor.set_location(i2c, location)?;
 
@@ -564,8 +577,18 @@ fn configure(
     // `NF_LEV` is the one register the reference tunes, so writing it here is
     // its first tweak brought forward, not a new deviation -- unlike `WDTH` and
     // `SREJ`, which stay untouched at their power-on defaults.
-    let ladder = session::new_ladder();
-    session::configure_defaults(sensor, i2c)?;
+    // Resume where this room left off, rather than climbing from zero again.
+    // `restore_point` rounds down onto the stride grid, so a quieter room starts
+    // more sensitive than it ended rather than deaf.
+    let mut ladder = session::new_ladder();
+    match settings::defence_point() {
+        Some(point) => {
+            ladder.restore_point(point);
+            println!("as:   resumed defence point from NVS");
+        }
+        None => println!("as:   no stored defence point -- starting fully sensitive"),
+    }
+    session::apply_defence(sensor, i2c, &ladder)?;
 
     println!(
         "as:   {}, {} pF, defence {}/{} ({}), report after {} strike(s)",
@@ -576,7 +599,7 @@ fn configure(
         ladder.rung(),
         min_strikes
     );
-    Ok(())
+    Ok(ladder.point())
 }
 
 /// The event loop: batch what arrives, then tune once per batch (§4.2).
@@ -593,8 +616,14 @@ fn listen(
     gauge: Option<&battery::Max17048>,
     die_temperature: Option<&system::DieTemperature>,
     mut strike_log: Option<&mut log::Log>,
+    start_point: [u8; defence::PARAMS],
 ) {
     let mut ladder = session::new_ladder();
+    ladder.restore_point(start_point);
+    // What is on flash, so a write only happens when the point has actually
+    // moved away from it.
+    let mut stored_point = start_point;
+    let mut last_point_save_s: u32 = now_ms() / 1000;
     // Counted in the window now being judged, and when it started.
     let mut window_events: u32 = 0;
     let mut window_disturbers: u32 = 0;
@@ -1189,6 +1218,21 @@ fn listen(
             // decision is taken every window and changes nothing.
             if let Some(direction) = moved {
                 tune(sensor, i2c, &ladder, direction);
+            }
+
+            // Persist the point, rarely. The machine can move every window, and
+            // a flash write at that cadence to protect a value that re-learns in
+            // minutes would spend endurance for nothing -- but a settled room
+            // stops moving, so in practice this writes once and then never.
+            let now_s = now_ms() / 1000;
+            if ladder.point() != stored_point
+                && now_s.saturating_sub(last_point_save_s) >= DEFENCE_SAVE_S
+            {
+                last_point_save_s = now_s;
+                match settings::store_defence_point(ladder.point()) {
+                    Ok(()) => stored_point = ladder.point(),
+                    Err(e) => println!("as:   defence point NOT saved -- {e}"),
+                }
             }
         }
 

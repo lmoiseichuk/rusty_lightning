@@ -462,19 +462,7 @@ pub fn new_ladder() -> defence::Ladder<Writer> {
     }
 }
 
-/// Every threshold at its absolute minimum, written once at start-up.
-///
-/// `NF_LEV` 0, `WDTH` 0, `SREJ` 0 — the most sensitive the part can be. The
-/// chip powers up at `NF_LEV` 2 and `SREJ` 2, so none of these are defaults.
-///
-/// The noise floor does not stay here: the ladder walks it from this starting
-/// point (§4.2). `WDTH` and `SREJ` do stay, and are not written again.
-pub fn configure_defaults(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-) -> Result<(), esp_idf_hal::sys::EspError> {
-    apply_defence(sensor, i2c, &new_ladder())
-}
+
 
 
 /// Every rejection knob at its minimum — below the §4.2 ladder's floor.

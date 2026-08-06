@@ -17,6 +17,7 @@ const KEY_BATTERY_MIN: &[u8] = b"bat_min\0";
 const KEY_BATTERY_MAX: &[u8] = b"bat_max\0";
 const KEY_DRAIN_SUM: &[u8] = b"bat_sum\0";
 const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
+const KEY_DEFENCE: &[u8] = b"defence\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -116,3 +117,43 @@ pub fn store_battery_drain(drain: crate::battery::Drain) -> Result<(), EspError>
     nvs.commit()
 }
 
+
+
+/// The learned tuning point — one byte per register, packed into a word.
+///
+/// **Persisted because it describes the room, not the run.** A device that has
+/// spent ten minutes discovering how noisy its corner is should not rediscover
+/// it from scratch on every reset, least of all during the storm that caused the
+/// reset. Restoring lands it near the answer in one step instead of climbing
+/// there a window at a time.
+///
+/// One key rather than four: the registers are only meaningful together, and a
+/// power cut between two of four writes would leave a point that was never
+/// actually in force.
+///
+/// `None` on a device that has never tuned, where the caller starts from full
+/// sensitivity.
+pub fn defence_point() -> Option<[u8; crate::defence::PARAMS]> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    let packed = nvs.get_u32(KEY_DEFENCE)?;
+    let mut point = [0u8; crate::defence::PARAMS];
+    for (index, slot) in point.iter_mut().enumerate() {
+        *slot = (packed >> (index * 8)) as u8;
+    }
+    Some(point)
+}
+
+/// Persist the learned point.
+///
+/// Rate-limiting is the **caller's** job — the machine can move every window,
+/// and writing flash at that cadence to protect a value that re-learns in
+/// minutes would be the wrong trade.
+pub fn store_defence_point(point: [u8; crate::defence::PARAMS]) -> Result<(), EspError> {
+    let mut packed = 0u32;
+    for (index, value) in point.iter().enumerate() {
+        packed |= (*value as u32) << (index * 8);
+    }
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_DEFENCE, packed)?;
+    nvs.commit()
+}

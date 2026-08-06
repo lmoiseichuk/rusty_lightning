@@ -155,6 +155,40 @@ fn main() {
     l.up();
     check("a turn slows the register that turned", l.params[3].step == 1);
 
+    // --- resuming a learned point ------------------------------------------
+    //
+    // Rounded DOWN onto the stride grid, never up: a room that has gone quiet
+    // must not come back deaf, and a point between grid points would leave the
+    // gauge disagreeing with where the strides can go.
+    let mut l = ladder();
+    l.restore_point([1, 7, 9, 5]);
+    check("min strikes rounds down to its stride grid", l.params[0].cur == 0);
+    check("spike rejection rounds down to its stride grid", l.params[1].cur == 4);
+    check("watchdog rounds down to its stride grid", l.params[2].cur == 8);
+    check("the noise floor strides by 1, so it is exact", l.params[3].cur == 5);
+    check("a restored point never rounds up", {
+        let mut ok = true;
+        for (param, want) in l.params.iter().zip([1u8, 7, 9, 5].iter()) {
+            if param.cur > *want { ok = false; }
+        }
+        ok
+    });
+    check("restoring clears the direction memory", l.last_up.is_none());
+    check("restoring resets strides to nominal",
+        l.params.iter().all(|p| p.step == p.base_step));
+
+    let mut l = ladder();
+    l.restore_point([200, 200, 200, 200]);
+    check("out-of-range values clamp instead of refusing to load",
+        l.params.iter().all(|p| p.cur <= p.max));
+
+    let mut l = ladder();
+    for _ in 0..12 { l.up(); }
+    let saved = l.point();
+    let mut fresh = ladder();
+    fresh.restore_point(saved);
+    check("a point saved on the grid round-trips exactly", fresh.point() == saved);
+
     println!(
         "\n{} passed, {} failed",
         PASS.load(Ordering::Relaxed),

@@ -253,6 +253,41 @@ impl<W: Copy> Ladder<W> {
         self.last_up = None;
     }
 
+    /// The current value of every register, most significant first.
+    pub fn point(&self) -> [u8; PARAMS] {
+        let mut out = [0u8; PARAMS];
+        for (slot, param) in out.iter_mut().zip(self.params.iter()) {
+            *slot = param.cur;
+        }
+        out
+    }
+
+    /// Resume from a previously learned point.
+    ///
+    /// **Rounded down onto the nominal stride grid, never up.** Two reasons, and
+    /// both are about being wrong safely:
+    ///
+    /// * The room may have gone quiet since. Restoring a *more* defensive
+    ///   position than the environment needs starts the device deaf, which is
+    ///   the failure this whole subsystem exists to avoid; restoring a more
+    ///   sensitive one costs a few windows of climbing.
+    /// * Landing between grid points would leave `index` and the gauge
+    ///   disagreeing with where the strides can actually go.
+    ///
+    /// Values outside a register's range are clamped rather than rejected, so a
+    /// stored point from an older firmware with different ceilings degrades to
+    /// something usable instead of refusing to load.
+    pub fn restore_point(&mut self, point: [u8; PARAMS]) {
+        for (param, value) in self.params.iter_mut().zip(point.iter()) {
+            let clamped = (*value).clamp(param.min, param.max);
+            let stride = param.base_step.max(1);
+            let offset = clamped - param.min;
+            param.cur = param.min + (offset / stride) * stride;
+            param.step = param.base_step;
+        }
+        self.last_up = None;
+    }
+
     /// Total positions the machine can occupy — the product of every span.
     ///
     /// Computed rather than written down, so changing a ceiling or adding a
