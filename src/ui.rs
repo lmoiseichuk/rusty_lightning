@@ -413,15 +413,17 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     let _ = antenna.push_str(" · fw ");
     let _ = antenna.push_str(env!("CARGO_PKG_VERSION"));
 
+    // 28 rather than 40: the time labels need 439-449, so the rule sits at 452
+    // and the text below it at 458-468, leaving a 12 px foot margin.
     let _ = Line::new(
-        Point::new(16, HEIGHT as i32 - 40),
-        Point::new(WIDTH as i32 - 16, HEIGHT as i32 - 40),
+        Point::new(16, HEIGHT as i32 - 28),
+        Point::new(WIDTH as i32 - 16, HEIGHT as i32 - 28),
     )
     .into_styled(black)
     .draw(frame);
     let _ = Text::with_baseline(
         &antenna,
-        Point::new(16, HEIGHT as i32 - 32),
+        Point::new(16, HEIGHT as i32 - 22),
         MonoTextStyle::new(&FONT_6X10, INK),
         Baseline::Top,
     )
@@ -972,7 +974,10 @@ fn time_axis(
 
     let lower_top = top + height as i32 + gap;
     let lower_bottom = lower_top + height as i32;
-    let label_y = lower_bottom + 15;
+    // 3 px below the lower chart rather than 15, which put the labels at y=451 --
+    // inside the footer text at 448. They now occupy 439-449 and the footer rule
+    // has moved to 452.
+    let label_y = lower_bottom + 3;
 
     let mut buckets_back = 0i32;
     loop {
@@ -1066,7 +1071,7 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
         Point::new(left, TOP + HEIGHT as i32 + GAP),
         width,
         HEIGHT,
-        "mean score",
+        "",
         s.chart_scores.iter().copied(),
         s.chart_capacity,
     );
@@ -1101,6 +1106,10 @@ fn chart<I>(
 
     let peak = values.clone().max().unwrap_or(0);
 
+    // **An empty label draws no caption.** The lower chart's used to read
+    // `mean score  none`, which duplicated a figure already shown mid-screen and
+    // put it at y=439 -- straight through the footer rule at 440.
+    if !label.is_empty() {
     let mut caption = Text32::new();
     let _ = caption.push_str(label);
     if peak > 0 {
@@ -1116,6 +1125,7 @@ fn chart<I>(
         Baseline::Top,
     )
     .draw(frame);
+    }
 
     if peak == 0 || capacity == 0 {
         return;
