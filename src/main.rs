@@ -523,7 +523,7 @@ fn configure(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     location: Location,
-) -> Result<[u8; defence::PARAMS], esp_idf_hal::sys::EspError> {
+) -> Result<defence::Point, esp_idf_hal::sys::EspError> {
     sensor.power_up(i2c)?;
     sensor.set_location(i2c, location)?;
 
@@ -578,28 +578,28 @@ fn configure(
     // its first tweak brought forward, not a new deviation -- unlike `WDTH` and
     // `SREJ`, which stay untouched at their power-on defaults.
     // Resume where this room left off, rather than climbing from zero again.
-    // `restore_point` rounds down onto the stride grid, so a quieter room starts
-    // more sensitive than it ended rather than deaf.
-    let mut ladder = session::new_ladder();
-    match settings::defence_point() {
-        Some(point) => {
-            ladder.restore_point(point);
+    let point = match settings::defence_point() {
+        Some(stored) => {
             println!("as:   resumed defence point from NVS");
+            stored
         }
-        None => println!("as:   no stored defence point -- starting fully sensitive"),
-    }
-    session::apply_defence(sensor, i2c, &ladder)?;
+        None => {
+            println!("as:   no stored defence point -- starting fully sensitive");
+            defence::Point::OPEN
+        }
+    };
+    session::apply(sensor, i2c, point)?;
 
     println!(
-        "as:   {}, {} pF, defence {}/{} ({}), report after {} strike(s)",
+        "as:   {}, {} pF, defence {}/{} ({}%), report after {} strike(s)",
         location.label(),
         TUNING_CAPS_PF,
-        ladder.position(),
-        ladder.total() - 1,
-        ladder.rung(),
+        point.raw(),
+        defence::MAX,
+        point.percent(),
         min_strikes
     );
-    Ok(ladder.point())
+    Ok(point)
 }
 
 /// The event loop: batch what arrives, then tune once per batch (§4.2).
@@ -616,10 +616,23 @@ fn listen(
     gauge: Option<&battery::Max17048>,
     die_temperature: Option<&system::DieTemperature>,
     mut strike_log: Option<&mut log::Log>,
-    start_point: [u8; defence::PARAMS],
+    start_point: defence::Point,
 ) {
-    let mut ladder = session::new_ladder();
-    ladder.restore_point(start_point);
+    let mut point = start_point;
+    // **The floor the +/-1 walk may not go below.**
+    //
+    // A calibration settles on the *lowest* quiet point, so every value beneath
+    // it has been measured and found noisy -- and stepping below it is not the
+    // gentle relaxation the number makes it look like. Measured on this board:
+    // the sweep settled at 448 (`wd 7 sr 0 ms 0`, report every strike) and the
+    // very next quiet window stepped to 447, which is `wd 6 sr 15 ms 3` -- a
+    // borrow across three fields that took the chip from "report every strike"
+    // to "wait for sixteen". It then walked on down, because a chip waiting for
+    // sixteen strikes hears nothing, which reads as "no noise, go left" forever.
+    //
+    // So `down` stops here. `up` is unbounded, because climbing is how the
+    // machine answers noise it did not expect.
+    let mut floor_raw = start_point.raw();
     // What is on flash, so a write only happens when the point has actually
     // moved away from it.
     let mut stored_point = start_point;
@@ -843,7 +856,7 @@ fn listen(
                     chart_period: &mut chart_period,
                     reading,
                     range,
-                    level: ladder.defence_percent(),
+                    level: point.percent(),
                     die_temperature,
                     antenna_khz,
                     irq_confirmed,
@@ -1038,11 +1051,15 @@ fn listen(
             // The sweep owns the loop while it runs: it needs the sensor, the
             // bus and the notification, and it deliberately holds bad settings
             // between probes.
-            if effects.calibrate {
-                session::calibrate(sensor, i2c, notification, &mut ladder);
-                match settings::store_defence_point(ladder.point()) {
+            if let Some(window_s) = effects.calibrate {
+                point = session::calibrate(sensor, i2c, irq, notification, window_s);
+                // The sweep's answer becomes the floor: it is the most receptive
+                // point that measured quiet, and the walk has no business going
+                // below a value the device has just proved is noisy.
+                floor_raw = point.raw();
+                match settings::store_defence_point(point) {
                     Ok(()) => {
-                        stored_point = ladder.point();
+                        stored_point = point;
                         last_point_save_s = now_ms() / 1000;
                         println!("cal:  point stored");
                     }
@@ -1062,20 +1079,24 @@ fn listen(
                 let outcome = if on {
                     session::force_max_sensitivity(sensor, i2c)
                 } else {
-                    // Back to the bottom of the ladder, not to wherever the
-                    // level happened to be: the auto-tune was frozen, so `level`
-                    // is stale by however long the override was on.
-                    ladder.reset();
+                    // Back to fully receptive, not to wherever the point
+                    // happened to be: the auto-tune was frozen, so it is stale
+                    // by however long the override was on.
+                    point = defence::Point::OPEN;
+                    // A deliberate request for full sensitivity also throws away
+                    // the floor -- otherwise the walk would be pinned above a
+                    // calibration the operator has just overridden.
+                    floor_raw = 0;
                     window_events = 0;
                     window_disturbers = 0;
                     tune_window_ms = now_ms();
-                    session::apply_defence(sensor, i2c, &ladder)
+                    session::apply(sensor, i2c, point)
                 };
                 match outcome {
                     Ok(()) if on => println!(
                         "sens: MAX -- nf 0, wdth 0, srej 0, min strikes 1; auto-tune frozen"
                     ),
-                    Ok(()) => println!("sens: normal -- ladder restored at level 0"),
+                    Ok(()) => println!("sens: normal -- defence back to 0"),
                     Err(e) => println!("sens: could not apply -- {e}"),
                 }
             }
@@ -1225,22 +1246,43 @@ fn listen(
             totals.noise_per_min = window_events * EVENTS_PER_MIN_SCALE;
             totals.disturbers_per_min = window_disturbers * EVENTS_PER_MIN_SCALE;
 
-            // Which register actually changed, captured before the move --
-            // `rung()` afterwards names the cursor's *new* home, which on a
-            // hand-over is not the register that moved at all.
-            let acting = ladder.rung();
+            // **One step of the packed number per window.** Noisy climbs,
+            // quiet relaxes, and which register that lands on is decided by the
+            // bit layout rather than by a cursor -- see `defence`.
+            //
+            // Worth knowing at the console: the bottom two bits are
+            // `MIN_NUM_LIGH`, so the very first noisy step moves it from 0 to 1
+            // and the chip begins waiting for five strikes. That is the chosen
+            // trade for a tuner that walks the whole number; `describe` spells
+            // the strike count out on every line so it is never a surprise.
+            let raw = point.raw();
             let moved = if window_events > 0 {
-                ladder.up().then_some("up")
+                match raw < defence::MAX {
+                    true => {
+                        point = defence::Point::new(raw + 1);
+                        Some("up")
+                    }
+                    false => None,
+                }
             } else {
-                ladder.down().then_some("down")
+                match raw > floor_raw {
+                    true => {
+                        point = defence::Point::new(raw - 1);
+                        Some("down")
+                    }
+                    // Already at the calibrated floor. Everything below it has
+                    // been measured and found noisy, so there is nothing to gain
+                    // and a borrow to lose.
+                    false => None,
+                }
             };
             window_events = 0;
             window_disturbers = 0;
 
-            // Programmed only when the machine actually moved. At either end the
-            // decision is taken every window and changes nothing.
+            // Programmed only when it actually moved. At either end the decision
+            // is taken every window and changes nothing.
             if let Some(direction) = moved {
-                tune(sensor, i2c, &ladder, direction, acting);
+                tune(sensor, i2c, point, direction);
             }
 
             // Persist the point, rarely. The machine can move every window, and
@@ -1248,12 +1290,12 @@ fn listen(
             // minutes would spend endurance for nothing -- but a settled room
             // stops moving, so in practice this writes once and then never.
             let now_s = now_ms() / 1000;
-            if ladder.point() != stored_point
+            if point != stored_point
                 && now_s.saturating_sub(last_point_save_s) >= DEFENCE_SAVE_S
             {
                 last_point_save_s = now_s;
-                match settings::store_defence_point(ladder.point()) {
-                    Ok(()) => stored_point = ladder.point(),
+                match settings::store_defence_point(point) {
+                    Ok(()) => stored_point = point,
                     Err(e) => println!("as:   defence point NOT saved -- {e}"),
                 }
             }
@@ -1270,7 +1312,7 @@ fn listen(
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
                 location: *location,
-                defence: ladder.position(),
+                defence: point.raw() as u32,
             };
             let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
             let changed = drawn.as_ref() != Some(&want);
@@ -1343,7 +1385,7 @@ fn listen(
                         uptime_minutes: now_ms() / 60_000,
                         antenna_khz,
                         irq_confirmed,
-                        defence_level: ladder.defence_percent(),
+                        defence_level: point.percent(),
                         defence_max: 100,
                         noise_per_min: totals.noise_per_min,
                         strikes_total: totals.strikes,

@@ -1,354 +1,231 @@
-//! How hard the sensor is trying to reject noise (§4.2).
+//! How hard the sensor is trying to reject noise (§4.2), as **one 13-bit
+//! number**.
 //!
-//! A **state machine over every rejection register the AS3935 exposes**, walked
-//! as an odometer — and **ordered by how much damage each register does**, which
-//! is the whole design.
+//! The four registers the AS3935 exposes for this are bit fields living in two
+//! bytes, so the whole tunable state is 13 bits — and treating it as a single
+//! integer 0..=8191 replaces the state machine that used to walk them.
 //!
-//! The loop around it is deliberately plain — configure the registers, count
-//! events for a minute, show the count, decide up or down, program the next
-//! combination, repeat. See `listen` in `main`.
+//! ## The layout, most valuable bits first
 //!
-//! ## One parameter at a time, in order of what it costs
+//! ```text
+//!   bit  12 11 10 | 9  8  7  6 | 5  4  3  2 | 1  0
+//!        NF_LEV   |    WDTH    |    SREJ    | MIN_NUM_LIGH
+//!        (3 bits) |  (4 bits)  |  (4 bits)  |  (2 bits)
+//! ```
 //!
-//! The registers are not grades of the same thing:
+//! **The order is the whole design, and it works because binary search resolves
+//! the high bits first.** A bisection over 0..=8191 probes 4096 first, which is
+//! a decision about `NF_LEV` alone; the last probes decide the bottom two bits.
+//! So the cheap knob is settled coarsely up front and the destructive one only
+//! ever moves as a final fine adjustment:
 //!
 //! * **`NF_LEV`** is a *noise-floor* gate. It decides when the chip complains
 //!   the band is noisy, and **cannot reject a lightning waveform** — the only
-//!   free knob on the part, which is why it is tuned first.
+//!   free knob on the part, which is why it takes the top bits.
 //! * **`WDTH`** is the watchdog *amplitude* gate. Raising it discards weaker
 //!   arrivals, distant strikes first.
 //! * **`SREJ`** compares the signal against the chip's lightning *waveform
 //!   template*. Raising it discards anything imperfectly shaped.
 //! * **`MIN_NUM_LIGH`** makes the chip wait for a *pattern* — 1, 5, 9 or 16
 //!   strikes — before reporting anything. The most destructive of the four: at
-//!   16, the first fifteen strikes of a storm are silent.
+//!   16, the first fifteen strikes of a storm are silent. Bottom two bits, so a
+//!   search reaches it last and moves it least.
 //!
-//! So a **cursor** walks that list. Only the register under the cursor moves:
+//! **[`FIELDS`] is the layout**, one row of mask-and-shift per register. Trying
+//! the opposite ordering — less valuable bits high — is reordering the `shift`
+//! column and nothing else; `tests/host/defence.rs` checks that whatever order
+//! is in the table still tiles the 13 bits with no gap and no overlap.
 //!
-//! * **Noisy** — step it up. If it is already at its maximum, **leave it there**
-//!   and advance the cursor to the next register, which starts from 0.
-//! * **Silent** — step it down. If it is already at 0, retreat the cursor and
-//!   keep reducing the cheaper register behind it.
+//! Every one of the 8192 values is a distinct, legal combination — no field is
+//! capped below its width, because a cap would fold several raw values onto one
+//! point and strand the ±1 tuner in a short cycle. See the note by `MAX`.
 //!
-//! **Fixing rather than resetting is the whole point.** An earlier version swept
-//! every combination as an odometer, which threw the noise floor back to 0 each
-//! time it reached the watchdog — discarding the calibration it had just spent
-//! minutes finding. Here a register that has done its job keeps its value, and
-//! the machine only ever reaches for a more expensive one when the cheaper ones
-//! are genuinely exhausted.
+//! Deliberately *not* mirroring the two hardware register bytes, which would let
+//! the writer send two raw bytes: `REG0x02` bit 6 is `CL_STAT`, so that register
+//! needs read-modify-write regardless, and mirroring would put `MIN_NUM_LIGH`
+//! above `SREJ` in significance — settling the most destructive register before
+//! the waveform template.
 //!
-//! Two earlier shapes failed from opposite directions. A **sequential 31-rung
-//! ladder** ran `NF_LEV` 0→7 then `WDTH` then `SREJ`, never giving the
-//! lightning-rejecting registers back, so a storm's own disturbers ratcheted it
-//! deaf. A **cap at `NF_LEV` alone** was safe and is what first produced
-//! disturbers here — but `NF_LEV` does run out, and then there was nothing left.
+//! ## What this replaced, and why
 //!
-//! ## One object per register
+//! A `Param`/`Ladder` state machine with a cursor, per-register strides, a
+//! mixed-radix `position()` and a recursive four-level search. Every one of
+//! those existed to impose an ordering on the registers that the bit layout now
+//! gives for free, and the hand-built version cost a full sweep of *hundreds* of
+//! probes against thirteen here.
 //!
-//! Each [`Param`] owns its own `min`, `cur`, `max` and the callback that
-//! programs it, and knows how to step itself — so [`Ladder`] is only the carry
-//! logic between them, and adding a fifth register is one more object rather
-//! than an edit in four places.
+//! It also carried the defect that made this rewrite worth doing. The ladder
+//! stored **sensitivity** (`cur = max` meaning most sensitive, each writer
+//! subtracting on the way to the bus) while the rest of the crate assumed
+//! defence, so "noisy, so defend harder" made the receiver *more* sensitive —
+//! a runaway to full sensitivity, and the mirror-image walk to permanent
+//! deafness on silence. **That class of bug is now unrepresentable**: the fields
+//! *are* the register values, so there is no second convention to disagree with.
 //!
-//! The writer is a **type parameter** rather than a concrete signature. This
-//! module is deliberately free of ESP-IDF imports so `tests/host/defence.rs` can
-//! compile it directly, and a callback naming `&As3935` would end that; `session`
-//! supplies the real one.
+//! This module stays free of ESP-IDF imports so `tests/host/defence.rs` can
+//! compile it directly; the register writes live in `session::apply`.
 
-/// How many registers the machine walks.
-pub const PARAMS: usize = 4;
-
-/// One tunable register: its range, where it is now, how far it jumps, and how
-/// to program it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Param<W> {
-    /// What this register is called, for the console and the screen.
+/// One register's slice of the packed number.
+///
+/// Mask and shift rather than a hand-written accessor each, so the layout is a
+/// table that can be reordered rather than four functions that have to be
+/// reordered in step with each other.
+pub struct Field {
+    /// Short label for the console — `describe` builds its line from these.
     pub name: &'static str,
-    pub min: u8,
-    pub cur: u8,
-    pub max: u8,
-    /// The stride this register moves by when travelling — halved on every
-    /// reversal, restored on every continuation. See [`Param::slow`].
-    pub step: u8,
-    /// The stride at full speed, **2^(distance from the least significant row)**.
-    ///
-    /// The noise floor steps by 1, the watchdog by 2, spike rejection by 4, min
-    /// strikes by 8. A more significant register is one the machine reaches for
-    /// only when the cheaper ones are exhausted — so when it finally does move,
-    /// creeping is wasted time and it should take a decisive bite.
-    ///
-    /// It also shrinks the reachable space by roughly an order of magnitude,
-    /// which is what makes a position readable as a percentage at all.
-    pub base_step: u8,
-    /// Programs the chip with `cur`. See `session::new_ladder`.
-    pub write: W,
+    /// Bit position of the field's least significant bit.
+    pub shift: u32,
+    pub width: u32,
 }
 
-impl<W> Param<W> {
-    /// One step harder. `false` when already at `max`.
-    ///
-    /// Clamped rather than refused at the top of a stride, so a register whose
-    /// range is not a whole number of steps still reaches its maximum exactly —
-    /// the watchdog steps 0, 2, 4 … 14 and then lands on 15.
-    pub fn up(&mut self) -> bool {
-        if self.cur >= self.max {
-            return false;
-        }
-        self.cur = self.cur.saturating_add(self.step).min(self.max);
-        true
+impl Field {
+    /// The field's bits, in place.
+    pub const fn mask(&self) -> u16 {
+        ((1u16 << self.width) - 1) << self.shift
     }
 
-    /// One step easier. `false` when already at `min`.
-    pub fn down(&mut self) -> bool {
-        if self.cur <= self.min {
-            return false;
-        }
-        self.cur = self.cur.saturating_sub(self.step).max(self.min);
-        true
+    /// The largest value this field can hold.
+    pub const fn ceiling(&self) -> u8 {
+        ((1u16 << self.width) - 1) as u8
     }
 
-    pub fn reset(&mut self) {
-        self.cur = self.min;
-        self.step = self.base_step;
+    /// Read this field out of a packed value.
+    pub const fn get(&self, raw: u16) -> u8 {
+        ((raw & self.mask()) >> self.shift) as u8
     }
 
-    /// Halve the stride, to a floor of 1.
-    ///
-    /// **Called on a direction reversal**, which is the signature of having
-    /// overshot: the machine went up, the band went quiet, it came back down,
-    /// and the band got noisy again. That is the sweet spot being straddled, and
-    /// continuing to arrive at it in strides of 8 would straddle it forever.
-    /// Each reversal halves the stride until it is 1 and the register can settle
-    /// exactly.
-    pub fn slow(&mut self) {
-        self.step = (self.step / 2).max(1);
-    }
-
-    /// Double the stride back toward [`Param::base_step`].
-    ///
-    /// Called whenever a move continues in the same direction as the last. A
-    /// sustained climb means the setting is nowhere near right, and creeping
-    /// there in ones after an earlier reversal would be slow for no reason.
-    pub fn restore(&mut self) {
-        self.step = self.step.saturating_mul(2).min(self.base_step.max(1));
-    }
-
-    /// How many positions this register can occupy, counting both ends.
-    ///
-    /// Ceiling division, because the last stride is usually short: 0..=15 by 2
-    /// is nine positions, not eight — the eight full strides plus the clamped
-    /// landing on 15.
-    /// Measured against [`Param::base_step`], not the live stride: the gauge
-    /// must not change scale underneath the reader every time the machine slows
-    /// down.
-    pub fn span(&self) -> u32 {
-        let range = (self.max - self.min) as u32;
-        let step = self.base_step.max(1) as u32;
-        range.div_ceil(step) + 1
-    }
-
-    /// Which of those positions `cur` currently is.
-    pub fn index(&self) -> u32 {
-        let offset = (self.cur - self.min) as u32;
-        let step = self.base_step.max(1) as u32;
-        offset.div_ceil(step).min(self.span() - 1)
-    }
-}
-
-/// The machine: the four registers, most significant first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Ladder<W> {
-    /// Cheapest first: `NF_LEV`, `WDTH`, `SREJ`, `MIN_NUM_LIGH`.
-    pub params: [Param<W>; PARAMS],
-    /// Which register is currently being tuned. Everything before it is fixed
-    /// at the value that stopped working; everything after it is at 0.
-    pub cursor: usize,
-    /// Which way the last move went, for the stride adaptation in
-    /// [`Param::slow`]. `None` before the first move.
-    pub last_up: Option<bool>,
-}
-
-impl<W: Copy> Ladder<W> {
-    /// Defend harder. Returns whether anything moved.
-    ///
-    /// `false` only when the last register is also at its maximum and there is
-    /// nothing left to try.
-    pub fn up(&mut self) -> bool {
-        let reversed = self.last_up == Some(false);
-        loop {
-            let cursor = self.cursor;
-            if reversed {
-                self.params[cursor].slow();
-            } else {
-                self.params[cursor].restore();
-            }
-            if self.params[cursor].up() {
-                self.zero_after_cursor();
-                self.last_up = Some(true);
-                return true;
-            }
-            // Exhausted. **Leave it where it is** -- that value is the
-            // calibration this register earned -- and move on to the next.
-            if cursor + 1 >= PARAMS {
-                return false;
-            }
-            self.cursor += 1;
-        }
-    }
-
-    /// Silence — the register under the cursor has done its job.
-    ///
-    /// **One step back, then hand over to the next register.** Stepping back
-    /// returns to the most sensitive setting that was still working; advancing
-    /// the cursor lets the next register refine from there.
-    ///
-    /// Waiting for each register to reach its *maximum* before moving on was
-    /// accurate and far too slow — the noise floor alone took seven windows.
-    /// Silence is the boundary, and the boundary is the answer.
-    ///
-    /// **A register already at its minimum does nothing.** It emphatically does
-    /// not retreat the cursor. An earlier version did, and it broke the whole
-    /// model: after handing over to the watchdog at 0, the next silent window
-    /// found nothing to give back, walked the cursor home to the noise floor and
-    /// returned `false` — logging nothing. The following noisy window then
-    /// raised the noise floor again, and the machine oscillated `nf 0/1` forever
-    /// with a wasted window every cycle. Observed on hardware as a perfectly
-    /// regular 30-second loop.
-    ///
-    /// The cost of not retreating is that a room which goes quiet after a noisy
-    /// spell does not walk its expensive registers all the way back. It does
-    /// relax: every silent window steps the current register down before handing
-    /// over, so the machine sheds one notch per register as the cursor advances.
-    /// Full recovery needs a restart, which is a separate decision.
-    pub fn down(&mut self) -> bool {
-        let cursor = self.cursor;
-        if self.params[cursor].cur <= self.params[cursor].min {
-            return false;
-        }
-        if self.last_up == Some(true) {
-            self.params[cursor].slow();
+    /// Write this field into a packed value, clamping to the field's width.
+    pub const fn set(&self, raw: u16, value: u8) -> u16 {
+        let capped = if value > self.ceiling() {
+            self.ceiling()
         } else {
-            self.params[cursor].restore();
-        }
-        self.params[cursor].down();
-        self.last_up = Some(false);
-        // Hand over: the next register refines from here.
-        if cursor + 1 < PARAMS {
-            self.cursor += 1;
-            self.zero_after_cursor();
-        }
-        true
+            value
+        };
+        (raw & !self.mask()) | ((capped as u16) << self.shift)
     }
+}
 
-    /// Hold every register past the cursor at 0.
+/// Index into [`FIELDS`], named so the accessors below read as English.
+pub const NOISE_FLOOR: usize = 0;
+pub const WATCHDOG: usize = 1;
+pub const SPIKE: usize = 2;
+pub const MIN_STRIKES: usize = 3;
+
+/// **The layout.** Most valuable first — reorder the `shift` column to try the
+/// opposite arrangement.
+pub const FIELDS: [Field; 4] = [
+    Field { name: "nf", shift: 10, width: 3 },
+    Field { name: "wd", shift: 6, width: 4 },
+    Field { name: "sr", shift: 2, width: 4 },
+    Field { name: "ms", shift: 0, width: 2 },
+];
+
+/// Total width of the packed point.
+pub const BITS: u32 = 13;
+
+/// One value per bit pattern: 8192 of them, 0..=8191.
+pub const MAX: u16 = (1u16 << BITS) - 1;
+
+// **`SREJ` is deliberately NOT capped**, though an earlier design capped it at
+// 11 on the grounds that the datasheet's curves flatten past there and the last
+// settings reject hard enough to discard a genuine nearby strike.
+//
+// A cap cannot coexist with a dense packed space, and the failure is not subtle.
+// Clamping on construction makes four of every sixteen `SREJ` steps fold back
+// onto 11, so the ±1 tuner walking up from `sr 11, ms 3` (raw 47) lands on raw
+// 48, which clamps to raw 44 — and then cycles 44, 45, 46, 47, 44 forever,
+// unable to ever climb past spike rejection 11. It also makes `percent` dip as
+// the number rises, and puts the ceiling at 8175 so the gauge tops out at 99 %.
+//
+// The cap is not needed anyway: `session::calibrate` bisects for the **lowest**
+// quiet point, so it prefers weak spike rejection without being told to, and the
+// runtime tuner only climbs as far as the noise forces it. The judgement the cap
+// encoded is now a property of the search rather than a wall in the space.
+
+/// The whole defence configuration: four register fields in one integer.
+///
+/// A newtype rather than a bare `u16` so a raw count from the search cannot be
+/// mistaken for a register value — and so `percent`, the field accessors and the
+/// clamping all have one home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Point(u16);
+
+impl Point {
+    /// Fully receptive: every field at zero.
     ///
-    /// The invariant the whole model rests on: **everything before the cursor is
-    /// fixed at the value that stopped working, the cursor is being tuned, and
-    /// everything after it is untouched.** It falls out of the walk naturally —
-    /// the cursor only advances when the register behind it is exhausted — but
-    /// asserting it here means a restored point or a future edit cannot quietly
-    /// leave an expensive register engaged while a cheap one is still being
-    /// tuned.
-    fn zero_after_cursor(&mut self) {
-        for param in self.params.iter_mut().skip(self.cursor + 1) {
-            param.reset();
-        }
-    }
+    /// This is the chip at its most sensitive, which is where a fresh boot, a
+    /// `sensitive off` and every calibration start.
+    pub const OPEN: Point = Point(0);
 
-    /// Back to the most sensitive position.
-    pub fn reset(&mut self) {
-        for param in self.params.iter_mut() {
-            param.reset();
-        }
-        self.cursor = 0;
-        self.last_up = None;
-    }
-
-    /// The current value of every register, most significant first.
-    pub fn point(&self) -> [u8; PARAMS] {
-        let mut out = [0u8; PARAMS];
-        for (slot, param) in out.iter_mut().zip(self.params.iter()) {
-            *slot = param.cur;
-        }
-        out
-    }
-
-    /// Resume from a previously learned point.
+    /// Build from a raw packed value, clamping to the representable range.
     ///
-    /// **Rounded down onto the nominal stride grid, never up.** Two reasons, and
-    /// both are about being wrong safely:
-    ///
-    /// * The room may have gone quiet since. Restoring a *more* defensive
-    ///   position than the environment needs starts the device deaf, which is
-    ///   the failure this whole subsystem exists to avoid; restoring a more
-    ///   sensitive one costs a few windows of climbing.
-    /// * Landing between grid points would leave `index` and the gauge
-    ///   disagreeing with where the strides can actually go.
-    ///
-    /// Values outside a register's range are clamped rather than rejected, so a
-    /// stored point from an older firmware with different ceilings degrades to
-    /// something usable instead of refusing to load.
-    pub fn restore_point(&mut self, point: [u8; PARAMS]) {
-        for (param, value) in self.params.iter_mut().zip(point.iter()) {
-            let clamped = (*value).clamp(param.min, param.max);
-            let stride = param.base_step.max(1);
-            let offset = clamped - param.min;
-            param.cur = param.min + (offset / stride) * stride;
-            param.step = param.base_step;
-        }
-        // The cursor goes to the dearest register still engaged **after the
-        // rounding**, not before: a register whose stored value rounds down to
-        // its minimum was never really engaged, and letting it hold the cursor
-        // would leave the machine tuning something already at 0 while a cheaper
-        // register carried the whole calibration.
-        self.cursor = 0;
-        for index in 0..PARAMS {
-            if self.params[index].cur > self.params[index].min {
-                self.cursor = index;
-            }
-        }
-        self.last_up = None;
+    /// The only clamp: every one of the 8192 values maps to a distinct, legal
+    /// register combination, so nothing else needs adjusting on the way in.
+    pub fn new(raw: u16) -> Point {
+        Point(raw.min(MAX))
     }
 
-    /// Total positions the machine can occupy — the product of every span.
-    ///
-    /// Computed rather than written down, so changing a ceiling or adding a
-    /// register cannot leave a stale constant behind.
-    pub fn total(&self) -> u32 {
-        self.params.iter().map(|p| p.span()).product()
+    /// The packed value, for storage and for the search.
+    pub fn raw(self) -> u16 {
+        self.0
     }
 
-    /// Where the machine sits in its whole space, for the gauge.
-    ///
-    /// The odometer read as one number — most significant digit first, each
-    /// weighted by the spans below it. Monotonic with [`Ladder::up`], which is
-    /// what makes it meaningful as a bar.
-    pub fn position(&self) -> u32 {
-        let mut position = 0u32;
-        for param in self.params.iter().rev() {
-            position = position * param.span() + param.index();
+    /// One field, by [`FIELDS`] index.
+    pub fn field(self, index: usize) -> u8 {
+        FIELDS[index].get(self.0)
+    }
+
+    pub fn noise_floor(self) -> u8 {
+        self.field(NOISE_FLOOR)
+    }
+
+    pub fn watchdog(self) -> u8 {
+        self.field(WATCHDOG)
+    }
+
+    pub fn spike_rejection(self) -> u8 {
+        self.field(SPIKE)
+    }
+
+    /// The raw field, 0..=3. See [`Point::min_strikes_count`] for what the chip
+    /// does with it.
+    pub fn min_strikes(self) -> u8 {
+        self.field(MIN_STRIKES)
+    }
+
+    /// How many strikes the chip waits for, which is not the field value: the
+    /// two bits select 1, 5, 9 or 16.
+    pub fn min_strikes_count(self) -> u8 {
+        match self.min_strikes() {
+            0 => 1,
+            1 => 5,
+            2 => 9,
+            _ => 16,
         }
-        position
     }
 
-    /// How hard the machine is defending, 0–100.
+    /// Assemble from four field values, each clamped to its width.
     ///
-    /// **The inverse of [`Ladder::position`], because the params are in
-    /// sensitivity units.** `position` counts upward toward *more sensitive*,
-    /// so a freshly reset machine sits at the top of its range — and a gauge
-    /// wired straight to it reads 100 % while the device is at its most
-    /// receptive, which is the opposite of what a bar labelled "Noise" means to
-    /// anyone reading it.
-    pub fn defence_percent(&self) -> u32 {
-        let top = self.total().saturating_sub(1);
-        if top == 0 {
-            return 0;
-        }
-        100 - (self.position() * 100 / top)
+    /// **Unused by the firmware**, which only ever walks raw integers — kept
+    /// because it is how `tests/host/defence.rs` states what a layout should
+    /// produce, and a packing with no way to write it a field at a time is a
+    /// packing nobody can check.
+    #[allow(dead_code)]
+    pub fn pack(noise_floor: u8, watchdog: u8, spike: u8, min_strikes: u8) -> Point {
+        let mut raw = 0u16;
+        raw = FIELDS[NOISE_FLOOR].set(raw, noise_floor);
+        raw = FIELDS[WATCHDOG].set(raw, watchdog);
+        raw = FIELDS[SPIKE].set(raw, spike);
+        raw = FIELDS[MIN_STRIKES].set(raw, min_strikes);
+        Point(raw)
     }
 
-    /// Which register the cursor is on, for the console.
-    pub fn rung(&self) -> &'static str {
-        self.params[self.cursor].name
+    /// How hard the device is defending, 0–100, for the gauge.
+    ///
+    /// The packed value scaled, with **no inversion**: 0 is a fully receptive
+    /// device and `MAX` is the deafest it can make itself, so a bar labelled
+    /// "Noise" reads the way anyone expects.
+    pub fn percent(self) -> u32 {
+        self.0 as u32 * 100 / MAX as u32
     }
 }

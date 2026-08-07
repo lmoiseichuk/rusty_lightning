@@ -52,10 +52,11 @@ pub struct Ctx<'a> {
 pub struct Effects {
     pub clock_saved: bool,
     pub redraw_now: bool,
-    /// Set by `calibrate`. Applied by the caller for the same reason
-    /// `sensitivity` is: the sweep needs the sensor, the bus and the IRQ
-    /// notification, and `Ctx` deliberately has none of them.
-    pub calibrate: bool,
+    /// `Some(seconds)` when `calibrate` was used, carrying how long each probe
+    /// should listen. Applied by the caller for the same reason `sensitivity`
+    /// is: the sweep needs the sensor, the bus and the IRQ notification, and
+    /// `Ctx` deliberately has none of them.
+    pub calibrate: Option<u32>,
     /// `Some(on)` when `sensitive` was used. Applied by the caller rather than
     /// here, because `Ctx` deliberately has no sensor or bus — every other
     /// console command is pure, and one hardware command should not change that
@@ -274,12 +275,13 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             Some(log) => log::dump_csv(log),
             None => println!("dump: no log -- the storage partition is missing"),
         },
-        Command::Calibrate => {
+        Command::Calibrate(seconds) => {
             // Acknowledged here so the reply lands before the sweep starts
             // holding the loop for minutes.
-            println!("cal:  queued -- the sensor is deliberately mis-set while");
-            println!("cal:  it searches, and this takes a while");
-            effects.calibrate = true;
+            println!("cal:  queued at {seconds} s per probe -- the sensor is");
+            println!("cal:  deliberately mis-set while it searches, and this");
+            println!("cal:  takes a while");
+            effects.calibrate = Some(seconds);
         }
         Command::Sensitive(on) => {
             effects.sensitivity = Some(on);

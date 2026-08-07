@@ -17,7 +17,14 @@ const KEY_BATTERY_MIN: &[u8] = b"bat_min\0";
 const KEY_BATTERY_MAX: &[u8] = b"bat_max\0";
 const KEY_DRAIN_SUM: &[u8] = b"bat_sum\0";
 const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
-const KEY_DEFENCE: &[u8] = b"defence\0";
+/// **Deliberately renamed from `defence`.** The four bytes behind the old key
+/// were stored in *sensitivity* units and in the old row order, so reading one
+/// back under the current convention turns a learned quiet point into a nearly
+/// deaf one — the highest values landing on `min strikes`, which is the most
+/// destructive register of the four. A new key makes every device that has ever
+/// stored a point fall through to "no stored point" once and re-learn, which
+/// costs minutes; honouring the old bytes would cost a storm.
+const KEY_DEFENCE: &[u8] = b"defence2\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -129,18 +136,17 @@ pub fn store_battery_drain(drain: crate::battery::Drain) -> Result<(), EspError>
 ///
 /// One key rather than four: the registers are only meaningful together, and a
 /// power cut between two of four writes would leave a point that was never
-/// actually in force.
+/// actually in force. Since the point became a single 13-bit number that is no
+/// longer a design decision so much as a description of the value.
 ///
 /// `None` on a device that has never tuned, where the caller starts from full
 /// sensitivity.
-pub fn defence_point() -> Option<[u8; crate::defence::PARAMS]> {
+pub fn defence_point() -> Option<crate::defence::Point> {
     let nvs = Namespace::open(NAMESPACE).ok()?;
     let packed = nvs.get_u32(KEY_DEFENCE)?;
-    let mut point = [0u8; crate::defence::PARAMS];
-    for (index, slot) in point.iter_mut().enumerate() {
-        *slot = (packed >> (index * 8)) as u8;
-    }
-    Some(point)
+    // `new` clamps, so a value written by a build with a different layout
+    // degrades to something in range rather than being trusted whole.
+    Some(crate::defence::Point::new(packed as u16))
 }
 
 /// Persist the learned point.
@@ -148,12 +154,8 @@ pub fn defence_point() -> Option<[u8; crate::defence::PARAMS]> {
 /// Rate-limiting is the **caller's** job — the machine can move every window,
 /// and writing flash at that cadence to protect a value that re-learns in
 /// minutes would be the wrong trade.
-pub fn store_defence_point(point: [u8; crate::defence::PARAMS]) -> Result<(), EspError> {
-    let mut packed = 0u32;
-    for (index, value) in point.iter().enumerate() {
-        packed |= (*value as u32) << (index * 8);
-    }
+pub fn store_defence_point(point: crate::defence::Point) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
-    nvs.set_u32(KEY_DEFENCE, packed)?;
+    nvs.set_u32(KEY_DEFENCE, point.raw() as u32)?;
     nvs.commit()
 }

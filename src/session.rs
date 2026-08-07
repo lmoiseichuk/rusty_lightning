@@ -313,34 +313,46 @@ pub fn report(batch: &Batch) {
 }
 
 
-/// Move the defence level and say what it did in terms of the knob it is on.
+/// Say where the defence point moved, in register terms.
+///
+/// The four fields every time rather than "the one that changed": with the
+/// tuner walking the packed number by one, *which* field moved is a property of
+/// where in the number the carry landed, and a line naming a single register
+/// would be describing the least interesting half of the move.
 pub fn tune(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
-    ladder: &defence::Ladder<Writer>,
+    point: defence::Point,
     direction: &str,
-    moved: &str,
 ) {
-    match apply_defence(sensor, i2c, ladder) {
-        // Only `nf` is reported, because only `nf` is written. Printing the
-        // watchdog and spike-rejection values from `settings` used to imply
-        // they had just been applied, which stopped being true when this became
-        // a one-register tune -- and a log line asserting a register write that
-        // did not happen is worse than no line at all.
+    match apply(sensor, i2c, point) {
         Ok(()) => println!(
-            "tune: {direction} to {}/{} ({}) -- {} {}, {} {}, {} {}, {} {}",
-            ladder.position(),
-            ladder.total() - 1,
-            moved,
-            ladder.params[0].name, ladder.params[0].cur,
-            ladder.params[1].name, ladder.params[1].cur,
-            ladder.params[2].name, ladder.params[2].cur,
-            ladder.params[3].name, ladder.params[3].cur
+            "tune: {direction} to {}/{} ({}%) -- {}",
+            point.raw(),
+            defence::MAX,
+            point.percent(),
+            describe(point)
         ),
         Err(e) => println!("tune: could not move -- {e}"),
     }
 }
 
+/// The four fields of a point, for the console.
+///
+/// `min strikes` is spelled as the count the chip actually waits for rather than
+/// the raw two bits, because "ms 1" and "wait for five strikes" are very
+/// different things to read at 3am and only one of them is the truth.
+fn describe(point: defence::Point) -> String {
+    // Built from `defence::FIELDS` rather than written out, so the line follows
+    // the layout: reordering the table reorders the console output instead of
+    // leaving the labels attached to the wrong values.
+    let mut out = String::new();
+    for (index, field) in defence::FIELDS.iter().enumerate() {
+        out.push_str(&format!("{} {} ", field.name, point.field(index)));
+    }
+    out.push_str(&format!("(wait {} strike(s))", point.min_strikes_count()));
+    out
+}
 
 /// Switch indoor/outdoor, apply it to the sensor, and remember it.
 ///
@@ -371,150 +383,74 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
 
 
 
-/// Push one defence level into the sensor's three registers.
+/// Program the chip with a defence point.
 ///
 /// Lives here rather than in `defence` so that module stays free of ESP-IDF —
-/// which is what lets `tests/host` compile the real ladder instead of a copy of
+/// which is what lets `tests/host` compile the real packing instead of a copy of
 /// it. The register writes are the one part that cannot be host-tested anyway.
-pub fn apply_defence(
+///
+/// **All four fields, every time.** The tuner and the search both move the
+/// packed number as a whole, and a carry changes fields that were not the
+/// obvious target of the step.
+pub fn apply(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
-    ladder: &defence::Ladder<Writer>,
+    point: defence::Point,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
-    // Every register, every time. The machine *lowers* the cheaper ones back to
-    // 0 whenever a more expensive one moves, and that only happens if they are
-    // actually written.
-    for param in ladder.params.iter() {
-        (param.write)(sensor, i2c, param.cur)?;
-    }
+    sensor.set_noise_floor(i2c, point.noise_floor())?;
+    sensor.set_watchdog_threshold(i2c, point.watchdog())?;
+    sensor.set_spike_rejection(i2c, point.spike_rejection())?;
+    // Takes a strike *count*, not the field, and reports what it actually
+    // programmed -- the chip quantises to 1/5/9/16 and the return value is how
+    // that is confirmed.
+    sensor.set_min_strikes(i2c, point.min_strikes_count())?;
     Ok(())
 }
 
-/// One writer per row of the state machine, in [`defence::PARAM_MAX`] order.
-///
-/// **The table is the wiring.** `defence` owns each register's range and current
-/// value; this owns how to program it. A row here lines up with a row there, so
-/// adding a tweakable register is one entry in each — no `match`, no fourth
-/// hand-written call to forget.
-///
-/// Function pointers rather than closures: these capture nothing, so a `const`
-/// array of `fn` costs no storage and no indirection beyond the call.
-pub type Writer = fn(&As3935, &mut I2cDriver<'_>, u8) -> Result<(), esp_idf_hal::sys::EspError>;
-
-/// The state machine, built with each register's range and its writer.
-///
-/// **Most significant first means most destructive first**: `MIN_NUM_LIGH` is
-/// reached only when everything else is exhausted, and `NF_LEV` — the one knob
-/// that cannot reject a strike — moves on every step.
-pub fn new_ladder() -> defence::Ladder<Writer> {
-    defence::Ladder {
-        // **Sensitivity units, not register values: `max` is the most sensitive
-        // setting.** The chip's registers run the other way -- a higher `NF_LEV`
-        // rejects more -- and mixing the two directions in one module is how
-        // "up" ends up meaning "more sensitive" for some registers and "less"
-        // for others. Each writer translates on the way to the bus, so the
-        // inversion lives in exactly one place per register.
-        params: [
-            defence::Param {
-                name: "noise floor",
-                min: 0,
-                cur: 7,
-                max: 7,
-                step: 1,
-                base_step: 1,
-                write: |sensor, i2c, sensitivity| sensor.set_noise_floor(i2c, 7 - sensitivity),
-            },
-            defence::Param {
-                name: "watchdog",
-                min: 0,
-                cur: 15,
-                max: 15,
-                step: 2,
-                base_step: 2,
-                write: |sensor, i2c, sensitivity| {
-                    sensor.set_watchdog_threshold(i2c, 15 - sensitivity)
-                },
-            },
-            // Capped below the register's 4-bit maximum on purpose: the
-            // datasheet's curves flatten past ~11, and the last settings reject
-            // hard enough to discard a genuine nearby strike.
-            defence::Param {
-                name: "spike rejection",
-                min: 0,
-                cur: 11,
-                max: 11,
-                step: 4,
-                base_step: 4,
-                write: |sensor, i2c, sensitivity| {
-                    sensor.set_spike_rejection(i2c, 11 - sensitivity)
-                },
-            },
-            defence::Param {
-                name: "min strikes",
-                min: 0,
-                cur: 3,
-                max: 3,
-                step: 8,
-                base_step: 8,
-                // Most sensitive is one strike; least is sixteen, where the
-                // first fifteen strikes of a storm are silent.
-                write: |sensor, i2c, sensitivity| {
-                    let strikes = match sensitivity {
-                        3 => 1,
-                        2 => 5,
-                        1 => 9,
-                        _ => 16,
-                    };
-                    sensor.set_min_strikes(i2c, strikes).map(|_| ())
-                },
-            },
-        ],
-        cursor: 0,
-        last_up: None,
-    }
-}
-
-
-
-
-/// Every rejection knob at its minimum — below the §4.2 ladder's floor.
-///
-/// The ladder starts at `WDTH 2` because that is the chip's power-on default,
-/// which made it a natural-looking floor. It is not the minimum: the field is
-/// four bits and goes to 0, so "level 0" was never actually the most sensitive
-/// the part can be. Everything else (`NF_LEV`, `SREJ`, `MIN_NUM_LIGH`, indoor
-/// gain) already sits at its most sensitive setting during normal operation.
+/// Every rejection knob at zero — the most receptive the part can be.
 ///
 /// Expect disturbers. That is the point — this trades noise rejection for the
-/// chance of hearing a strike the ladder's floor was filtering out, and the
-/// caller must freeze the auto-tune while it is on or the first disturber will
-/// immediately climb back off it.
+/// chance of hearing a strike the auto-tune was filtering out, and the caller
+/// must freeze the tuner while it is on or the first disturber will immediately
+/// climb back off it.
 pub fn force_max_sensitivity(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
-    // `NF_LEV` only, for the same reason `apply_defence` writes only that: the
-    // other two registers have never been moved by a configuration that
-    // detected a real strike, and this command exists to be *more* sensitive,
-    // not to enter untested territory.
-    //
-    // **It also freezes the ladder, which is the dangerous half.** The AS3935
-    // cannot validate lightning while it is reporting `NoiseTooHigh`, and
-    // climbing `NF_LEV` until the noise stops is the entire mechanism that gets
-    // it out of that state. Pinning the floor at 0 in a noisy band therefore
-    // guarantees the chip never detects anything — which is exactly what it did
-    // here, through a storm close enough to shake doors.
-    apply_defence(sensor, i2c, &new_ladder())
+    apply(sensor, i2c, defence::Point::OPEN)
 }
 
 
-/// How long each calibration probe listens, in milliseconds.
+/// How long each calibration probe listens by default, in seconds.
 ///
 /// The decision a probe makes is only "was that zero or not", and a jammed band
-/// here produces 8 events a second — so five seconds carries an enormous margin
-/// while keeping a full sweep inside an hour. The search runs hundreds of
-/// probes, and every second of this multiplies by all of them.
-pub const CALIBRATE_PROBE_MS: u32 = 5000;
+/// here produces 8 events a second — so even a short window carries a large
+/// margin against *loud* interference. What it does not carry is a margin
+/// against **sparse** interference: a source arriving once every twenty seconds
+/// reads as silence in a five-second window, and the search then settles on a
+/// setting that is quiet only because it did not listen long enough.
+///
+/// **Sixty seconds**, which is affordable for one reason: bisecting a 13-bit
+/// number is **13 probes**, where the state machine this replaced took hundreds.
+/// A full sweep is thirteen minutes, once, and the point then goes to NVS — so
+/// the cost is paid at most once per room rather than continuously.
+///
+/// Measured on this board at 10 s, the sweep settled on `wd 7` after seeing 4
+/// events at `wd 6`; a count that small is exactly where a short window is
+/// deciding on the tail of a distribution rather than on a rate.
+pub const CALIBRATE_PROBE_S: u32 = 60;
+
+/// The range `calibrate <seconds>` accepts.
+pub const CALIBRATE_PROBE_MIN_S: u32 = 5;
+pub const CALIBRATE_PROBE_MAX_S: u32 = 60;
+
+/// Settling time after programming a probe's registers, before counting starts.
+///
+/// `WDTH` and `NF_LEV` gate a running estimate the chip keeps of the band, not
+/// an instantaneous comparison, so a window that opens the moment the register
+/// lands spends its first moments measuring the *previous* setting. The same
+/// 500 ms the reference waits after its own configuration block.
+pub const CALIBRATE_SETTLE_MS: u32 = 500;
 
 /// Count interference over one probe window.
 ///
@@ -524,17 +460,46 @@ pub const CALIBRATE_PROBE_MS: u32 = 5000;
 fn measure(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
+    irq: &mut esp_idf_hal::gpio::PinDriver<'_, esp_idf_hal::gpio::Input>,
     notification: &esp_idf_hal::task::notification::Notification,
     window_ms: u32,
 ) -> u32 {
+    // **Clear anything already pending before the window opens.**
+    //
+    // The AS3935 holds `INT` high until the reason register is read. If a probe
+    // starts with an event unserviced the pin is *already* high — and a
+    // rising-edge interrupt cannot fire without an edge. The window then times
+    // out having heard nothing, never reads the register, and leaves the pin
+    // high for the next probe too.
+    //
+    // That is not hypothetical: it made every probe of a sweep report 0 events
+    // while the main loop was counting 7–8 a second at the very settings the
+    // sweep called silent, so the search "found" full sensitivity every time.
+    let _ = sensor.interrupt_reason(i2c);
+
     let deadline = crate::now_ms().saturating_add(window_ms);
     let mut events = 0u32;
     while crate::now_ms() < deadline {
-        let remaining = deadline.saturating_sub(crate::now_ms()).max(1);
-        let ticks = esp_idf_hal::delay::TickType::new_millis(remaining as u64).ticks();
-        if notification.wait(ticks).is_none() {
+        // Re-arm before every wait: esp-idf disables a GPIO interrupt when it
+        // fires, so a loop that forgets goes deaf after one event. `listen` does
+        // this once per iteration; this loop lives inside one iteration and has
+        // to do it itself.
+        if let Err(e) = irq.enable_interrupt() {
+            println!("cal:  could not re-arm the IRQ -- {e}");
+            return events;
+        }
+
+        // A short wait rather than the whole remaining window, so the level
+        // check below runs regularly. **Both paths matter**: the notification
+        // catches ordinary edges, and the level catches a pin that was already
+        // high when we armed — which an edge-triggered interrupt cannot.
+        let slice = 50u32.min(deadline.saturating_sub(crate::now_ms())).max(1);
+        let ticks = esp_idf_hal::delay::TickType::new_millis(slice as u64).ticks();
+        let notified = notification.wait(ticks).is_some();
+        if !notified && !irq.is_high() {
             continue;
         }
+
         FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
         match sensor.interrupt_reason(i2c) {
             Ok(Interrupt::NoiseTooHigh) | Ok(Interrupt::Disturber) => events += 1,
@@ -546,143 +511,88 @@ fn measure(
     }
     events
 }
-
-/// Binary-search one parameter, recursing into the next for every probe.
+/// Search for the most receptive point that stays quiet.
 ///
-/// Returns the interference count at the point it settles on, so the level above
-/// can judge its own midpoints by what is achievable *below* them rather than by
-/// a single setting.
+/// **A plain binary search over the packed number, 0..=8191.** The whole
+/// ordering argument lives in the bit layout (see `defence`): bisection resolves
+/// the high bits first, so the first probe decides `NF_LEV` — the one knob that
+/// cannot reject a strike — and the last probes decide `MIN_NUM_LIGH`, the one
+/// that can silence a storm. Nothing here needs to know that; it just bisects.
 ///
-/// ## Why the bounds exclude the midpoint
-///
-/// Both narrowing steps move *past* `mid_scope` rather than onto it. Landing on
-/// it leaves the scope unchanged when it is already adjacent to a bound — `mid`
-/// is then `min`, and `min_scope = mid_scope` spins forever. That is not
-/// theoretical: it is exactly the `nf 0` noisy / `nf 1` silent boundary this
-/// device sits on.
-///
-/// Excluding it also stops the search re-measuring a value it has just judged,
-/// which at five seconds a probe is the difference between a sweep of minutes
-/// and one of hours.
-fn check_floor(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    notification: &esp_idf_hal::task::notification::Notification,
-    ladder: &mut defence::Ladder<Writer>,
-    index: usize,
-) -> u32 {
-    // Base case: nothing left to vary, so just listen.
-    if index >= defence::PARAMS {
-        return measure(sensor, i2c, notification, CALIBRATE_PROBE_MS);
-    }
-
-    let mut min_scope = ladder.params[index].min;
-    let mut max_scope = ladder.params[index].max;
-    let mut count = 0u32;
-
-    while min_scope < max_scope {
-        let mid_scope = (min_scope + max_scope) / 2;
-        let mid_count = probe(sensor, i2c, notification, ladder, index, mid_scope);
-
-        if mid_count > 0 {
-            // Noisy in the middle. Is the less sensitive end clean?
-            let min_count = probe(sensor, i2c, notification, ladder, index, min_scope);
-            if min_count == 0 {
-                // Silent at `min`, noisy at `mid`: the boundary is below `mid`,
-                // and `mid` itself is already judged.
-                if mid_scope == min_scope {
-                    break;
-                }
-                max_scope = mid_scope - 1;
-                count = mid_count;
-            } else {
-                // Both noisy: this parameter cannot fix it. Hand the better of
-                // the two back and let the level above step away.
-                return min_count.min(mid_count);
-            }
-        } else {
-            // Quiet in the middle. Can we afford the most sensitive end?
-            let max_count = probe(sensor, i2c, notification, ladder, index, max_scope);
-            if max_count == 0 {
-                // Silent all the way to the top -- nothing here to trade.
-                return 0;
-            }
-            // `max_scope` was just probed and is noisy, so it leaves the scope
-            // too. By this point both ends have been measured, and re-measuring
-            // either costs five seconds for an answer already known.
-            if max_scope == min_scope {
-                break;
-            }
-            min_scope = mid_scope + 1;
-            max_scope -= 1;
-            count = max_count;
-        }
-    }
-
-    ladder.params[index].cur = min_scope;
-    count
-}
-
-/// Set one parameter, show it, and measure what the levels below can achieve.
-fn probe(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    notification: &esp_idf_hal::task::notification::Notification,
-    ladder: &mut defence::Ladder<Writer>,
-    index: usize,
-    value: u8,
-) -> u32 {
-    ladder.params[index].cur = value;
-    if let Err(e) = apply_defence(sensor, i2c, ladder) {
-        println!("cal:  could not program the sensor -- {e}");
-    }
-    // **The whole selection, every probe.** Printing only the register that
-    // moved hid the thing worth watching -- a probe is judged by what the levels
-    // *below* it are set to, and those are invisible unless all four are shown.
-    // The console gets it because it is free; the panel does not, because a
-    // repaint is 3.8 s against a 5 s window and hundreds of probes.
-    println!(
-        "cal:  {}[{}] nf {} wd {} sr {} ms {} ...",
-        "  ".repeat(index),
-        index,
-        ladder.params[0].cur,
-        ladder.params[1].cur,
-        ladder.params[2].cur,
-        ladder.params[3].cur
-    );
-    let count = check_floor(sensor, i2c, notification, ladder, index + 1);
-    println!(
-        "cal:  {}[{}] {} = {} -> {} event(s)",
-        "  ".repeat(index),
-        index,
-        ladder.params[index].name,
-        value,
-        count
-    );
-    count
-}
-
-/// Search the whole space for the most sensitive combination that stays quiet.
+/// The predicate is "did this point hear nothing", which is monotonic enough to
+/// bisect but not perfectly so: a carry such as 1023 → 1024 raises the floor by
+/// one while dropping the other three fields to zero. The search can straddle
+/// such a boundary and settle one point to the deaf side of it. Re-running it,
+/// or running it with a longer window, is the answer — not more machinery.
 ///
 /// Returns the settled point, which the caller stores and adopts.
 pub fn calibrate(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
+    irq: &mut esp_idf_hal::gpio::PinDriver<'_, esp_idf_hal::gpio::Input>,
     notification: &esp_idf_hal::task::notification::Notification,
-    ladder: &mut defence::Ladder<Writer>,
-) -> u32 {
-    println!("cal:  starting -- probes are {} ms each", CALIBRATE_PROBE_MS);
-    let count = check_floor(sensor, i2c, notification, ladder, 0);
-    if let Err(e) = apply_defence(sensor, i2c, ladder) {
+    window_s: u32,
+) -> defence::Point {
+    let window_s = window_s.clamp(CALIBRATE_PROBE_MIN_S, CALIBRATE_PROBE_MAX_S);
+    let window_ms = window_s.saturating_mul(1000);
+    // Ceiling on the probe count, for the estimate only -- the loop below is
+    // what actually decides when it is done.
+    let probes = defence::BITS + 1;
+    println!(
+        "cal:  starting -- 0..={}, {} s per probe, about {} probes ({} s)",
+        defence::MAX,
+        window_s,
+        probes,
+        probes * window_s
+    );
+
+    // The lowest point known to be quiet, and the highest known to be noisy.
+    // `low` starts fully receptive because that is the answer if the band is
+    // clean, and `high` at the ceiling because that is the fallback if it is
+    // not.
+    let mut low = 0u16;
+    let mut high = defence::MAX;
+
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let point = defence::Point::new(mid);
+
+        if let Err(e) = apply(sensor, i2c, point) {
+            println!("cal:  could not program the sensor -- {e}");
+        }
+        // Let the new thresholds take effect before counting against them.
+        FreeRtos::delay_ms(CALIBRATE_SETTLE_MS);
+
+        let count = measure(sensor, i2c, irq, notification, window_ms);
+        println!(
+            "cal:  [{}..{}] {} -> {} -- {} event(s)",
+            low,
+            high,
+            point.raw(),
+            describe(point),
+            count
+        );
+
+        // Quiet here, so nothing above this needs trying; noisy, so the answer
+        // is strictly above. Excluding `mid` on the noisy side is what
+        // guarantees progress when `low` and `high` are adjacent.
+        if count == 0 {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+
+    let settled = defence::Point::new(low);
+    if let Err(e) = apply(sensor, i2c, settled) {
         println!("cal:  could not program the settled point -- {e}");
     }
     println!(
-        "cal:  settled at {} {}, {} {}, {} {}, {} {} -- {} event(s) in the last probe",
-        ladder.params[0].name, ladder.params[0].cur,
-        ladder.params[1].name, ladder.params[1].cur,
-        ladder.params[2].name, ladder.params[2].cur,
-        ladder.params[3].name, ladder.params[3].cur,
-        count
+        "cal:  settled at {}/{} ({}%) -- {}",
+        settled.raw(),
+        defence::MAX,
+        settled.percent(),
+        describe(settled)
     );
-    count
+    settled
 }
