@@ -311,9 +311,104 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 ### 4.1 Indoor/outdoor
 Set the AFE gain at startup (`0x24` indoor / `0x1C` outdoor). Selectable via config.
 
-### 4.2 Noise-floor auto-tune — `NF_LEV` only, 8 rungs
+### 4.2 Noise-floor auto-tune — one packed 13-bit point
 Asymmetric, per the reference: **any** disturber/noise IRQ in the ~1 s processing batch → **+1
 immediately**; **60 s with no events** → **−1**. Quick to defend, slow to relax.
+
+> #### ⚠⚠⚠ AS BUILT: the ladder is gone — the four registers are one 13-bit number
+>
+> Everything below this block is the history of a state machine that no longer exists. It is kept
+> because the *arguments* in it are still the arguments — what each register costs, and why the
+> order they move in is the whole design. What changed is that the order is no longer enforced by
+> code. It falls out of a bit layout.
+>
+> **The defect that forced the rewrite.** `new_ladder` stored *sensitivity* — `cur = max` meaning
+> most sensitive, each writer subtracting on the way to the bus — while the rest of the crate was
+> written in *defence*. So "this window was noisy, defend harder" raised `cur`, which made the
+> receiver **more** sensitive, which produced more noise, which called it again. Observed as a device
+> pinned at 70 % hearing nothing, then sliding to 20 % on a rising event count: silence ran the same
+> loop the other way and walked the machine deaf, and because the cursor never retreated it could not
+> come back. Two units were suspected and one was replaced before the fault was found to be
+> configuration, both times.
+>
+> The fix was not to flip the sign. The four registers are bit fields in two bytes, so the entire
+> tunable state is 13 bits:
+>
+> ```
+>   bit  12 11 10 | 9  8  7  6 | 5  4  3  2 | 1  0
+>        NF_LEV   |    WDTH    |    SREJ    | MIN_NUM_LIGH
+>        (3 bits) |  (4 bits)  |  (4 bits)  |  (2 bits)
+> ```
+>
+> **Ordering is free, because binary search resolves high bits first.** A bisection over 0..=8191
+> probes 4096 first, which is a decision about `NF_LEV` alone; the last probes decide the bottom two
+> bits. So the one knob that cannot reject a strike is settled coarsely up front, and the one that
+> can silence a storm moves last and least — the exact property the cursor, the per-register strides,
+> the mixed-radix position and the never-retreat rule were all built to enforce by hand. All four are
+> deleted. So is the original bug: the fields **are** the register values, so there is no second
+> convention left to disagree with.
+>
+> A full sweep is **13 probes** rather than hundreds, which is what makes a 60 s probe window
+> affordable. Measured on this board three times:
+>
+> | sweep | probe window | settled | min strikes |
+> |---|---|---|---|
+> | 1 | 10 s | 448 — `nf 0, wd 7, sr 0, ms 0` | 1, reports every strike |
+> | 2 | 10 s | 448 — same | 1 |
+> | 3 | 60 s | **478** — `nf 0, wd 7, sr 7, ms 2` | **9** |
+>
+> **The longer window settled deafer, and that is the predicate rather than the room.** A probe asks
+> `count == 0`, and a longer window has strictly more chances to catch one stray event — so probes at
+> 463, 471 and 475 each returned a single event, and each pushed the search one notch further. The
+> sweep spent spike rejection and then reached `MIN_NUM_LIGH` on the strength of **one to two events
+> per minute**, having rejected other points at 100+ per minute by the identical verdict.
+>
+> The bit ordering did its job throughout: `NF_LEV` was decided in probes 1–4, `WDTH` by 8, `SREJ` in
+> 9–11, and `MIN_NUM_LIGH` only in 12–13 — last, as designed. But **a structural protection cannot
+> survive a test that never accepts an answer**: once the cheap registers are exhausted, a
+> zero-tolerance predicate forces the search into the expensive ones anyway.
+>
+> This is left as it stands, deliberately, because the ±1 walk repairs it and repairs it in the right
+> order. `relaxed` steps the *least significant non-zero field*, which is `MIN_NUM_LIGH` first:
+>
+> ```
+> 478  ms 2 (wait 9)   settled
+> 477  ms 1 (wait 5)   after one quiet minute
+> 476  ms 0 (wait 1)   after two — reporting every strike again
+> 472  sr 6            then spike rejection, a notch a minute
+> 448  sr 0            after nine — what the 10 s sweeps found
+> ```
+>
+> So a calibration that overpays is refunded most-destructive-first within two minutes of quiet.
+> Observed doing exactly that on the run above. **The signature to watch for** is a room with a
+> persistent one-event-per-minute floor: the climb test is `window_events > 0`, so such a room never
+> earns a quiet minute and would ratchet upward indefinitely. This board is not one — the same points
+> read 0 and 1 on different probes, so it oscillates around the boundary instead.
+>
+> Two further defects fell out of the new shape, both found by host checks before hardware saw them:
+>
+> * **`SREJ`'s cap of 11 cannot coexist with a dense space.** Clamping on construction folded four of
+>   every sixteen steps back onto 11, so a tuner walking up from raw 47 landed on 48, clamped to 44,
+>   and cycled 44–47 forever — never able to pass spike rejection 11. The cap is unnecessary anyway:
+>   the search bisects for the *lowest* quiet point, so it prefers weak spike rejection unprompted.
+>   The judgement the cap encoded is now a property of the search rather than a wall in the space.
+> * **The packed number is not monotonic in defence at a borrow.** Stepping "down" from the settled
+>   448 (`wd 7, sr 0, ms 0`) gives 447, which is `wd 6, sr 15, ms 3` — from reporting every strike to
+>   waiting for sixteen. The device then walked on down, because a chip waiting for sixteen strikes
+>   hears nothing, which reads as "no noise, relax". Relaxing therefore steps the **least significant
+>   non-zero field**, not the number: 448 → 384, gentler in one register and unchanged in the rest.
+>
+> **The sweep is driven by the main loop**, one probe per measurement window, rather than being a
+> call that owns the loop for its duration. That is not a display detail. A blocking sweep could not
+> use `listen`'s event counter, so it grew its own; could not use the ordinary redraw, so it grew its
+> own progress screen; and left the panel on whatever was there when the command arrived — after a
+> fresh boot, the logo, for fourteen minutes, which is indistinguishable from a device that hung
+> during start-up. Driven from the loop, a probe is an ordinary window whose verdict goes to the
+> search instead of to the ±1 walk, and the ordinary gauge shows the point under test.
+>
+> Between calibrations the point walks ±1 on the same 60 s window. A never-calibrated device starts
+> from the two volume knobs mid-range with `SREJ` and `MIN_NUM_LIGH` at their most sensitive: neither
+> of those is a volume control, so neither has any business being pre-set to a guess.
 
 > #### ⚠⚠ AS BUILT: the ladder was 31 rungs and is now 7 — the extra 24 rejected lightning
 >
@@ -776,8 +871,9 @@ than applied unconditionally: an always-frugal build is an unflashable one.
 2. ✅ I2C on GPIO6/7 → scan → confirm AS3935 @ 0x03; port the register driver.
 3. ✅ Wire IRQ — on **GPIO21 (D6)**, not GPIO20; ISR-notifies pattern; decode reason → distance and
    intensity on lightning.
-4. ✅ Storm logic + noise auto-tune, `NF_LEV` only (§4.2 — it was 31 rungs and the extra 24 rejected
-   lightning). Pure logic, host-tested.
+4. ✅ Storm logic + noise auto-tune (§4.2 — now one packed 13-bit point bisected in 13 probes; it was
+   a 31-rung ladder, then 7, and the state machine in between had the sign inverted). Pure logic,
+   host-tested.
 5. ✅ CSV logging on LittleFS; clock over the console rather than SNTP; **rings rebuilt from the file
    on boot**.
 6. ✅ e-paper bring-up → UI, change-gated refresh, day/week/month charts.
@@ -790,7 +886,7 @@ suggested 0.44/0.49. Two API drifts caught immediately: `esp_idf_hal::prelude` n
 
 **Testing:** `cargo test` cannot run in this crate — it only builds for `riscv32imc-esp-espidf` and
 every dependency pulls in ESP-IDF. Pure logic is exercised on the host instead; see
-`tests/host/README.md`. 37 checks across the defence ladder and the history rings.
+`tests/host/README.md`. 83 checks across the packed defence point and the history rings.
 
 ---
 
