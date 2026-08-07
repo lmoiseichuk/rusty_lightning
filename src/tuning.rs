@@ -74,21 +74,6 @@ pub struct Tuning {
     /// and a device that silently came back from a power cut with its noise
     /// rejection disabled would be a trap.
     pub frozen: bool,
-    /// How many notches the next quiet window relaxes by.
-    ///
-    /// **Accelerating, because the two directions were badly mismatched.**
-    /// Climbing is proportional -- 240 events/min against a 12/min threshold is
-    /// 20 notches in one window -- while relaxing was fixed at one, so a brief
-    /// burst of interference cost twenty minutes of recovery. Measured here: a
-    /// microwave door swing put the point at `nf 7, wd 13` in a single window,
-    /// and unwinding it one notch at a time would have taken until long after
-    /// the room went quiet.
-    ///
-    /// So each consecutive quiet window relaxes by one more than the last --
-    /// 1, 2, 3, ... -- and any window that is not quiet resets it to 1. The
-    /// device still leaves gently, but it does not dawdle once it is clear the
-    /// interference has gone.
-    relax_step: u32,
 }
 
 impl Tuning {
@@ -117,7 +102,6 @@ impl Tuning {
             strikes: 0,
             window_started_ms: now_ms,
             frozen: false,
-            relax_step: 1,
         }
     }
 
@@ -194,15 +178,9 @@ impl Tuning {
             _ if sweeping => None,
             _ if self.strikes > 0 && !quiet => {
                 self.hold(totals);
-                // Not quiet, so the descent has been interrupted: the next
-                // relaxation starts over at one notch.
-                self.relax_step = 1;
                 None
             }
-            _ if !quiet => {
-                self.relax_step = 1;
-                self.climb(totals)
-            }
+            _ if !quiet => self.climb(totals),
             _ => self.relax(),
         };
 
@@ -339,29 +317,26 @@ impl Tuning {
         }
     }
 
-    /// Gentler, by one more notch than the last consecutive quiet window.
+    /// **One notch. Always one.**
     ///
-    /// The first step is still one, so a device sitting on its boundary keeps
-    /// hunting by ones and does not oscillate wildly. It only picks up speed
-    /// when the room has been quiet for several windows running, which is
-    /// exactly when a slow descent is wasted caution. See [`Tuning::relax_step`].
+    /// Briefly this accelerated -- each consecutive quiet window relaxing by one
+    /// more than the last -- to balance a climb that is proportional. In the
+    /// 13-bit space that was reasonable arithmetic. In the 11-bit space it is
+    /// not: with `MIN_NUM_LIGH` gone there are 2048 points rather than 8192, and
+    /// each notch of the three that remain is correspondingly more valuable.
+    /// An accelerating descent overshoots a boundary the device spent minutes
+    /// finding.
+    ///
+    /// The asymmetry is now deliberate and one-sided: climb fast, leave slowly.
+    /// A storm's first strike should not arrive into a receiver that sprinted
+    /// back toward a floor it will have to climb again.
     fn relax(&mut self) -> Option<&'static str> {
-        let mut stepped = false;
-        for _ in 0..self.relax_step {
-            match self.point.relaxed() {
-                Some(gentler) => {
-                    self.point = gentler;
-                    stepped = true;
-                }
-                None => break,
+        match self.point.relaxed() {
+            Some(gentler) => {
+                self.point = gentler;
+                Some("down")
             }
-        }
-        // Saturating, so a device left quiet for hours cannot overflow the
-        // counter -- it simply relaxes as far as the point allows each window.
-        self.relax_step = self.relax_step.saturating_add(1);
-        match stepped {
-            true => Some("down"),
-            false => None,
+            None => None,
         }
     }
 
