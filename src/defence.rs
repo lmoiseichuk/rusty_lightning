@@ -157,6 +157,34 @@ impl Point {
     /// `sensitive off` and every calibration start.
     pub const OPEN: Point = Point(0);
 
+    /// **Where a device starts when it has never calibrated.**
+    ///
+    /// Each field at the middle of its range — *except* spike rejection and min
+    /// strikes, which start at their most sensitive. That split is the whole
+    /// point of the default:
+    ///
+    /// * `NF_LEV` and `WDTH` only decide how loud a signal has to be. Starting
+    ///   them mid-range costs some distant strikes and buys a device that is not
+    ///   drowning on its first window. Booting fully open was measured here at
+    ///   7–9 noise events per batch, continuously, which is a receiver with
+    ///   nothing left to say about anything.
+    /// * `SREJ` and `MIN_NUM_LIGH` decide whether a strike is *reported at all* —
+    ///   one rejects on waveform shape, the other silences the first fifteen
+    ///   strikes of a storm. Neither is a volume control, so neither has any
+    ///   business being pre-set to a guess. They start at zero and only a
+    ///   measurement moves them.
+    ///
+    /// Computed from [`FIELDS`] rather than written as a literal, so reordering
+    /// the layout moves this with it.
+    pub fn default_start() -> Point {
+        Point::pack(
+            FIELDS[NOISE_FLOOR].ceiling() / 2,
+            FIELDS[WATCHDOG].ceiling() / 2,
+            0,
+            0,
+        )
+    }
+
     /// Build from a raw packed value, clamping to the representable range.
     ///
     /// The only clamp: every one of the 8192 values maps to a distinct, legal
@@ -218,6 +246,35 @@ impl Point {
         raw = FIELDS[SPIKE].set(raw, spike);
         raw = FIELDS[MIN_STRIKES].set(raw, min_strikes);
         Point(raw)
+    }
+
+    /// One notch gentler, or `None` when already fully open.
+    ///
+    /// **Not `raw - 1`.** Decrementing the packed number is only a relaxation
+    /// when it does not borrow, and it borrows exactly when the low fields are
+    /// zero — which is the common case, because a calibration settles with them
+    /// zero. Measured on this board: the sweep settled at 448 (`wd 7, sr 0,
+    /// ms 0`, reporting every strike) and one decrement produced 447, which is
+    /// `wd 6, sr 15, ms 3` — waiting for sixteen strikes. The device then walked
+    /// on down, because a chip waiting for sixteen strikes hears nothing, which
+    /// reads as "no noise, relax".
+    ///
+    /// So relax the **least significant non-zero field** instead. From 448 that
+    /// is the watchdog, giving 384 (`wd 6, sr 0, ms 0`) — gentler in exactly one
+    /// register and unchanged in the rest, which is what the word means.
+    ///
+    /// Climbing stays plain `raw + 1`: a borrow on the way up can only carry
+    /// *out* of the destructive low fields, which resets them toward reporting
+    /// every strike rather than away from it.
+    pub fn relaxed(self) -> Option<Point> {
+        // Least significant first, which is the reverse of the table order.
+        for index in (0..FIELDS.len()).rev() {
+            let value = self.field(index);
+            if value > 0 {
+                return Some(Point(FIELDS[index].set(self.0, value - 1)));
+            }
+        }
+        None
     }
 
     /// How hard the device is defending, 0–100, for the gauge.

@@ -77,6 +77,8 @@ pub enum Command {
     /// freeze the §4.2 auto-tune there.
     /// Search every parameter for the quietest combination (§4.2).
     Calibrate(u32),
+    /// `defence` shows the point; `defence <raw>` sets it.
+    Defence(Option<u16>),
     Sensitive(bool),
     /// Typed, but not understood. Still counts as activity.
     Unknown,
@@ -205,6 +207,17 @@ fn parse(line: &str) -> Command {
         // `calibrate [seconds]` -- a bad or missing number falls back to the
         // default rather than refusing the command, because the argument is a
         // refinement and the sweep is the point.
+        // The starting point, by hand. `defence` alone reports where the
+        // machine is; `defence <raw>` puts it somewhere, which is how a room
+        // with a known answer skips the sweep entirely.
+        "defence" | "point" => match arg {
+            None => Command::Defence(None),
+            Some(value) => match value.parse::<u16>() {
+                Ok(raw) => Command::Defence(Some(raw)),
+                Err(_) => Command::Unknown,
+            },
+        },
+
         "calibrate" | "cal" => match arg {
             None => Command::Calibrate(crate::session::CALIBRATE_PROBE_S),
             Some(value) => match value.parse::<u32>() {
@@ -268,6 +281,8 @@ pub fn print_help() {
     println!("diagnostics:");
     println!("  regs                  the sensor's registers, off the chip and decoded");
     println!("  battery               level, voltage, charging/idle/discharging, raw gauge");
+    println!("  defence [raw]         show the tuning point, or set it (0-{})",
+        crate::defence::MAX);
     println!("  calibrate [seconds]   search every parameter for the quietest combination");
     println!(
         "                        seconds is per probe ({}-{}, default {})",

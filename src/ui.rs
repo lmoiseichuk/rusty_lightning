@@ -200,6 +200,146 @@ pub struct Status<'a> {
 }
 
 /// Draw the status screen.
+/// What one calibration probe is about to do, for [`calibrating`].
+pub struct Calibration<'a> {
+    pub probe: u32,
+    pub probes: u32,
+    pub low: u16,
+    pub high: u16,
+    pub raw: u16,
+    pub max: u16,
+    pub percent: u32,
+    /// `session::describe` output — the four register fields.
+    pub fields: &'a str,
+    pub last_events: u32,
+    pub window_s: u32,
+}
+
+/// The screen shown during a calibration sweep.
+///
+/// **A screen of its own rather than the status screen**, because a sweep is not
+/// a state the status screen can describe: the registers are deliberately
+/// mis-set, the event counts belong to a probe rather than to the room, and the
+/// defence gauge is showing a value the machine is *testing*, not one it has
+/// chosen. Borrowing the normal screen would report all three as if they were
+/// the device's settled opinion.
+///
+/// Drawn **before** each probe, never during one. A refresh is 3.8 s of
+/// high-current SPI next to a sensor this project has already watched be jammed
+/// by the board's own activity, so it finishes, then the settle runs, and only
+/// then does the measurement window open.
+pub fn calibrating(frame: &mut Display7in5, c: &Calibration<'_>) {
+    let _ = frame.clear(PAPER);
+
+    let _ = Text::with_baseline(
+        "Calibrating",
+        Point::new(40, 40),
+        MonoTextStyle::new(&FONT_10X20, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    let heading = format!(
+        "probe {} of about {}, {} s each",
+        c.probe, c.probes, c.window_s
+    );
+    let _ = Text::with_baseline(
+        &heading,
+        Point::new(40, 76),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    // Two bars: how far through the search, and how deaf the point being tested
+    // is. The second is the one worth watching -- it is the answer taking shape.
+    bar(frame, Point::new(40, 120), "Search", c.probe, c.probes.max(1));
+    bar(frame, Point::new(40, 180), "Defence", c.percent, 100);
+
+    let scope = format!(
+        "scope {}..{}  testing {}/{}",
+        c.low, c.high, c.raw, c.max
+    );
+    let _ = Text::with_baseline(
+        &scope,
+        Point::new(40, 240),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    let _ = Text::with_baseline(
+        c.fields,
+        Point::new(40, 268),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    let previous = match c.probe {
+        0 | 1 => String::from("listening..."),
+        _ => format!("last probe: {} event(s)", c.last_events),
+    };
+    let _ = Text::with_baseline(
+        &previous,
+        Point::new(40, 296),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    let _ = Text::with_baseline(
+        "the sensor is deliberately mis-set while this runs",
+        Point::new(40, HEIGHT as i32 - 48),
+        MonoTextStyle::new(&FONT_8X13, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+}
+
+/// A labelled bar, for [`calibrating`].
+///
+/// Separate from `gauge` because that one hardcodes the label "Noise" when it
+/// measures its own text width — a deliberate choice there, and the wrong one
+/// for a screen with two differently-named bars.
+fn bar(frame: &mut Display7in5, at: Point, label: &str, value: u32, max: u32) {
+    const BAR_WIDTH: u32 = 420;
+    const BAR_HEIGHT: u32 = 26;
+    const LABEL_WIDTH: i32 = 110;
+
+    let _ = Text::with_baseline(
+        label,
+        Point::new(at.x, at.y + 6),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+
+    let bar_x = at.x + LABEL_WIDTH;
+    let _ = Rectangle::new(Point::new(bar_x, at.y), Size::new(BAR_WIDTH, BAR_HEIGHT))
+        .into_styled(PrimitiveStyle::with_stroke(INK, 2))
+        .draw(frame);
+
+    if max > 0 && value > 0 {
+        let filled = (BAR_WIDTH - 4) * value.min(max) / max;
+        let _ = Rectangle::new(
+            Point::new(bar_x + 2, at.y + 2),
+            Size::new(filled, BAR_HEIGHT - 4),
+        )
+        .into_styled(PrimitiveStyle::with_fill(INK))
+        .draw(frame);
+    }
+
+    let caption = format!("{}%", if max > 0 { value * 100 / max } else { 0 });
+    let _ = Text::with_baseline(
+        &caption,
+        Point::new(bar_x + BAR_WIDTH as i32 + 12, at.y + 6),
+        MonoTextStyle::new(&FONT_9X15, INK),
+        Baseline::Top,
+    )
+    .draw(frame);
+}
+
 pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     let _ = frame.clear(PAPER);
     let black = PrimitiveStyle::with_stroke(INK, 1);

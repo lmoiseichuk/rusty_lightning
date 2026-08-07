@@ -138,6 +138,19 @@ fn main() {
         && Point::OPEN.noise_floor() == 0
         && Point::OPEN.min_strikes() == 0);
 
+    // --- the compiled-in starting point -------------------------------------
+    //
+    // The split is the claim worth checking: the two volume knobs open
+    // mid-range, the two that decide whether a strike is reported at all stay at
+    // their most sensitive. Getting this backwards would ship a device that
+    // boots waiting for sixteen strikes.
+    let start = Point::default_start();
+    check("the default starts the noise floor mid-range", start.noise_floor() == 3);
+    check("...and the watchdog mid-range", start.watchdog() == 7);
+    check("...with spike rejection wide open", start.spike_rejection() == 0);
+    check("...and reporting every strike", start.min_strikes_count() == 1);
+    check("...which is well clear of the noisy bottom", start.raw() > 0);
+
     // --- clamping -----------------------------------------------------------
     check("a raw value past MAX clamps", Point::new(60000).raw() <= MAX);
     check("a field value past its width clamps",
@@ -166,6 +179,58 @@ fn main() {
         }
     }
     check("a step up always changes the point", always_moves);
+
+    // --- relaxing, which is NOT raw - 1 -------------------------------------
+    //
+    // The check that stops the borrow coming back. A decrement from a point with
+    // zero low fields lands deafer than it started, which is the failure this
+    // whole operation exists to avoid.
+    let settled = Point::pack(0, 7, 0, 0);
+    check("the observed settle point is 448", settled.raw() == 448);
+    check("a raw decrement from it borrows into 16 strikes",
+        Point::new(settled.raw() - 1).min_strikes_count() == 16
+            && Point::new(settled.raw() - 1).spike_rejection() == 15);
+    let gentler = settled.relaxed().unwrap();
+    check("relaxed() steps the watchdog instead", gentler.watchdog() == 6);
+    check("...leaving every other field alone", gentler.noise_floor() == 0
+        && gentler.spike_rejection() == 0
+        && gentler.min_strikes() == 0);
+    check("...which is 384", gentler.raw() == 384);
+
+    // The general property, over the whole space: relaxing never makes any
+    // field more defensive. That is the definition, and it is what a floor was
+    // previously bolted on to fake.
+    let mut never_deafer = true;
+    for raw in 1..=MAX {
+        let p = Point::new(raw);
+        let r = match p.relaxed() {
+            Some(r) => r,
+            None => continue,
+        };
+        for index in 0..FIELDS.len() {
+            if r.field(index) > p.field(index) {
+                never_deafer = false;
+            }
+        }
+        if r >= p {
+            never_deafer = false;
+        }
+    }
+    check("relaxing never raises any field, anywhere in the space", never_deafer);
+    check("fully open cannot relax further", Point::OPEN.relaxed().is_none());
+
+    // And it always terminates at OPEN rather than stalling part-way.
+    let mut walk = Point::new(MAX);
+    let mut steps = 0;
+    while let Some(next) = walk.relaxed() {
+        walk = next;
+        steps += 1;
+        if steps > 100 {
+            break;
+        }
+    }
+    check("relaxing from the ceiling reaches fully open", walk == Point::OPEN);
+    check("...in one step per notch, not per raw value", steps == 7 + 15 + 15 + 3);
 
     // --- the strike count is not the field ----------------------------------
     check("min strikes 0 waits for 1", Point::pack(0, 0, 0, 0).min_strikes_count() == 1);

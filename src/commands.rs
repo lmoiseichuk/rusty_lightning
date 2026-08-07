@@ -57,6 +57,11 @@ pub struct Effects {
     /// is: the sweep needs the sensor, the bus and the IRQ notification, and
     /// `Ctx` deliberately has none of them.
     pub calibrate: Option<u32>,
+    /// `Some(raw)` when `defence <raw>` was used. Applied by the caller, which
+    /// is the only place that owns the point and the bus.
+    pub set_point: Option<u16>,
+    /// Set by a bare `defence`, which only wants to be told where it is.
+    pub show_point: bool,
     /// `Some(on)` when `sensitive` was used. Applied by the caller rather than
     /// here, because `Ctx` deliberately has no sensor or bus — every other
     /// console command is pure, and one hardware command should not change that
@@ -275,6 +280,9 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             Some(log) => log::dump_csv(log),
             None => println!("dump: no log -- the storage partition is missing"),
         },
+        Command::Defence(None) => effects.show_point = true,
+        Command::Defence(Some(raw)) => effects.set_point = Some(raw),
+
         Command::Calibrate(seconds) => {
             // Acknowledged here so the reply lands before the sweep starts
             // holding the loop for minutes.

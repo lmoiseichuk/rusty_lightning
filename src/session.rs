@@ -10,7 +10,7 @@ use esp_idf_hal::i2c::I2cDriver;
 
 use crate::as3935::{As3935, Distance, Interrupt, Location, Strike};
 
-use crate::{as3935, clock, defence, history, log, settings};
+use crate::{as3935, clock, defence, display, history, log, settings, ui};
 
 /// What one batch window heard.
 #[derive(Default)]
@@ -342,7 +342,7 @@ pub fn tune(
 /// `min strikes` is spelled as the count the chip actually waits for rather than
 /// the raw two bits, because "ms 1" and "wait for five strikes" are very
 /// different things to read at 3am and only one of them is the truth.
-fn describe(point: defence::Point) -> String {
+pub fn describe(point: defence::Point) -> String {
     // Built from `defence::FIELDS` rather than written out, so the line follows
     // the layout: reordering the table reorders the console output instead of
     // leaving the labels attached to the wrong values.
@@ -532,6 +532,7 @@ pub fn calibrate(
     irq: &mut esp_idf_hal::gpio::PinDriver<'_, esp_idf_hal::gpio::Input>,
     notification: &esp_idf_hal::task::notification::Notification,
     window_s: u32,
+    mut panel: Option<&mut display::Panel<'_>>,
 ) -> defence::Point {
     let window_s = window_s.clamp(CALIBRATE_PROBE_MIN_S, CALIBRATE_PROBE_MAX_S);
     let window_ms = window_s.saturating_mul(1000);
@@ -553,17 +554,52 @@ pub fn calibrate(
     let mut low = 0u16;
     let mut high = defence::MAX;
 
+    let mut probe = 0u32;
+    let mut last_events = 0u32;
+
     while low < high {
         let mid = low + (high - low) / 2;
         let point = defence::Point::new(mid);
+        probe += 1;
 
         if let Err(e) = apply(sensor, i2c, point) {
             println!("cal:  could not program the sensor -- {e}");
         }
+
+        // **Draw, then probe.** The refresh is 3.8 s of high-current SPI beside
+        // a sensor this project has already watched be jammed by the board's own
+        // activity, so it happens between probes and never during one. It also
+        // doubles as settling time: the registers are already programmed, so the
+        // repaint is time the chip spends adjusting to them rather than time
+        // taken from the measurement.
+        if let Some(panel) = panel.as_deref_mut() {
+            let fields = describe(point);
+            let mut frame = display::Panel::frame();
+            ui::calibrating(
+                &mut frame,
+                &ui::Calibration {
+                    probe,
+                    probes,
+                    low,
+                    high,
+                    raw: point.raw(),
+                    max: defence::MAX,
+                    percent: point.percent(),
+                    fields: &fields,
+                    last_events,
+                    window_s,
+                },
+            );
+            if let Err(e) = panel.show(&frame) {
+                println!("cal:  progress screen failed -- {e}");
+            }
+        }
+
         // Let the new thresholds take effect before counting against them.
         FreeRtos::delay_ms(CALIBRATE_SETTLE_MS);
 
         let count = measure(sensor, i2c, irq, notification, window_ms);
+        last_events = count;
         println!(
             "cal:  [{}..{}] {} -> {} -- {} event(s)",
             low,

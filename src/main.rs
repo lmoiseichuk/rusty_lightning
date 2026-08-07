@@ -161,7 +161,14 @@ const BATCH_MS: u32 = 1000;
 /// **A whole divisor of 60**, so the same window doubles as the event count the
 /// screen reports — multiplied by [`EVENTS_PER_MIN_SCALE`], which is exact only
 /// at 10, 15, 20, 30 or 60.
-const MEASURE_INTERVAL_S: u32 = 10;
+/// **Sixty seconds**, matching the calibration probe window.
+///
+/// The +/-1 walk that runs between calibrations is judging the same question a
+/// probe judges -- "did that window hear anything" -- so it deserves the same
+/// span. At ten seconds it was deciding on a sample too short to distinguish a
+/// quiet room from a gap between events, and stepping the point every ten
+/// seconds on that evidence.
+const MEASURE_INTERVAL_S: u32 = 60;
 
 /// What a window's event count is multiplied by to read as events per minute.
 const EVENTS_PER_MIN_SCALE: u32 = 60 / MEASURE_INTERVAL_S;
@@ -584,8 +591,13 @@ fn configure(
             stored
         }
         None => {
-            println!("as:   no stored defence point -- starting fully sensitive");
-            defence::Point::OPEN
+            // Not `OPEN`. A never-calibrated device booting fully open drowns --
+            // measured here at 7-9 noise events per batch, continuously -- and
+            // the +/-1 walk needs about a thousand windows to climb out of it.
+            // `default_start` opens mid-range on the two volume knobs and leaves
+            // the two that decide whether a strike is reported at all untouched.
+            println!("as:   no stored defence point -- starting from the default");
+            defence::Point::default_start()
         }
     };
     session::apply(sensor, i2c, point)?;
@@ -619,20 +631,6 @@ fn listen(
     start_point: defence::Point,
 ) {
     let mut point = start_point;
-    // **The floor the +/-1 walk may not go below.**
-    //
-    // A calibration settles on the *lowest* quiet point, so every value beneath
-    // it has been measured and found noisy -- and stepping below it is not the
-    // gentle relaxation the number makes it look like. Measured on this board:
-    // the sweep settled at 448 (`wd 7 sr 0 ms 0`, report every strike) and the
-    // very next quiet window stepped to 447, which is `wd 6 sr 15 ms 3` -- a
-    // borrow across three fields that took the chip from "report every strike"
-    // to "wait for sixteen". It then walked on down, because a chip waiting for
-    // sixteen strikes hears nothing, which reads as "no noise, go left" forever.
-    //
-    // So `down` stops here. `up` is unbounded, because climbing is how the
-    // machine answers noise it did not expect.
-    let mut floor_raw = start_point.raw();
     // What is on flash, so a write only happens when the point has actually
     // moved away from it.
     let mut stored_point = start_point;
@@ -736,6 +734,9 @@ fn listen(
         },
         Err(e) => println!("pm:   could not apply {} -- {e}", policy.label()),
     }
+    // Set by the `calibrate` command, run at the *end* of the iteration so the
+    // screen is current before the sweep takes the loop away for minutes.
+    let mut pending_calibrate: Option<u32> = None;
     let mut drawn: Option<Drawn> = None;
     let mut last_draw_ms: u32 = 0;
 
@@ -1051,26 +1052,50 @@ fn listen(
             // The sweep owns the loop while it runs: it needs the sensor, the
             // bus and the notification, and it deliberately holds bad settings
             // between probes.
-            if let Some(window_s) = effects.calibrate {
-                point = session::calibrate(sensor, i2c, irq, notification, window_s);
-                // The sweep's answer becomes the floor: it is the most receptive
-                // point that measured quiet, and the walk has no business going
-                // below a value the device has just proved is noisy.
-                floor_raw = point.raw();
-                match settings::store_defence_point(point) {
-                    Ok(()) => {
-                        stored_point = point;
-                        last_point_save_s = now_ms() / 1000;
-                        println!("cal:  point stored");
-                    }
-                    Err(e) => println!("cal:  point NOT stored -- {e}"),
+            if effects.show_point {
+                println!(
+                    "def:  {}/{} ({}%) -- {}",
+                    point.raw(),
+                    defence::MAX,
+                    point.percent(),
+                    session::describe(point)
+                );
+            }
+
+            // Set by hand -- how a room with a known answer skips the sweep.
+            if let Some(raw) = effects.set_point {
+                point = defence::Point::new(raw);
+                match session::apply(sensor, i2c, point) {
+                    Ok(()) => println!(
+                        "def:  set to {}/{} ({}%) -- {}",
+                        point.raw(),
+                        defence::MAX,
+                        point.percent(),
+                        session::describe(point)
+                    ),
+                    Err(e) => println!("def:  could not program -- {e}"),
                 }
-                // Judge the settled point on a fresh window rather than on
-                // whatever the sweep left in the counters.
                 window_events = 0;
                 window_disturbers = 0;
                 tune_window_ms = now_ms();
             }
+
+            // **Deferred to the end of this iteration, deliberately.**
+            //
+            // The sweep owns the loop for minutes, and running it here -- before
+            // the screen block below -- means the panel keeps whatever was on it
+            // when the command arrived. Ask for a calibration in the first
+            // seconds after boot and that is the *logo*, for the whole sweep,
+            // which reads exactly like a device that hung during start-up.
+            //
+            // `user_acted` bypasses the redraw rate limit for the same reason a
+            // button press does: somebody is standing there waiting to see that
+            // the thing they just asked for has begun.
+            if let Some(window_s) = effects.calibrate {
+                pending_calibrate = Some(window_s);
+                user_acted = true;
+            }
+
 
             // Applied here rather than in the command handler because `Ctx` has
             // no sensor or bus -- see `Effects::sensitivity`.
@@ -1083,10 +1108,6 @@ fn listen(
                     // happened to be: the auto-tune was frozen, so it is stale
                     // by however long the override was on.
                     point = defence::Point::OPEN;
-                    // A deliberate request for full sensitivity also throws away
-                    // the floor -- otherwise the walk would be pinned above a
-                    // calibration the operator has just overridden.
-                    floor_raw = 0;
                     window_events = 0;
                     window_disturbers = 0;
                     tune_window_ms = now_ms();
@@ -1265,15 +1286,16 @@ fn listen(
                     false => None,
                 }
             } else {
-                match raw > floor_raw {
-                    true => {
-                        point = defence::Point::new(raw - 1);
+                // `relaxed`, not `raw - 1`: see `defence::Point::relaxed`. A
+                // decrement borrows across fields and lands deafer than it
+                // started, which is how a quiet room used to walk itself into
+                // waiting for sixteen strikes.
+                match point.relaxed() {
+                    Some(gentler) => {
+                        point = gentler;
                         Some("down")
                     }
-                    // Already at the calibrated floor. Everything below it has
-                    // been measured and found noisy, so there is nothing to gain
-                    // and a borrow to lose.
-                    false => None,
+                    None => None,
                 }
             };
             window_events = 0;
@@ -1406,6 +1428,30 @@ fn listen(
                 last_draw_ms = now_ms();
                 user_acted = false;
             }
+        }
+
+        if let Some(window_s) = pending_calibrate.take() {
+            point = session::calibrate(
+                sensor,
+                i2c,
+                irq,
+                notification,
+                window_s,
+                panel.as_deref_mut(),
+            );
+            match settings::store_defence_point(point) {
+                Ok(()) => {
+                    stored_point = point;
+                    last_point_save_s = now_ms() / 1000;
+                    println!("cal:  point stored");
+                }
+                Err(e) => println!("cal:  point NOT stored -- {e}"),
+            }
+            // Judge the settled point on a fresh window rather than on
+            // whatever the sweep left in the counters.
+            window_events = 0;
+            window_disturbers = 0;
+            tune_window_ms = now_ms();
         }
 
         batch = Batch::default();
