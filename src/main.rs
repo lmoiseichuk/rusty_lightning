@@ -20,6 +20,7 @@ mod settings;
 mod storage;
 mod strike;
 mod system;
+mod tuning;
 mod ui;
 
 use std::num::NonZeroU32;
@@ -32,7 +33,7 @@ use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::units::Hertz;
 
 use as3935::{As3935, Location};
-use session::{collect, report, toggle_location, tune, Batch, Drawn, Totals};
+use session::{collect, report, toggle_location, Batch, Drawn, Totals};
 
 /// I2C bus speed. **200 kHz: off the sensor's passband, and half of what broke
 /// it.**
@@ -146,31 +147,6 @@ const TUNING_CAPS_PF: u8 = 120;
 
 /// How long to collect events before summarising them (§4.2's "~1 s batch").
 const BATCH_MS: u32 = 1000;
-
-/// The one measurement window (§4.2).
-///
-/// **A single period for everything**: the noise level is reconsidered once per
-/// window, and the same window's counts are what the screen reports. One
-/// constant rather than three, so the ladder can never be deciding on evidence
-/// the display is not showing.
-///
-/// **Sixty seconds**, matching the calibration probe window.
-///
-/// The +/-1 walk that runs between calibrations is judging the same question a
-/// probe judges -- "did that window hear anything" -- so it deserves the same
-/// span. At ten seconds it was deciding on a sample too short to distinguish a
-/// quiet room from a gap between events, and stepping the point every ten
-/// seconds on that evidence.
-const MEASURE_INTERVAL_S: u32 = 60;
-
-/// How often the learned tuning point may be written back to NVS.
-///
-/// Fifteen minutes, matching `clock::SAVE_INTERVAL_S` and for the same reason:
-/// the value it protects re-learns in minutes, so a power cut costs almost
-/// nothing while a write every window would cost flash endurance for real. A
-/// settled room stops moving the point at all, and then this writes once and
-/// never again.
-const DEFENCE_SAVE_S: u32 = 15 * 60;
 
 
 
@@ -599,26 +575,7 @@ fn listen(
     mut strike_log: Option<&mut log::Log>,
     start_point: defence::Point,
 ) {
-    let mut point = start_point;
-    // What is on flash, so a write only happens when the point has actually
-    // moved away from it.
-    let mut stored_point = start_point;
-    let mut last_point_save_s: u32 = now_ms() / 1000;
-    // Counted in the window now being judged, and when it started.
-    let mut window_events: u32 = 0;
-    let mut window_disturbers: u32 = 0;
-    // Strikes in the current window, which **veto** a climb -- see the tune
-    // block. Kept apart from `window_events` because that is the interference
-    // rate and has to stay a measurement of the band, not of the weather.
-    let mut window_strikes: u32 = 0;
-    let mut tune_window_ms: u32 = now_ms();
     let mut last_irq_poll_ms: u32 = now_ms();
-    // Set by `sensitive on`; see `session::force_max_sensitivity`. Deliberately
-    // not persisted to NVS -- it is a diagnostic override for a storm happening
-    // now, and a device that silently came back from a power cut with its noise
-    // rejection disabled would be a trap. (`///` here would be a doc comment on
-    // a local, which Rust warns about: locals have no docs to attach to.)
-    let mut max_sensitivity = false;
     let mut last_button_ms: u32 = 0;
     let mut batch = Batch::default();
     let mut batch_started = now_ms();
@@ -698,23 +655,7 @@ fn listen(
         },
         Err(e) => println!("pm:   could not apply {} -- {e}", policy.label()),
     }
-    // A calibration in progress, driven one probe per window by the tune block
-    // below. `None` when the +/-1 walk is in charge.
-    let mut sweep: Option<session::Sweep> = None;
-    // **The zero both the search and the +/-1 walk compare against.** One
-    // variable rather than two constants, so they can never disagree about what
-    // a quiet window is -- which is exactly how a 60 s sweep came to settle
-    // deafer than a 10 s one in the same room. See `session::QUIET_PER_MIN`.
-    let mut quiet_per_min = match settings::quiet_per_min() {
-        Some(stored) => {
-            println!("as:   quiet threshold {stored}/min (from NVS)");
-            stored
-        }
-        None => {
-            println!("as:   quiet threshold {}/min (default)", session::QUIET_PER_MIN);
-            session::QUIET_PER_MIN
-        }
-    };
+    let mut tuning = tuning::Tuning::new(start_point, now_ms());
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -833,13 +774,13 @@ fn listen(
                     chart_period: &mut screen.period,
                     reading,
                     range,
-                    level: point.percent(),
+                    level: tuning.point.percent(),
                     die_temperature,
                     antenna_khz,
                     irq_confirmed,
                     minute: minute_now(),
                     uptime_minutes: now_ms() / 60_000,
-                    max_sensitivity,
+                    max_sensitivity: tuning.frozen,
                 },
             );
             if effects.clock_saved {
@@ -1025,72 +966,20 @@ fn listen(
                 }
             }
 
-            // The sweep owns the loop while it runs: it needs the sensor, the
-            // bus and the notification, and it deliberately holds bad settings
-            // between probes.
             if effects.show_point {
-                println!(
-                    "def:  {}/{} ({}%) -- {}",
-                    point.raw(),
-                    defence::MAX,
-                    point.percent(),
-                    session::describe(point)
-                );
+                tuning.report();
             }
 
-            // Set by hand -- how a room with a known answer skips the sweep.
             if let Some(raw) = effects.set_point {
-                point = defence::Point::new(raw);
-                match session::apply(sensor, i2c, point) {
-                    Ok(()) => println!(
-                        "def:  set to {}/{} ({}%) -- {}",
-                        point.raw(),
-                        defence::MAX,
-                        point.percent(),
-                        session::describe(point)
-                    ),
-                    Err(e) => println!("def:  could not program -- {e}"),
-                }
-                window_events = 0;
-                window_disturbers = 0;
-                window_strikes = 0;
-                tune_window_ms = now_ms();
+                tuning.place(sensor, i2c, raw, now_ms());
             }
 
-            // Start a sweep. It runs as ordinary measurement windows from here
-            // on -- the tune block below spends each one on the search instead
-            // of on the +/-1 walk -- so the loop, the console and the screen all
-            // keep working throughout.
+            // A sweep runs as ordinary measurement windows from here on -- the
+            // tune block below spends each one on the search instead of on the
+            // +/-1 walk -- so the loop, the console and the screen all keep
+            // working throughout.
             if let Some((window_s, requested_quiet)) = effects.calibrate {
-                // `u32::MAX` is the "not given" marker -- the stored threshold
-                // stands unless the operator names a new one.
-                if requested_quiet != u32::MAX && requested_quiet != quiet_per_min {
-                    quiet_per_min = requested_quiet;
-                    match settings::store_quiet_per_min(quiet_per_min) {
-                        Ok(()) => println!("cal:  quiet threshold now {quiet_per_min}/min (saved)"),
-                        Err(e) => {
-                            println!("cal:  threshold {quiet_per_min}/min but NOT saved -- {e}")
-                        }
-                    }
-                }
-                let started = session::Sweep::new(window_s);
-                println!(
-                    "cal:  starting -- 0..={}, {} s per probe, quiet is <={}/min, about {} probes",
-                    defence::MAX,
-                    started.window_s,
-                    quiet_per_min,
-                    started.remaining()
-                );
-                point = started.point();
-                if let Err(e) = session::apply(sensor, i2c, point) {
-                    println!("cal:  could not program the first probe -- {e}");
-                }
-                FreeRtos::delay_ms(session::CALIBRATE_SETTLE_MS);
-                sweep = Some(started);
-                window_events = 0;
-                window_disturbers = 0;
-                window_strikes = 0;
-                tune_window_ms = now_ms();
+                tuning.begin_sweep(sensor, i2c, window_s, requested_quiet, now_ms());
                 screen.user_acted = true;
             }
 
@@ -1098,18 +987,10 @@ fn listen(
             // Applied here rather than in the command handler because `Ctx` has
             // no sensor or bus -- see `Effects::sensitivity`.
             if let Some(on) = effects.sensitivity {
-                max_sensitivity = on;
-                let outcome = if on {
-                    session::force_max_sensitivity(sensor, i2c)
-                } else {
-                    // Back to fully receptive, not to wherever the point
-                    // happened to be: the auto-tune was frozen, so it is stale
-                    // by however long the override was on.
-                    point = defence::Point::OPEN;
-                    window_events = 0;
-                    window_disturbers = 0;
-                    tune_window_ms = now_ms();
-                    session::apply(sensor, i2c, point)
+                tuning.frozen = on;
+                let outcome = match on {
+                    true => session::force_max_sensitivity(sensor, i2c),
+                    false => tuning.open(sensor, i2c, now_ms()),
                 };
                 match outcome {
                     Ok(()) if on => println!(
@@ -1255,212 +1136,10 @@ fn listen(
         // the measurement and the decision -- the rate on screen used to come
         // from a separate 5-minute probe, so it read `0/min` while the ladder
         // was visibly climbing on events it had just counted.
-        window_events += batch.noise + batch.disturbers;
-        window_disturbers += batch.disturbers;
-        // Counted separately because a strike **vetoes** the climb -- see the
-        // tune block. Deliberately not folded into `window_events`, which is the
-        // interference rate and must stay a measurement of the band rather than
-        // of the weather.
-        window_strikes += batch.strikes;
+        tuning.observe(&batch);
 
-        // While a sweep runs it sets the window, so `calibrate 60` means 60 s
-        // probes even if the ordinary cadence is something else.
-        let window_s = match sweep.as_ref() {
-            Some(sweep) => sweep.window_s,
-            None => MEASURE_INTERVAL_S,
-        };
-
-        if !max_sensitivity && now_ms().saturating_sub(tune_window_ms) >= window_s * 1000 {
-            tune_window_ms = now_ms();
-            // Scaled by the window actually used, so a 60 s probe and a 10 s
-            // window both report a per-minute rate rather than a raw count.
-            // Multiply before dividing, so a window that is not a whole divisor
-            // of 60 still scales correctly instead of collapsing to 1.
-            let per_min = |count: u32| count * 60 / window_s.max(1);
-            totals.noise_per_min = per_min(window_events);
-            totals.disturbers_per_min = per_min(window_disturbers);
-
-            // **The one place "quiet" is decided.** A rate, not a count, so the
-            // verdict means the same thing whatever the window length -- see
-            // `session::QUIET_PER_MIN` for what testing `== 0` cost.
-            let quiet = totals.noise_per_min <= quiet_per_min;
-
-            // A sweep, if one is running, spends this window on the search.
-            // Everything below -- the +/-1 walk -- is what happens the rest of
-            // the time.
-            // Captured before the branch: a sweep that finishes inside it sets
-            // `sweep` to `None`, and the +/-1 walk must still be skipped for
-            // this window rather than stepping the point the search just chose.
-            let sweeping = sweep.is_some();
-
-            if let Some(active) = sweep.as_mut() {
-                let tested = point;
-                active.record(quiet);
-                println!(
-                    "cal:  probe {} [{}..{}] {} -> {} -- {} event(s) = {}/min, {}, ~{} left",
-                    active.probe,
-                    active.low,
-                    active.high,
-                    tested.raw(),
-                    session::describe(tested),
-                    window_events,
-                    totals.noise_per_min,
-                    if quiet { "quiet" } else { "noisy" },
-                    active.remaining()
-                );
-
-                let finished = active.done();
-                point = match finished {
-                    true => active.settled(),
-                    false => active.point(),
-                };
-                if let Err(e) = session::apply(sensor, i2c, point) {
-                    println!("cal:  could not program -- {e}");
-                }
-                // Let the new thresholds take effect before the next window
-                // opens, so a probe measures its own setting rather than the
-                // tail of the previous one.
-                FreeRtos::delay_ms(session::CALIBRATE_SETTLE_MS);
-                tune_window_ms = now_ms();
-
-                if finished {
-                    println!(
-                        "cal:  settled at {}/{} ({}%) -- {}",
-                        point.raw(),
-                        defence::MAX,
-                        point.percent(),
-                        session::describe(point)
-                    );
-                    match settings::store_defence_point(point) {
-                        Ok(()) => {
-                            stored_point = point;
-                            last_point_save_s = now_ms() / 1000;
-                            println!("cal:  point stored -- +/-1 from here");
-                        }
-                        Err(e) => println!("cal:  point NOT stored -- {e}"),
-                    }
-                    sweep = None;
-                }
-            }
-            // The counters are zeroed once, below, for both paths.
-
-            // **NOT `continue`.** Skipping the rest of the iteration would skip
-            // the screen block below, so the panel would hold whatever was on it
-            // for the whole sweep -- which is the entire reason the sweep stopped
-            // being one long blocking call.
-            //
-            // **One step of the packed number per window.** Noisy climbs,
-            // quiet relaxes, and which register that lands on is decided by the
-            // bit layout rather than by a cursor -- see `defence`.
-            //
-            // Worth knowing at the console: the bottom two bits are
-            // `MIN_NUM_LIGH`, so the very first noisy step moves it from 0 to 1
-            // and the chip begins waiting for five strikes. That is the chosen
-            // trade for a tuner that walks the whole number; `describe` spells
-            // the strike count out on every line so it is never a surprise.
-            let moved = if sweeping {
-                // The search owns this window; it has already moved the point.
-                None
-            } else if window_strikes > 0 && !quiet {
-                // **A window that heard a strike never raises the defence.**
-                //
-                // A nearby strike is not a clean impulse: it throws harmonics
-                // that arrive as disturbers, so a storm close enough to matter
-                // looks like a noisy band to a counter that cannot tell them
-                // apart. Climbing on that would deafen the device at exactly the
-                // moment it exists for -- and each notch of `MIN_NUM_LIGH` then
-                // hides the following strikes too, which is a loop that closes
-                // on itself.
-                //
-                // Holding rather than relaxing: the window genuinely was noisy,
-                // so this is a refusal to escalate, not evidence of quiet.
-                println!(
-                    "tune: holding at {}/{} ({}%) -- {} strike(s) this window, {}/min",
-                    point.raw(),
-                    defence::MAX,
-                    point.percent(),
-                    window_strikes,
-                    totals.noise_per_min
-                );
-                None
-            } else if !quiet {
-                // **Proportional: how many notches, from how far over the line.**
-                //
-                // One notch a minute is a rate, and it has to answer a range of
-                // rates. Measured here, a microwave door swing took the band
-                // from 6/min to 94/min; at one notch a minute the machine
-                // answers that by fiddling the bottom bits while the watchdog --
-                // the knob that would actually stop it -- sits untouched for
-                // eight minutes. Observed doing exactly that at 102/min:
-                // `323 -> 324 -> 325`, thrashing min strikes 3 -> 0 -> 1.
-                //
-                // Dividing by the quiet threshold makes the step mean "how many
-                // times over the line is this", which needs no separate constant
-                // and scales with whatever the room's threshold has been set to.
-                // It saturates naturally: a fully jammed band here is ~480/min,
-                // which is 40 notches against a ladder exactly 40 notches deep,
-                // so the worst case is "fully deaf in one minute" rather than an
-                // unbounded number nobody has budgeted for.
-                //
-                // `tightened`, not `raw + 1`: the bottom bits are min strikes,
-                // so incrementing answers a noisy minute by waiting for five
-                // strikes. See `defence::Point::tightened`.
-                let notches = (totals.noise_per_min / quiet_per_min.max(1)).max(1);
-                let mut stepped = false;
-                for _ in 0..notches {
-                    match point.tightened() {
-                        Some(firmer) => {
-                            point = firmer;
-                            stepped = true;
-                        }
-                        None => break,
-                    }
-                }
-                match stepped {
-                    true => Some("up"),
-                    false => None,
-                }
-            } else {
-                // `relaxed`, not `raw - 1`: see `defence::Point::relaxed`. A
-                // decrement borrows across fields and lands deafer than it
-                // started, which is how a quiet room used to walk itself into
-                // waiting for sixteen strikes.
-                match point.relaxed() {
-                    Some(gentler) => {
-                        point = gentler;
-                        Some("down")
-                    }
-                    None => None,
-                }
-            };
-            window_events = 0;
-            window_disturbers = 0;
-            window_strikes = 0;
-
-            // Programmed only when it actually moved. At either end the decision
-            // is taken every window and changes nothing.
-            if let Some(direction) = moved {
-                tune(sensor, i2c, point, direction);
-            }
-            // Relaxing stays one notch a minute. Quick to defend, slow to
-            // relax: a storm's first strike should not arrive into a receiver
-            // that spent the afternoon sprinting back toward a floor it will
-            // have to climb again.
-
-            // Persist the point, rarely. The machine can move every window, and
-            // a flash write at that cadence to protect a value that re-learns in
-            // minutes would spend endurance for nothing -- but a settled room
-            // stops moving, so in practice this writes once and then never.
-            let now_s = now_ms() / 1000;
-            if point != stored_point
-                && now_s.saturating_sub(last_point_save_s) >= DEFENCE_SAVE_S
-            {
-                last_point_save_s = now_s;
-                match settings::store_defence_point(point) {
-                    Ok(()) => stored_point = point,
-                    Err(e) => println!("as:   defence point NOT saved -- {e}"),
-                }
-            }
+        if tuning.due(now_ms()) {
+            tuning.step(sensor, i2c, &mut totals, now_ms());
         }
 
         // --- the screen ---------------------------------------------------
@@ -1474,7 +1153,7 @@ fn listen(
                 strikes: totals.strikes,
                 last_strike: totals.last_strike,
                 location: *location,
-                defence: point.raw() as u32,
+                defence: tuning.point.raw() as u32,
             };
 
             if let Some(why) = screen.due(&want, now_ms()) {
@@ -1497,7 +1176,7 @@ fn listen(
                     panel,
                     &screen::View {
                         location: *location,
-                        point,
+                        point: tuning.point,
                         totals: &totals,
                         history: &history,
                         battery: reading,
