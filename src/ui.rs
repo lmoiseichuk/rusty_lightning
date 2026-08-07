@@ -124,6 +124,23 @@ const FIELD_VALUE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB14_t
 
 type Text16 = heapless::String<16>;
 type Text32 = heapless::String<32>;
+
+/// A whole footer line.
+///
+/// **Not `Text32`, and that was a real defect rather than a near miss.** The
+/// diagnostics footer composes about 67 bytes — antenna, IRQ state, disturber
+/// rate, learned cell range — into a 32-byte buffer, and every push is written
+/// `let _ = ...`, so `heapless` returned `Err` on overflow and it was thrown
+/// away silently. What reached the glass was `antenna 500 kHz · IRQ OK · dis`:
+/// the disturber rate and the cell range had never once been displayed, and with
+/// an unconfirmed IRQ the line read `... IRQ NOT CONFI`, truncating the warning
+/// itself.
+///
+/// 128 bytes leaves room to add a field without rediscovering this. The width is
+/// not a guess either: `FONT_6X10` is monospace, so 91 characters — the longest
+/// this line gets, with `NOT CONFIRMED` — is 546 px against the 768 px between
+/// the margins.
+type TextLine = heapless::String<128>;
 type Text64 = heapless::String<64>;
 
 /// Top of the status line's text.
@@ -370,7 +387,7 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     //
     // Small because they matter once — but they matter a lot then, and a sealed
     // device with no console has nowhere else to say them.
-    let mut antenna = Text32::new();
+    let mut antenna = TextLine::new();
     let _ = antenna.push_str("antenna ");
     let _ = write!(antenna, "{}", s.antenna_khz);
     let _ = antenna.push_str(" kHz · IRQ ");
@@ -387,6 +404,14 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     let _ = antenna.push('-');
     let _ = write!(antenna, "{}", s.battery_range.1 as u32);
     let _ = antenna.push_str(" mV");
+
+    // **The running firmware, on the status screen rather than only on the
+    // splash.** The logo carries it too, but the logo is gone within seconds of
+    // boot — so for the rest of the device's life there was no way to tell from
+    // the glass which build was actually on it, which is exactly the question
+    // somebody asks after a flash.
+    let _ = antenna.push_str(" · fw ");
+    let _ = antenna.push_str(env!("CARGO_PKG_VERSION"));
 
     let _ = Line::new(
         Point::new(16, HEIGHT as i32 - 40),
