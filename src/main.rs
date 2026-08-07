@@ -9,6 +9,7 @@ mod clock;
 mod commands;
 mod console;
 mod display;
+mod effects;
 mod defence;
 mod history;
 mod i2c_scan;
@@ -726,242 +727,31 @@ fn listen(
         // not lied, because it is about a person rather than a cable.
         if let Some(command) = console.poll() {
             last_console_s = Some(now_ms() / 1000);
-            let effects = commands::run(
+            effects::handle(
                 command,
-                &mut commands::Ctx {
+                &mut effects::Hardware {
+                    sensor,
+                    i2c,
+                    gauge,
+                    die_temperature,
+                    antenna_khz,
+                    irq_confirmed,
+                },
+                &mut effects::Runtime {
                     location,
                     totals: &mut totals,
                     history: &mut history,
                     strike_log: strike_log.as_deref_mut(),
-                    chart_period: &mut screen.period,
-                    reading: fuel.reading,
-                    range: fuel.range,
-                    level: tuning.point.percent(),
-                    die_temperature,
-                    antenna_khz,
-                    irq_confirmed,
-                    minute: minute_now(),
-                    uptime_minutes: now_ms() / 60_000,
-                    max_sensitivity: tuning.frozen,
+                    tuning: &mut tuning,
+                    screen: &mut screen,
+                    fuel: &mut fuel,
+                    policy: &mut policy,
+                    freq_override: &mut freq_override,
+                    clock_saved_s: &mut last_clock_save_s,
                 },
+                now_ms(),
+                minute_now(),
             );
-            if effects.clock_saved {
-                last_clock_save_s = now_ms() / 1000;
-            }
-            if effects.redraw_now {
-                screen.invalidate();
-                screen.user_acted = true;
-            }
-            if effects.read_battery {
-                match gauge {
-                    // One read, decoded and printed raw, so the two lines always
-                    // describe the same instant and can be checked against each
-                    // other. Also deliberately fresh rather than the main loop's
-                    // cached sample: `battery` is asked when somebody wants to
-                    // know *now*.
-                    Some(gauge) => match gauge.read_raw(i2c) {
-                        Ok((vcell, soc, crate_raw)) => {
-                            let now = battery::Reading::from_raw(vcell, soc, crate_raw);
-                            println!(
-                                "batt: {}% -- {}.{:02} V, {} mV",
-                                now.percent,
-                                now.millivolts / 1000,
-                                (now.millivolts % 1000) / 10,
-                                now.millivolts
-                            );
-                            println!(
-                                "batt: {} -- CRATE {}.{:02} %/hr",
-                                battery::flow(&now, fuel.trend.as_ref()).label(),
-                                now.crate_centi_per_hour / 100,
-                                (now.crate_centi_per_hour % 100).abs()
-                            );
-                            match fuel.trend.as_ref() {
-                                Some(t) if t.span_s() >= 60 => println!(
-                                    "batt: trend {:+} mV over {} min (>= {} mV counts)",
-                                    t.delta_mv(),
-                                    t.span_s() / 60,
-                                    battery::TREND_THRESHOLD_MV
-                                ),
-                                // Say so rather than printing a delta that has
-                                // had no time to mean anything.
-                                _ => println!("batt: trend -- not enough history yet"),
-                            }
-                            println!("batt: learned range {}-{} mV", fuel.range.0, fuel.range.1);
-                            println!(
-                                "batt: raw VCELL 0x{vcell:04X}  SOC 0x{soc:04X}  CRATE 0x{crate_raw:04X}"
-                            );
-                        }
-                        Err(e) => println!("batt: read failed -- {e}"),
-                    },
-                    None => println!("batt: no gauge found on the bus"),
-                }
-            }
-            if let Some(request) = effects.freq {
-                use crate::console::FreqRequest;
-                match request {
-                    FreqRequest::Pin(mhz) if !power::PINNABLE_MHZ.contains(&mhz) => println!(
-                        "freq: {mhz} MHz is not one of {:?} -- unchanged",
-                        power::PINNABLE_MHZ
-                    ),
-                    FreqRequest::Pin(mhz) => match power::pin(mhz) {
-                        Ok(()) => {
-                            freq_override = Some(mhz);
-                            println!("freq: pinned at {mhz} MHz, light sleep off, policy paused");
-                        }
-                        Err(e) => println!("freq: could not pin {mhz} MHz -- {e}"),
-                    },
-                    FreqRequest::Auto => {
-                        freq_override = None;
-                        // Re-apply immediately rather than waiting for the next
-                        // tick: the loop below only acts on a *change*, and the
-                        // policy it last recorded is what the pin displaced.
-                        let want = power::decide(now_ms() / 1000, last_console_s);
-                        match power::apply(want) {
-                            Ok(()) => {
-                                policy = want;
-                                println!("freq: back on the {} policy", policy.label());
-                            }
-                            Err(e) => println!("freq: could not restore the policy -- {e}"),
-                        }
-                    }
-                    FreqRequest::Report => {}
-                }
-                // Always report what the chip is enforcing, not what we asked
-                // for -- `esp_pm_configure` can reject a config and leave the
-                // previous one running.
-                match power::config() {
-                    Some((max, min, sleep)) => println!(
-                        "freq: now {} MHz -- pm {}/{} MHz, light sleep {}, {}",
-                        system::cpu_mhz(),
-                        min,
-                        max,
-                        if sleep { "on" } else { "off" },
-                        match freq_override {
-                            Some(mhz) => format!("pinned at {mhz} MHz"),
-                            None => format!("policy {}", policy.label()),
-                        }
-                    ),
-                    None => println!("freq: {} MHz (pm read-back failed)", system::cpu_mhz()),
-                }
-            }
-            if let Some(on) = effects.light_sleep {
-                // Keep whatever clock is in force and change only the sleep
-                // flag, so `sleep off` after `freq 80` does not silently drag
-                // the frequency back to something else.
-                match power::config() {
-                    Some((max, min, _)) => match power::set_light_sleep(max, min, on) {
-                        Ok(()) => {
-                            // Counts as an override either way: the policy loop
-                            // would otherwise restore its own idea of both.
-                            freq_override = Some(max);
-                            println!(
-                                "sleep: light sleep {} at {min}/{max} MHz, policy paused",
-                                if on { "on" } else { "off" }
-                            );
-                            if on {
-                                println!("sleep: the USB port will go with it -- `freq auto` or a power cycle to return");
-                            }
-                        }
-                        Err(e) => println!("sleep: could not change it -- {e}"),
-                    },
-                    None => println!("sleep: could not read the current config -- unchanged"),
-                }
-            }
-            if let Some(indoor) = effects.set_indoor {
-                *location = if indoor {
-                    as3935::Location::Indoor
-                } else {
-                    as3935::Location::Outdoor
-                };
-                match sensor.set_location(i2c, *location) {
-                    // Outdoor is the LOWER gain, which is the counter-intuitive
-                    // half: indoor gain is ~4x, and a strike close enough to hear
-                    // saturates the front end, fails validation, and is reported
-                    // as a disturber. Less gain is what recovers a near storm.
-                    Ok(()) => println!("mode: {} gain applied", location.label()),
-                    Err(e) => println!("mode: could not apply -- {e}"),
-                }
-            }
-            if effects.dump_registers {
-                match sensor.dump_registers(i2c) {
-                    Ok(r) => {
-                        for (n, value) in r.iter().enumerate() {
-                            println!("regs: 0x0{n} = 0x{value:02X}  {:08b}", value);
-                        }
-                        // Decoded, because the failure this exists to catch is a
-                        // bit being set that nobody meant to set.
-                        println!(
-                            "regs: pwd {}  afe 0x{:02X} ({})",
-                            r[0] & 0x01,
-                            (r[0] & 0x3E) >> 1,
-                            if (r[0] & 0x3E) >> 1 == 0x12 { "indoor" } else { "outdoor" }
-                        );
-                        println!(
-                            "regs: nf {}  wdth {}  srej {}  min-strikes-bits {}",
-                            (r[1] & 0x70) >> 4,
-                            r[1] & 0x0F,
-                            r[2] & 0x0F,
-                            (r[2] & 0x30) >> 4
-                        );
-                        println!(
-                            "regs: int 0x{:X}  mask_dist {}  lco_fdiv {}",
-                            r[3] & 0x0F,
-                            (r[3] & 0x20) >> 5,
-                            (r[3] & 0xC0) >> 6
-                        );
-                        // The one that makes the sensor deaf: any of these three
-                        // set means the IRQ pin is a clock output, not an
-                        // interrupt line.
-                        let display = (r[8] & 0xE0) >> 5;
-                        println!(
-                            "regs: tun_cap {}  irq_display {:03b}{}",
-                            r[8] & 0x0F,
-                            display,
-                            if display != 0 {
-                                "  *** IRQ PIN IS A CLOCK OUTPUT -- SENSOR IS DEAF ***"
-                            } else {
-                                ""
-                            }
-                        );
-                    }
-                    Err(e) => println!("regs: read failed -- {e}"),
-                }
-            }
-
-            if effects.show_point {
-                tuning.report();
-            }
-
-            if let Some(raw) = effects.set_point {
-                tuning.place(sensor, i2c, raw, now_ms());
-            }
-
-            // A sweep runs as ordinary measurement windows from here on -- the
-            // tune block below spends each one on the search instead of on the
-            // +/-1 walk -- so the loop, the console and the screen all keep
-            // working throughout.
-            if let Some((window_s, requested_quiet)) = effects.calibrate {
-                tuning.begin_sweep(sensor, i2c, window_s, requested_quiet, now_ms());
-                screen.user_acted = true;
-            }
-
-
-            // Applied here rather than in the command handler because `Ctx` has
-            // no sensor or bus -- see `Effects::sensitivity`.
-            if let Some(on) = effects.sensitivity {
-                tuning.frozen = on;
-                let outcome = match on {
-                    true => session::force_max_sensitivity(sensor, i2c),
-                    false => tuning.open(sensor, i2c, now_ms()),
-                };
-                match outcome {
-                    Ok(()) if on => println!(
-                        "sens: MAX -- nf 0, wdth 0, srej 0, min strikes 1; auto-tune frozen"
-                    ),
-                    Ok(()) => println!("sens: normal -- defence back to 0"),
-                    Err(e) => println!("sens: could not apply -- {e}"),
-                }
-            }
         }
 
         // Flush the strike log on its own cadence. Buffered rather than synced
