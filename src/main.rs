@@ -153,14 +153,6 @@ const BATCH_MS: u32 = 1000;
 /// constant rather than three, so the ladder can never be deciding on evidence
 /// the display is not showing.
 ///
-/// **10 seconds**, so the machine adapts six times faster than it did at a
-/// minute. That matters because the state space is thousands of combinations
-/// wide: at one step a minute a genuinely hostile band would take hours to walk
-/// away from, and a storm does not wait.
-///
-/// **A whole divisor of 60**, so the same window doubles as the event count the
-/// screen reports — multiplied by [`EVENTS_PER_MIN_SCALE`], which is exact only
-/// at 10, 15, 20, 30 or 60.
 /// **Sixty seconds**, matching the calibration probe window.
 ///
 /// The +/-1 walk that runs between calibrations is judging the same question a
@@ -169,9 +161,6 @@ const BATCH_MS: u32 = 1000;
 /// quiet room from a gap between events, and stepping the point every ten
 /// seconds on that evidence.
 const MEASURE_INTERVAL_S: u32 = 60;
-
-/// What a window's event count is multiplied by to read as events per minute.
-const EVENTS_PER_MIN_SCALE: u32 = 60 / MEASURE_INTERVAL_S;
 
 /// How often the learned tuning point may be written back to NVS.
 ///
@@ -734,9 +723,9 @@ fn listen(
         },
         Err(e) => println!("pm:   could not apply {} -- {e}", policy.label()),
     }
-    // Set by the `calibrate` command, run at the *end* of the iteration so the
-    // screen is current before the sweep takes the loop away for minutes.
-    let mut pending_calibrate: Option<u32> = None;
+    // A calibration in progress, driven one probe per window by the tune block
+    // below. `None` when the +/-1 walk is in charge.
+    let mut sweep: Option<session::Sweep> = None;
     let mut drawn: Option<Drawn> = None;
     let mut last_draw_ms: u32 = 0;
 
@@ -1080,19 +1069,27 @@ fn listen(
                 tune_window_ms = now_ms();
             }
 
-            // **Deferred to the end of this iteration, deliberately.**
-            //
-            // The sweep owns the loop for minutes, and running it here -- before
-            // the screen block below -- means the panel keeps whatever was on it
-            // when the command arrived. Ask for a calibration in the first
-            // seconds after boot and that is the *logo*, for the whole sweep,
-            // which reads exactly like a device that hung during start-up.
-            //
-            // `user_acted` bypasses the redraw rate limit for the same reason a
-            // button press does: somebody is standing there waiting to see that
-            // the thing they just asked for has begun.
+            // Start a sweep. It runs as ordinary measurement windows from here
+            // on -- the tune block below spends each one on the search instead
+            // of on the +/-1 walk -- so the loop, the console and the screen all
+            // keep working throughout.
             if let Some(window_s) = effects.calibrate {
-                pending_calibrate = Some(window_s);
+                let started = session::Sweep::new(window_s);
+                println!(
+                    "cal:  starting -- 0..={}, {} s per probe, about {} probes",
+                    defence::MAX,
+                    started.window_s,
+                    started.remaining()
+                );
+                point = started.point();
+                if let Err(e) = session::apply(sensor, i2c, point) {
+                    println!("cal:  could not program the first probe -- {e}");
+                }
+                FreeRtos::delay_ms(session::CALIBRATE_SETTLE_MS);
+                sweep = Some(started);
+                window_events = 0;
+                window_disturbers = 0;
+                tune_window_ms = now_ms();
                 user_acted = true;
             }
 
@@ -1260,13 +1257,83 @@ fn listen(
         window_events += batch.noise + batch.disturbers;
         window_disturbers += batch.disturbers;
 
-        if !max_sensitivity
-            && now_ms().saturating_sub(tune_window_ms) >= MEASURE_INTERVAL_S * 1000
-        {
-            tune_window_ms = now_ms();
-            totals.noise_per_min = window_events * EVENTS_PER_MIN_SCALE;
-            totals.disturbers_per_min = window_disturbers * EVENTS_PER_MIN_SCALE;
+        // While a sweep runs it sets the window, so `calibrate 60` means 60 s
+        // probes even if the ordinary cadence is something else.
+        let window_s = match sweep.as_ref() {
+            Some(sweep) => sweep.window_s,
+            None => MEASURE_INTERVAL_S,
+        };
 
+        if !max_sensitivity && now_ms().saturating_sub(tune_window_ms) >= window_s * 1000 {
+            tune_window_ms = now_ms();
+            // Scaled by the window actually used, so a 60 s probe and a 10 s
+            // window both report a per-minute rate rather than a raw count.
+            let scale = 60 / window_s.max(1);
+            totals.noise_per_min = window_events * scale;
+            totals.disturbers_per_min = window_disturbers * scale;
+
+            // A sweep, if one is running, spends this window on the search.
+            // Everything below -- the +/-1 walk -- is what happens the rest of
+            // the time.
+            // Captured before the branch: a sweep that finishes inside it sets
+            // `sweep` to `None`, and the +/-1 walk must still be skipped for
+            // this window rather than stepping the point the search just chose.
+            let sweeping = sweep.is_some();
+
+            if let Some(active) = sweep.as_mut() {
+                let tested = point;
+                active.record(window_events);
+                println!(
+                    "cal:  probe {} [{}..{}] {} -> {} -- {} event(s), ~{} left",
+                    active.probe,
+                    active.low,
+                    active.high,
+                    tested.raw(),
+                    session::describe(tested),
+                    window_events,
+                    active.remaining()
+                );
+
+                let finished = active.done();
+                point = match finished {
+                    true => active.settled(),
+                    false => active.point(),
+                };
+                if let Err(e) = session::apply(sensor, i2c, point) {
+                    println!("cal:  could not program -- {e}");
+                }
+                // Let the new thresholds take effect before the next window
+                // opens, so a probe measures its own setting rather than the
+                // tail of the previous one.
+                FreeRtos::delay_ms(session::CALIBRATE_SETTLE_MS);
+                tune_window_ms = now_ms();
+
+                if finished {
+                    println!(
+                        "cal:  settled at {}/{} ({}%) -- {}",
+                        point.raw(),
+                        defence::MAX,
+                        point.percent(),
+                        session::describe(point)
+                    );
+                    match settings::store_defence_point(point) {
+                        Ok(()) => {
+                            stored_point = point;
+                            last_point_save_s = now_ms() / 1000;
+                            println!("cal:  point stored -- +/-1 from here");
+                        }
+                        Err(e) => println!("cal:  point NOT stored -- {e}"),
+                    }
+                    sweep = None;
+                }
+            }
+            // The counters are zeroed once, below, for both paths.
+
+            // **NOT `continue`.** Skipping the rest of the iteration would skip
+            // the screen block below, so the panel would hold whatever was on it
+            // for the whole sweep -- which is the entire reason the sweep stopped
+            // being one long blocking call.
+            //
             // **One step of the packed number per window.** Noisy climbs,
             // quiet relaxes, and which register that lands on is decided by the
             // bit layout rather than by a cursor -- see `defence`.
@@ -1277,7 +1344,10 @@ fn listen(
             // trade for a tuner that walks the whole number; `describe` spells
             // the strike count out on every line so it is never a surprise.
             let raw = point.raw();
-            let moved = if window_events > 0 {
+            let moved = if sweeping {
+                // The search owns this window; it has already moved the point.
+                None
+            } else if window_events > 0 {
                 match raw < defence::MAX {
                     true => {
                         point = defence::Point::new(raw + 1);
@@ -1430,29 +1500,6 @@ fn listen(
             }
         }
 
-        if let Some(window_s) = pending_calibrate.take() {
-            point = session::calibrate(
-                sensor,
-                i2c,
-                irq,
-                notification,
-                window_s,
-                panel.as_deref_mut(),
-            );
-            match settings::store_defence_point(point) {
-                Ok(()) => {
-                    stored_point = point;
-                    last_point_save_s = now_ms() / 1000;
-                    println!("cal:  point stored");
-                }
-                Err(e) => println!("cal:  point NOT stored -- {e}"),
-            }
-            // Judge the settled point on a fresh window rather than on
-            // whatever the sweep left in the counters.
-            window_events = 0;
-            window_disturbers = 0;
-            tune_window_ms = now_ms();
-        }
 
         batch = Batch::default();
         batch_started = now_ms();

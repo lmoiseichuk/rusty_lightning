@@ -10,7 +10,7 @@ use esp_idf_hal::i2c::I2cDriver;
 
 use crate::as3935::{As3935, Distance, Interrupt, Location, Strike};
 
-use crate::{as3935, clock, defence, display, history, log, settings, ui};
+use crate::{as3935, clock, defence, history, log, settings};
 
 /// What one batch window heard.
 #[derive(Default)]
@@ -444,7 +444,7 @@ pub const CALIBRATE_PROBE_S: u32 = 60;
 pub const CALIBRATE_PROBE_MIN_S: u32 = 5;
 pub const CALIBRATE_PROBE_MAX_S: u32 = 60;
 
-/// Settling time after programming a probe's registers, before counting starts.
+/// Settling time after programming a probe's registers, before its window opens.
 ///
 /// `WDTH` and `NF_LEV` gate a running estimate the chip keeps of the band, not
 /// an instantaneous comparison, so a window that opens the moment the register
@@ -452,183 +452,78 @@ pub const CALIBRATE_PROBE_MAX_S: u32 = 60;
 /// 500 ms the reference waits after its own configuration block.
 pub const CALIBRATE_SETTLE_MS: u32 = 500;
 
-/// Count interference over one probe window.
+/// A calibration in progress: a bisection the main loop drives, one probe per
+/// window.
 ///
-/// Waits on the same notification the main loop uses rather than polling, so an
-/// event cannot be missed between reads — and applies the §3 settle before each
-/// register read, exactly as `collect` does.
-fn measure(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    irq: &mut esp_idf_hal::gpio::PinDriver<'_, esp_idf_hal::gpio::Input>,
-    notification: &esp_idf_hal::task::notification::Notification,
-    window_ms: u32,
-) -> u32 {
-    // **Clear anything already pending before the window opens.**
-    //
-    // The AS3935 holds `INT` high until the reason register is read. If a probe
-    // starts with an event unserviced the pin is *already* high — and a
-    // rising-edge interrupt cannot fire without an edge. The window then times
-    // out having heard nothing, never reads the register, and leaves the pin
-    // high for the next probe too.
-    //
-    // That is not hypothetical: it made every probe of a sweep report 0 events
-    // while the main loop was counting 7–8 a second at the very settings the
-    // sweep called silent, so the search "found" full sensitivity every time.
-    let _ = sensor.interrupt_reason(i2c);
-
-    let deadline = crate::now_ms().saturating_add(window_ms);
-    let mut events = 0u32;
-    while crate::now_ms() < deadline {
-        // Re-arm before every wait: esp-idf disables a GPIO interrupt when it
-        // fires, so a loop that forgets goes deaf after one event. `listen` does
-        // this once per iteration; this loop lives inside one iteration and has
-        // to do it itself.
-        if let Err(e) = irq.enable_interrupt() {
-            println!("cal:  could not re-arm the IRQ -- {e}");
-            return events;
-        }
-
-        // A short wait rather than the whole remaining window, so the level
-        // check below runs regularly. **Both paths matter**: the notification
-        // catches ordinary edges, and the level catches a pin that was already
-        // high when we armed — which an edge-triggered interrupt cannot.
-        let slice = 50u32.min(deadline.saturating_sub(crate::now_ms())).max(1);
-        let ticks = esp_idf_hal::delay::TickType::new_millis(slice as u64).ticks();
-        let notified = notification.wait(ticks).is_some();
-        if !notified && !irq.is_high() {
-            continue;
-        }
-
-        FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
-        match sensor.interrupt_reason(i2c) {
-            Ok(Interrupt::NoiseTooHigh) | Ok(Interrupt::Disturber) => events += 1,
-            // A strike during calibration is still a strike, but it is not
-            // interference and must not push the search toward deafness.
-            Ok(_) => {}
-            Err(e) => println!("cal:  reason read failed -- {e}"),
-        }
-    }
-    events
+/// **State, not a function.** An earlier version ran the whole sweep inside one
+/// call, which meant it seized the main loop for fourteen minutes: the screen
+/// held whatever was on it when the command arrived, the console stopped
+/// answering, and the sweep needed its own event counter, its own settle and its
+/// own progress screen — a second copy of machinery `listen` already had.
+///
+/// Driven from the loop instead, a probe is just an ordinary measurement window
+/// whose verdict goes to the search rather than to the ±1 walk. The events are
+/// counted by the same interrupt path, the rate lands in the same counters, and
+/// the ordinary status screen shows the point under test on the ordinary gauge.
+/// Nothing about a sweep needs its own anything.
+pub struct Sweep {
+    /// The lowest point not yet ruled out, and the highest still worth trying.
+    /// They meet on the answer.
+    pub low: u16,
+    pub high: u16,
+    /// How many probes have reported. For the console line only.
+    pub probe: u32,
+    /// Seconds per probe, which also sets the loop's window while a sweep runs.
+    pub window_s: u32,
 }
-/// Search for the most receptive point that stays quiet.
-///
-/// **A plain binary search over the packed number, 0..=8191.** The whole
-/// ordering argument lives in the bit layout (see `defence`): bisection resolves
-/// the high bits first, so the first probe decides `NF_LEV` — the one knob that
-/// cannot reject a strike — and the last probes decide `MIN_NUM_LIGH`, the one
-/// that can silence a storm. Nothing here needs to know that; it just bisects.
-///
-/// The predicate is "did this point hear nothing", which is monotonic enough to
-/// bisect but not perfectly so: a carry such as 1023 → 1024 raises the floor by
-/// one while dropping the other three fields to zero. The search can straddle
-/// such a boundary and settle one point to the deaf side of it. Re-running it,
-/// or running it with a longer window, is the answer — not more machinery.
-///
-/// Returns the settled point, which the caller stores and adopts.
-pub fn calibrate(
-    sensor: &As3935,
-    i2c: &mut I2cDriver<'_>,
-    irq: &mut esp_idf_hal::gpio::PinDriver<'_, esp_idf_hal::gpio::Input>,
-    notification: &esp_idf_hal::task::notification::Notification,
-    window_s: u32,
-    mut panel: Option<&mut display::Panel<'_>>,
-) -> defence::Point {
-    let window_s = window_s.clamp(CALIBRATE_PROBE_MIN_S, CALIBRATE_PROBE_MAX_S);
-    let window_ms = window_s.saturating_mul(1000);
-    // Ceiling on the probe count, for the estimate only -- the loop below is
-    // what actually decides when it is done.
-    let probes = defence::BITS + 1;
-    println!(
-        "cal:  starting -- 0..={}, {} s per probe, about {} probes ({} s)",
-        defence::MAX,
-        window_s,
-        probes,
-        probes * window_s
-    );
 
-    // The lowest point known to be quiet, and the highest known to be noisy.
-    // `low` starts fully receptive because that is the answer if the band is
-    // clean, and `high` at the ceiling because that is the fallback if it is
-    // not.
-    let mut low = 0u16;
-    let mut high = defence::MAX;
-
-    let mut probe = 0u32;
-    let mut last_events = 0u32;
-
-    while low < high {
-        let mid = low + (high - low) / 2;
-        let point = defence::Point::new(mid);
-        probe += 1;
-
-        if let Err(e) = apply(sensor, i2c, point) {
-            println!("cal:  could not program the sensor -- {e}");
+impl Sweep {
+    pub fn new(window_s: u32) -> Sweep {
+        Sweep {
+            low: 0,
+            high: defence::MAX,
+            probe: 0,
+            window_s: window_s.clamp(CALIBRATE_PROBE_MIN_S, CALIBRATE_PROBE_MAX_S),
         }
+    }
 
-        // **Draw, then probe.** The refresh is 3.8 s of high-current SPI beside
-        // a sensor this project has already watched be jammed by the board's own
-        // activity, so it happens between probes and never during one. It also
-        // doubles as settling time: the registers are already programmed, so the
-        // repaint is time the chip spends adjusting to them rather than time
-        // taken from the measurement.
-        if let Some(panel) = panel.as_deref_mut() {
-            let fields = describe(point);
-            let mut frame = display::Panel::frame();
-            ui::calibrating(
-                &mut frame,
-                &ui::Calibration {
-                    probe,
-                    probes,
-                    low,
-                    high,
-                    raw: point.raw(),
-                    max: defence::MAX,
-                    percent: point.percent(),
-                    fields: &fields,
-                    last_events,
-                    window_s,
-                },
-            );
-            if let Err(e) = panel.show(&frame) {
-                println!("cal:  progress screen failed -- {e}");
-            }
-        }
+    /// The point this probe is testing: the midpoint of what is left.
+    pub fn point(&self) -> defence::Point {
+        defence::Point::new(self.low + (self.high - self.low) / 2)
+    }
 
-        // Let the new thresholds take effect before counting against them.
-        FreeRtos::delay_ms(CALIBRATE_SETTLE_MS);
+    /// The answer, once `done`.
+    pub fn settled(&self) -> defence::Point {
+        defence::Point::new(self.low)
+    }
 
-        let count = measure(sensor, i2c, irq, notification, window_ms);
-        last_events = count;
-        println!(
-            "cal:  [{}..{}] {} -> {} -- {} event(s)",
-            low,
-            high,
-            point.raw(),
-            describe(point),
-            count
-        );
+    pub fn done(&self) -> bool {
+        self.low >= self.high
+    }
 
-        // Quiet here, so nothing above this needs trying; noisy, so the answer
-        // is strictly above. Excluding `mid` on the noisy side is what
-        // guarantees progress when `low` and `high` are adjacent.
-        if count == 0 {
-            high = mid;
+    /// Fold in what the last window heard and narrow the scope.
+    ///
+    /// Quiet means nothing above this point needs trying; noisy means the answer
+    /// is strictly above it. Excluding the midpoint on the noisy side is what
+    /// guarantees progress when the two bounds are adjacent.
+    pub fn record(&mut self, events: u32) {
+        let mid = self.low + (self.high - self.low) / 2;
+        self.probe += 1;
+        if events == 0 {
+            self.high = mid;
         } else {
-            low = mid + 1;
+            self.low = mid + 1;
         }
     }
 
-    let settled = defence::Point::new(low);
-    if let Err(e) = apply(sensor, i2c, settled) {
-        println!("cal:  could not program the settled point -- {e}");
+    /// Roughly how many probes are left, for the console.
+    pub fn remaining(&self) -> u32 {
+        let mut span = (self.high - self.low) as u32;
+        let mut probes = 0;
+        while span > 0 {
+            span /= 2;
+            probes += 1;
+        }
+        probes
     }
-    println!(
-        "cal:  settled at {}/{} ({}%) -- {}",
-        settled.raw(),
-        defence::MAX,
-        settled.percent(),
-        describe(settled)
-    );
-    settled
 }
