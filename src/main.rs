@@ -627,6 +627,10 @@ fn listen(
     // Counted in the window now being judged, and when it started.
     let mut window_events: u32 = 0;
     let mut window_disturbers: u32 = 0;
+    // Strikes in the current window, which **veto** a climb -- see the tune
+    // block. Kept apart from `window_events` because that is the interference
+    // rate and has to stay a measurement of the band, not of the weather.
+    let mut window_strikes: u32 = 0;
     let mut tune_window_ms: u32 = now_ms();
     let mut last_irq_poll_ms: u32 = now_ms();
     // Set by `sensitive on`; see `session::force_max_sensitivity`. Deliberately
@@ -1080,6 +1084,7 @@ fn listen(
                 }
                 window_events = 0;
                 window_disturbers = 0;
+                window_strikes = 0;
                 tune_window_ms = now_ms();
             }
 
@@ -1115,6 +1120,7 @@ fn listen(
                 sweep = Some(started);
                 window_events = 0;
                 window_disturbers = 0;
+                window_strikes = 0;
                 tune_window_ms = now_ms();
                 user_acted = true;
             }
@@ -1282,6 +1288,11 @@ fn listen(
         // was visibly climbing on events it had just counted.
         window_events += batch.noise + batch.disturbers;
         window_disturbers += batch.disturbers;
+        // Counted separately because a strike **vetoes** the climb -- see the
+        // tune block. Deliberately not folded into `window_events`, which is the
+        // interference rate and must stay a measurement of the band rather than
+        // of the weather.
+        window_strikes += batch.strikes;
 
         // While a sweep runs it sets the window, so `calibrate 60` means 60 s
         // probes even if the ordinary cadence is something else.
@@ -1378,16 +1389,66 @@ fn listen(
             // and the chip begins waiting for five strikes. That is the chosen
             // trade for a tuner that walks the whole number; `describe` spells
             // the strike count out on every line so it is never a surprise.
-            let raw = point.raw();
             let moved = if sweeping {
                 // The search owns this window; it has already moved the point.
                 None
+            } else if window_strikes > 0 && !quiet {
+                // **A window that heard a strike never raises the defence.**
+                //
+                // A nearby strike is not a clean impulse: it throws harmonics
+                // that arrive as disturbers, so a storm close enough to matter
+                // looks like a noisy band to a counter that cannot tell them
+                // apart. Climbing on that would deafen the device at exactly the
+                // moment it exists for -- and each notch of `MIN_NUM_LIGH` then
+                // hides the following strikes too, which is a loop that closes
+                // on itself.
+                //
+                // Holding rather than relaxing: the window genuinely was noisy,
+                // so this is a refusal to escalate, not evidence of quiet.
+                println!(
+                    "tune: holding at {}/{} ({}%) -- {} strike(s) this window, {}/min",
+                    point.raw(),
+                    defence::MAX,
+                    point.percent(),
+                    window_strikes,
+                    totals.noise_per_min
+                );
+                None
             } else if !quiet {
-                match raw < defence::MAX {
-                    true => {
-                        point = defence::Point::new(raw + 1);
-                        Some("up")
+                // **Proportional: how many notches, from how far over the line.**
+                //
+                // One notch a minute is a rate, and it has to answer a range of
+                // rates. Measured here, a microwave door swing took the band
+                // from 6/min to 94/min; at one notch a minute the machine
+                // answers that by fiddling the bottom bits while the watchdog --
+                // the knob that would actually stop it -- sits untouched for
+                // eight minutes. Observed doing exactly that at 102/min:
+                // `323 -> 324 -> 325`, thrashing min strikes 3 -> 0 -> 1.
+                //
+                // Dividing by the quiet threshold makes the step mean "how many
+                // times over the line is this", which needs no separate constant
+                // and scales with whatever the room's threshold has been set to.
+                // It saturates naturally: a fully jammed band here is ~480/min,
+                // which is 40 notches against a ladder exactly 40 notches deep,
+                // so the worst case is "fully deaf in one minute" rather than an
+                // unbounded number nobody has budgeted for.
+                //
+                // `tightened`, not `raw + 1`: the bottom bits are min strikes,
+                // so incrementing answers a noisy minute by waiting for five
+                // strikes. See `defence::Point::tightened`.
+                let notches = (totals.noise_per_min / quiet_per_min.max(1)).max(1);
+                let mut stepped = false;
+                for _ in 0..notches {
+                    match point.tightened() {
+                        Some(firmer) => {
+                            point = firmer;
+                            stepped = true;
+                        }
+                        None => break,
                     }
+                }
+                match stepped {
+                    true => Some("up"),
                     false => None,
                 }
             } else {
@@ -1405,12 +1466,17 @@ fn listen(
             };
             window_events = 0;
             window_disturbers = 0;
+            window_strikes = 0;
 
             // Programmed only when it actually moved. At either end the decision
             // is taken every window and changes nothing.
             if let Some(direction) = moved {
                 tune(sensor, i2c, point, direction);
             }
+            // Relaxing stays one notch a minute. Quick to defend, slow to
+            // relax: a storm's first strike should not arrive into a receiver
+            // that spent the afternoon sprinting back toward a floor it will
+            // have to climb again.
 
             // Persist the point, rarely. The machine can move every window, and
             // a flash write at that cadence to protect a value that re-learns in

@@ -406,9 +406,45 @@ immediately**; **60 s with no events** → **−1**. Quick to defend, slow to re
 > during start-up. Driven from the loop, a probe is an ordinary window whose verdict goes to the
 > search instead of to the ±1 walk, and the ordinary gauge shows the point under test.
 >
-> Between calibrations the point walks ±1 on the same 60 s window. A never-calibrated device starts
-> from the two volume knobs mid-range with `SREJ` and `MIN_NUM_LIGH` at their most sensitive: neither
-> of those is a volume control, so neither has any business being pre-set to a guess.
+> #### The walk between calibrations
+>
+> One decision a minute, on the same 60 s window a probe uses, and it is **asymmetric in three
+> different ways** — each one measured rather than assumed.
+>
+> **Quiet is a rate, not zero.** `noise_per_min <= 12` by default, stored in NVS and settable as
+> `calibrate <seconds> <per-min>`. Twelve a minute is one every five seconds. The measurement that
+> forced this: a microwave door swing on this board took the band from **6/min to 94/min**, and the
+> settled operating point reads 0–1/min against 13–17/min one notch below it — so the threshold sits
+> in a genuine gap, where a literal zero sat on top of the sampling noise.
+>
+> **Up is proportional, down is one notch.** The number of notches is `noise_per_min /
+> quiet_per_min` — "how many times over the line is this" — which needs no constant of its own and
+> rescales automatically with the room's threshold. At one notch a minute the machine could not
+> answer a real step change: observed at 102/min, it moved `323 → 324 → 325` over three minutes,
+> thrashing `MIN_NUM_LIGH` in the bottom bits while `WDTH` — the knob that would actually have
+> stopped it — sat untouched. It saturates naturally: a fully jammed band here is ~480/min, which is
+> 40 notches against a ladder exactly 40 notches deep, so the worst case is "fully deaf in one
+> minute" rather than an unbounded number nobody has budgeted for. Relaxing stays at one notch,
+> because a storm's first strike should not arrive into a receiver that spent the afternoon
+> sprinting back toward a floor it will have to climb again.
+>
+> **Up and down use opposite cost orders, and neither is `raw ± 1`.** Climbing spends the cheapest
+> knob first — `NF_LEV`, `WDTH`, `SREJ`, `MIN_NUM_LIGH` — and relaxing refunds the dearest first, in
+> the reverse order. Walking the packed number instead moves the *bottom* bits, so `raw + 1` answers
+> a noisy minute by waiting for five strikes, and `raw - 1` borrows across three fields at once
+> (448 → 447 turns `sr 0, ms 0` into `sr 15, ms 3`). Observed refunding correctly on hardware:
+> `449 → 448` gave min strikes back first, then `384`, `320` walked the watchdog down.
+>
+> **A window that heard a strike never raises the defence.** A nearby strike is not a clean impulse
+> — it throws harmonics that arrive as disturbers, so a storm close enough to matter looks like a
+> noisy band to a counter that cannot tell them apart. Climbing on that would deafen the device at
+> the moment it exists for, and each notch of `MIN_NUM_LIGH` would then hide the following strikes
+> too: a loop that closes on itself. Such a window **holds** rather than relaxing, because it
+> genuinely was noisy — this is a refusal to escalate, not evidence of quiet.
+>
+> A never-calibrated device starts from the two volume knobs mid-range with `SREJ` and
+> `MIN_NUM_LIGH` at their most sensitive: neither of those is a volume control, so neither has any
+> business being pre-set to a guess.
 
 > #### ⚠⚠ AS BUILT: the ladder was 31 rungs and is now 7 — the extra 24 rejected lightning
 >

@@ -204,6 +204,29 @@ means.
 probe each, so the console keeps answering and the normal screen keeps updating
 throughout — the gauge shows the point currently under test.
 
+**Between calibrations the device tracks the room**, one decision a minute, and
+the asymmetry is deliberate:
+
+| Window | What happens |
+|---|---|
+| `<= threshold` | relax **one** notch — refunding `MIN_NUM_LIGH` first, `NF_LEV` last |
+| `> threshold` | tighten `rate / threshold` notches — spending `NF_LEV` first, `MIN_NUM_LIGH` last |
+| contains a strike | **hold** — never escalate |
+
+Quick to defend, slow to relax. The proportional step is what lets it answer a
+real step change: a microwave door swing here took the band from 6/min to
+94/min, and at one notch a minute the machine spent three minutes fiddling the
+bottom bits while the watchdog sat untouched. Dividing by the threshold means
+the step reads as "how many times over the line is this", so it rescales with
+whatever you set for the room.
+
+The strike rule matters more than it looks. A nearby strike throws harmonics
+that arrive as disturbers, so a close storm looks like a noisy band to a counter
+that cannot tell them apart — and climbing on that would deafen the device at
+the one moment it exists for, with each notch of `MIN_NUM_LIGH` hiding the
+strikes that follow. You will see `tune: holding at ...` on the console when
+this fires.
+
 **`defence <raw>` skips the sweep** when you already know the answer for a room.
 `0` is fully receptive; higher is deafer. A device that has never calibrated
 starts mid-range on the two volume knobs (`NF_LEV`, `WDTH`) with spike rejection

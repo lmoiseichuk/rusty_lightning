@@ -232,6 +232,73 @@ fn main() {
     check("relaxing from the ceiling reaches fully open", walk == Point::OPEN);
     check("...in one step per notch, not per raw value", steps == 7 + 15 + 15 + 3);
 
+    // --- climbing, which is NOT raw + 1 -------------------------------------
+    //
+    // The mirror of the relax checks. Incrementing the packed number moves the
+    // bottom bits, so a noisy minute would be answered by waiting five strikes.
+    let open = Point::OPEN;
+    let firmer = open.tightened().unwrap();
+    check("the first step up spends the noise floor", firmer.noise_floor() == 1);
+    check("...not min strikes", firmer.min_strikes() == 0
+        && firmer.spike_rejection() == 0
+        && firmer.watchdog() == 0);
+    check("...where raw + 1 would have moved min strikes",
+        Point::new(open.raw() + 1).min_strikes() == 1);
+
+    // The cost order, stated as a sequence: the free knob is exhausted before
+    // anything that can reject a strike is touched at all.
+    let mut walk = Point::OPEN;
+    let mut steps = 0;
+    while walk.spike_rejection() == 0 && walk.min_strikes() == 0 {
+        walk = match walk.tightened() {
+            Some(next) => next,
+            None => break,
+        };
+        steps += 1;
+        if steps > 100 {
+            break;
+        }
+    }
+    // The loop exits on the step that first touches a strike-rejecting
+    // register, so the count includes it: 7 for the floor, 15 for the watchdog,
+    // and the one that broke the condition.
+    check("noise floor and watchdog are spent first, both in full",
+        steps == 7 + 15 + 1
+            && walk.noise_floor() == 7
+            && walk.watchdog() == 15
+            && walk.spike_rejection() == 1);
+
+    let mut walk = Point::OPEN;
+    let mut first_strike_cost = 0;
+    for step in 1..=100 {
+        walk = match walk.tightened() {
+            Some(next) => next,
+            None => break,
+        };
+        if walk.min_strikes() > 0 {
+            first_strike_cost = step;
+            break;
+        }
+    }
+    check("min strikes is the very last thing spent",
+        first_strike_cost == 7 + 15 + 15 + 1);
+
+    // Both directions terminate, and the raw number moves the way the gauge
+    // expects: up when tightening, down when relaxing.
+    let mut monotonic = true;
+    let mut walk = Point::OPEN;
+    while let Some(next) = walk.tightened() {
+        if next.raw() <= walk.raw() {
+            monotonic = false;
+        }
+        walk = next;
+    }
+    check("tightening always raises the raw value", monotonic);
+    check("...and ends with every field at its ceiling",
+        walk.noise_floor() == 7 && walk.watchdog() == 15
+            && walk.spike_rejection() == 15 && walk.min_strikes() == 3);
+    check("a fully deaf point cannot tighten further", walk.tightened().is_none());
+
     // --- the strike count is not the field ----------------------------------
     check("min strikes 0 waits for 1", Point::pack(0, 0, 0, 0).min_strikes_count() == 1);
     check("min strikes 1 waits for 5", Point::pack(0, 0, 0, 1).min_strikes_count() == 5);

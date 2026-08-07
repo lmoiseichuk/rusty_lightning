@@ -248,6 +248,36 @@ impl Point {
         Point(raw)
     }
 
+    /// One notch deafer, or `None` when every field is at its ceiling.
+    ///
+    /// **Not `raw + 1`, and the reason is the mirror of [`Point::relaxed`].**
+    /// Incrementing the packed number moves the *bottom* bits, which are
+    /// `MIN_NUM_LIGH` — so the first answer to a noisy minute would be "wait
+    /// five strikes", and a room that stays noisy grinds up through all of
+    /// `SREJ` and `MIN_NUM_LIGH` before it reaches the watchdog. Traced against
+    /// measured rates on this board: relaxing off `wd 7` lands on `wd 6` at
+    /// 13–17/min, and climbing back by ones takes 63 minutes spent almost
+    /// entirely at "wait 5" or worse.
+    ///
+    /// So this walks [`FIELDS`] **cheapest first** — the same cost order the bit
+    /// layout encodes, read forwards: `NF_LEV`, which cannot reject a strike, is
+    /// spent before `WDTH`, and `MIN_NUM_LIGH` only when nothing else is left.
+    /// `relaxed` walks the same list backwards, refunding the dearest first. The
+    /// pair is not a strict inverse and does not need to be; what matters is
+    /// that the device is reluctant to go deaf and eager to come back.
+    ///
+    /// The raw number still rises on every step, so the gauge and
+    /// [`Point::percent`] keep their direction.
+    pub fn tightened(self) -> Option<Point> {
+        for index in 0..FIELDS.len() {
+            let value = self.field(index);
+            if value < FIELDS[index].ceiling() {
+                return Some(Point(FIELDS[index].set(self.0, value + 1)));
+            }
+        }
+        None
+    }
+
     /// One notch gentler, or `None` when already fully open.
     ///
     /// **Not `raw - 1`.** Decrementing the packed number is only a relaxation
