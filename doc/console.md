@@ -149,7 +149,10 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | Command | What it does |
 |---|---|
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
-| `sensitive on\|off` | every rejection knob below the auto-tune ladder's floor, with the ladder frozen |
+| `defence` | the current tuning point: raw value, percent, and the four register fields |
+| `defence <raw>` | set the tuning point by hand, 0–8191. `0` is fully receptive |
+| `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
+| `sensitive on\|off` | every rejection knob wide open, with the auto-tune frozen |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
 | `sleep on\|off` | light sleep alone, leaving the clock where it is |
 | `strike [km] [intensity]` | inject a synthetic strike |
@@ -171,11 +174,45 @@ saturate the front end, fail the chip's waveform validation, and be reported as
 a disturber — so when a near storm produces disturbers and no strikes, *less*
 gain is the thing to try.
 
-**`sensitive on` goes below what the auto-tune can reach.** The §4.2 ladder
-starts at `WDTH 2` because that is the chip's power-on default, which made it
-look like a floor. The field is four bits and goes to 0. This sets every knob to
-its minimum and freezes the ladder, because otherwise the first disturber climbs
-straight back off it. Expect a lot of disturbers — that is the trade.
+**`calibrate` is the one worth understanding.** The four noise-rejection
+registers are bit fields in two bytes, so the whole tunable state is one 13-bit
+number, 0–8191 — and the bisection over it is **13 probes**, not hundreds. The
+layout puts `NF_LEV` in the top bits and `MIN_NUM_LIGH` in the bottom two, which
+matters because binary search resolves high bits first: the knob that cannot
+reject a strike is decided in the first few probes, and the knob that can
+silence a storm is decided last.
+
+Two arguments, both optional and positional:
+
+* **`s`** — seconds per probe, 5–60, default 60. A whole sweep is about
+  13 probes, so 60 s costs roughly fourteen minutes, once.
+* **`/min`** — events per minute at or below which a window counts as **quiet**,
+  0–240, default 12. **Stored in NVS**; omit it to keep the current one.
+
+That threshold is not cosmetic. Testing quiet as *zero* makes the answer depend
+on how long you listened — a 60 s window has six times a 10 s window's chances
+of catching one stray event. Three sweeps of the same room settled at 448, 448
+and 478, differing only by probe length; the long one bought spike rejection
+*and* min strikes on one to two events a minute, having rejected other points at
+a hundred a minute by the identical test. Twelve a minute is one every five
+seconds, and every genuinely noisy point in those sweeps ran at 39–102 per
+probe — so the boundary moves nowhere that matters. The same threshold governs
+the ±1 walk between calibrations, so the two can never disagree about what quiet
+means.
+
+`calibrate` runs as ordinary measurement windows driven by the main loop, one
+probe each, so the console keeps answering and the normal screen keeps updating
+throughout — the gauge shows the point currently under test.
+
+**`defence <raw>` skips the sweep** when you already know the answer for a room.
+`0` is fully receptive; higher is deafer. A device that has never calibrated
+starts mid-range on the two volume knobs (`NF_LEV`, `WDTH`) with spike rejection
+and min strikes at their most sensitive — neither of those is a volume control,
+so neither is pre-set to a guess.
+
+**`sensitive on` opens every knob and freezes the auto-tune**, because otherwise
+the first disturber climbs straight back off it. Expect a lot of disturbers —
+that is the trade.
 
 **`strike` exists because a real strike cannot be provoked.** The AS3935
 validates the waveform, so no spark generator, piezo igniter or lighter will

@@ -726,6 +726,20 @@ fn listen(
     // A calibration in progress, driven one probe per window by the tune block
     // below. `None` when the +/-1 walk is in charge.
     let mut sweep: Option<session::Sweep> = None;
+    // **The zero both the search and the +/-1 walk compare against.** One
+    // variable rather than two constants, so they can never disagree about what
+    // a quiet window is -- which is exactly how a 60 s sweep came to settle
+    // deafer than a 10 s one in the same room. See `session::QUIET_PER_MIN`.
+    let mut quiet_per_min = match settings::quiet_per_min() {
+        Some(stored) => {
+            println!("as:   quiet threshold {stored}/min (from NVS)");
+            stored
+        }
+        None => {
+            println!("as:   quiet threshold {}/min (default)", session::QUIET_PER_MIN);
+            session::QUIET_PER_MIN
+        }
+    };
     let mut drawn: Option<Drawn> = None;
     let mut last_draw_ms: u32 = 0;
 
@@ -1073,12 +1087,24 @@ fn listen(
             // on -- the tune block below spends each one on the search instead
             // of on the +/-1 walk -- so the loop, the console and the screen all
             // keep working throughout.
-            if let Some(window_s) = effects.calibrate {
+            if let Some((window_s, requested_quiet)) = effects.calibrate {
+                // `u32::MAX` is the "not given" marker -- the stored threshold
+                // stands unless the operator names a new one.
+                if requested_quiet != u32::MAX && requested_quiet != quiet_per_min {
+                    quiet_per_min = requested_quiet;
+                    match settings::store_quiet_per_min(quiet_per_min) {
+                        Ok(()) => println!("cal:  quiet threshold now {quiet_per_min}/min (saved)"),
+                        Err(e) => {
+                            println!("cal:  threshold {quiet_per_min}/min but NOT saved -- {e}")
+                        }
+                    }
+                }
                 let started = session::Sweep::new(window_s);
                 println!(
-                    "cal:  starting -- 0..={}, {} s per probe, about {} probes",
+                    "cal:  starting -- 0..={}, {} s per probe, quiet is <={}/min, about {} probes",
                     defence::MAX,
                     started.window_s,
+                    quiet_per_min,
                     started.remaining()
                 );
                 point = started.point();
@@ -1268,9 +1294,16 @@ fn listen(
             tune_window_ms = now_ms();
             // Scaled by the window actually used, so a 60 s probe and a 10 s
             // window both report a per-minute rate rather than a raw count.
-            let scale = 60 / window_s.max(1);
-            totals.noise_per_min = window_events * scale;
-            totals.disturbers_per_min = window_disturbers * scale;
+            // Multiply before dividing, so a window that is not a whole divisor
+            // of 60 still scales correctly instead of collapsing to 1.
+            let per_min = |count: u32| count * 60 / window_s.max(1);
+            totals.noise_per_min = per_min(window_events);
+            totals.disturbers_per_min = per_min(window_disturbers);
+
+            // **The one place "quiet" is decided.** A rate, not a count, so the
+            // verdict means the same thing whatever the window length -- see
+            // `session::QUIET_PER_MIN` for what testing `== 0` cost.
+            let quiet = totals.noise_per_min <= quiet_per_min;
 
             // A sweep, if one is running, spends this window on the search.
             // Everything below -- the +/-1 walk -- is what happens the rest of
@@ -1282,15 +1315,17 @@ fn listen(
 
             if let Some(active) = sweep.as_mut() {
                 let tested = point;
-                active.record(window_events);
+                active.record(quiet);
                 println!(
-                    "cal:  probe {} [{}..{}] {} -> {} -- {} event(s), ~{} left",
+                    "cal:  probe {} [{}..{}] {} -> {} -- {} event(s) = {}/min, {}, ~{} left",
                     active.probe,
                     active.low,
                     active.high,
                     tested.raw(),
                     session::describe(tested),
                     window_events,
+                    totals.noise_per_min,
+                    if quiet { "quiet" } else { "noisy" },
                     active.remaining()
                 );
 
@@ -1347,7 +1382,7 @@ fn listen(
             let moved = if sweeping {
                 // The search owns this window; it has already moved the point.
                 None
-            } else if window_events > 0 {
+            } else if !quiet {
                 match raw < defence::MAX {
                     true => {
                         point = defence::Point::new(raw + 1);

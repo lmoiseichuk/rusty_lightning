@@ -25,6 +25,7 @@ const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
 /// stored a point fall through to "no stored point" once and re-learn, which
 /// costs minutes; honouring the old bytes would cost a storm.
 const KEY_DEFENCE: &[u8] = b"defence2\0";
+const KEY_QUIET: &[u8] = b"quiet\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -157,5 +158,34 @@ pub fn defence_point() -> Option<crate::defence::Point> {
 pub fn store_defence_point(point: crate::defence::Point) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u32(KEY_DEFENCE, point.raw() as u32)?;
+    nvs.commit()
+}
+
+
+/// The rate at or below which a window counts as **quiet**, in events/minute.
+///
+/// **The zero that the tuner and the search both compare against.** Nothing else
+/// in the system needs it, and it exists because a literal zero turned out to be
+/// the wrong test: a probe asks "did this window hear anything", so a longer
+/// probe has strictly more chances to catch one stray event, and a 60 s sweep
+/// therefore settled deafer than a 10 s one in the same room — spending spike
+/// rejection and then min strikes on one to two events a minute, having rejected
+/// other points at a hundred a minute by the identical verdict.
+///
+/// Persisted because it describes the room's noise floor as a *policy*, not as a
+/// measurement: a garage beside a compressor and a quiet study want different
+/// answers, and neither wants to be re-entered after a power cut.
+///
+/// `None` on a device that has never been told, where the caller uses
+/// [`crate::session::QUIET_PER_MIN`].
+pub fn quiet_per_min() -> Option<u32> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    Some(nvs.get_u32(KEY_QUIET)?)
+}
+
+/// Persist the quiet threshold. Written only when it is given explicitly.
+pub fn store_quiet_per_min(rate: u32) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_QUIET, rate)?;
     nvs.commit()
 }

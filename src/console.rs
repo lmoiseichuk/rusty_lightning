@@ -76,7 +76,8 @@ pub enum Command {
     /// `sensitive on|off` — force every rejection knob to its minimum and
     /// freeze the §4.2 auto-tune there.
     /// Search every parameter for the quietest combination (§4.2).
-    Calibrate(u32),
+    /// `calibrate [seconds] [events-per-minute]`.
+    Calibrate(u32, u32),
     /// `defence` shows the point; `defence <raw>` sets it.
     Defence(Option<u16>),
     Sensitive(bool),
@@ -176,6 +177,7 @@ fn parse(line: &str) -> Command {
     let mut parts = line.split_whitespace();
     let word = parts.next().unwrap_or("");
     let arg = parts.next();
+    let arg2 = parts.next();
 
     match word {
         "help" | "?" => Command::Help,
@@ -218,13 +220,29 @@ fn parse(line: &str) -> Command {
             },
         },
 
-        "calibrate" | "cal" => match arg {
-            None => Command::Calibrate(crate::session::CALIBRATE_PROBE_S),
-            Some(value) => match value.parse::<u32>() {
-                Ok(seconds) => Command::Calibrate(seconds),
-                Err(_) => Command::Unknown,
-            },
-        },
+        // `calibrate [seconds] [events-per-minute]`. Both optional and
+        // positional: the window is the one people reach for, the threshold is
+        // the one they set once for a room. A bad number is refused rather than
+        // silently defaulted -- a sweep is fourteen minutes, and running the
+        // wrong one because a typo fell back to a default is worse than being
+        // told to try again.
+        "calibrate" | "cal" => {
+            let seconds = match arg {
+                None => Some(crate::session::CALIBRATE_PROBE_S),
+                Some(value) => value.parse::<u32>().ok(),
+            };
+            let quiet = match arg2 {
+                None => Some(u32::MAX),
+                Some(value) => match value.parse::<u32>() {
+                    Ok(rate) if rate <= crate::session::QUIET_PER_MIN_MAX => Some(rate),
+                    _ => None,
+                },
+            };
+            match (seconds, quiet) {
+                (Some(seconds), Some(quiet)) => Command::Calibrate(seconds, quiet),
+                _ => Command::Unknown,
+            }
+        }
         "sensitive" | "sens" => match arg {
             Some("on") => Command::Sensitive(true),
             Some("off") => Command::Sensitive(false),
@@ -281,16 +299,24 @@ pub fn print_help() {
     println!("diagnostics:");
     println!("  regs                  the sensor's registers, off the chip and decoded");
     println!("  battery               level, voltage, charging/idle/discharging, raw gauge");
-    println!("  defence [raw]         show the tuning point, or set it (0-{})",
-        crate::defence::MAX);
-    println!("  calibrate [seconds]   search every parameter for the quietest combination");
     println!(
-        "                        seconds is per probe ({}-{}, default {})",
+        "  defence [raw]         show the tuning point, or set it (0-{}, 0 = most sensitive)",
+        crate::defence::MAX
+    );
+    println!("  calibrate [s] [/min]  bisect the whole space for the most sensitive quiet point");
+    println!(
+        "                        s    seconds per probe ({}-{}, default {}); ~13 probes",
         crate::session::CALIBRATE_PROBE_MIN_S,
         crate::session::CALIBRATE_PROBE_MAX_S,
         crate::session::CALIBRATE_PROBE_S
     );
-    println!("  sensitive on|off      every knob below the ladder's floor, ladder frozen");
+    println!(
+        "                        /min events per minute counting as quiet (0-{}, default {})",
+        crate::session::QUIET_PER_MIN_MAX,
+        crate::session::QUIET_PER_MIN
+    );
+    println!("                             stored in NVS; omit to keep the current one");
+    println!("  sensitive on|off      every knob wide open, auto-tune frozen");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
     println!();

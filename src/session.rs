@@ -444,6 +444,34 @@ pub const CALIBRATE_PROBE_S: u32 = 60;
 pub const CALIBRATE_PROBE_MIN_S: u32 = 5;
 pub const CALIBRATE_PROBE_MAX_S: u32 = 60;
 
+/// What counts as **quiet**, in events per minute, when the device has never
+/// been told otherwise.
+///
+/// **Twelve, not zero.** A probe's question is "was that window quiet", and
+/// testing it as `count == 0` makes the answer depend on how long you listened:
+/// a 60 s window has six times a 10 s window's chances of catching one stray
+/// event. Measured here, three sweeps of the same room settled at 448, 448 and
+/// 478 — differing only by probe length, with the long one buying spike
+/// rejection *and* min strikes on one to two events a minute, while rejecting
+/// other points at a hundred a minute by the same verdict.
+///
+/// Twelve a minute is one every five seconds. Every point those sweeps genuinely
+/// rejected ran at 39–102 *per probe*, so the boundary moves nowhere that
+/// matters — it just stops a single click costing the registers that decide
+/// whether a strike is reported at all.
+///
+/// A rate rather than a count, so the verdict means the same thing at 5 s and at
+/// 60 s. That is the whole point: it makes a longer probe strictly better rather
+/// than quietly deafer.
+pub const QUIET_PER_MIN: u32 = 12;
+
+/// The range `calibrate <seconds> <per-min>` accepts for the threshold.
+///
+/// The ceiling is a guard against being told that a continuously jammed band is
+/// quiet: this board measures ~8 events/second when genuinely swamped, which is
+/// 480 a minute.
+pub const QUIET_PER_MIN_MAX: u32 = 240;
+
 /// Settling time after programming a probe's registers, before its window opens.
 ///
 /// `WDTH` and `NF_LEV` gate a running estimate the chip keeps of the band, not
@@ -501,15 +529,19 @@ impl Sweep {
         self.low >= self.high
     }
 
-    /// Fold in what the last window heard and narrow the scope.
+    /// Fold in the last window's verdict and narrow the scope.
     ///
     /// Quiet means nothing above this point needs trying; noisy means the answer
     /// is strictly above it. Excluding the midpoint on the noisy side is what
     /// guarantees progress when the two bounds are adjacent.
-    pub fn record(&mut self, events: u32) {
+    ///
+    /// Takes the **verdict**, not the count, so the rate threshold lives in one
+    /// place and the search cannot disagree with the ±1 walk about what quiet
+    /// means. See [`QUIET_PER_MIN`].
+    pub fn record(&mut self, quiet: bool) {
         let mid = self.low + (self.high - self.low) / 2;
         self.probe += 1;
-        if events == 0 {
+        if quiet {
             self.high = mid;
         } else {
             self.low = mid + 1;

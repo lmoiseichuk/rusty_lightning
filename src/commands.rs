@@ -56,7 +56,9 @@ pub struct Effects {
     /// should listen. Applied by the caller for the same reason `sensitivity`
     /// is: the sweep needs the sensor, the bus and the IRQ notification, and
     /// `Ctx` deliberately has none of them.
-    pub calibrate: Option<u32>,
+    /// `Some((seconds, quiet_per_min))` when `calibrate` was used. `u32::MAX`
+    /// for the threshold means "leave the stored one alone".
+    pub calibrate: Option<(u32, u32)>,
     /// `Some(raw)` when `defence <raw>` was used. Applied by the caller, which
     /// is the only place that owns the point and the bus.
     pub set_point: Option<u16>,
@@ -283,13 +285,11 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Defence(None) => effects.show_point = true,
         Command::Defence(Some(raw)) => effects.set_point = Some(raw),
 
-        Command::Calibrate(seconds) => {
-            // Acknowledged here so the reply lands before the sweep starts
-            // holding the loop for minutes.
+        Command::Calibrate(seconds, quiet) => {
+            // Acknowledged here so the reply lands before the sweep starts.
             println!("cal:  queued at {seconds} s per probe -- the sensor is");
-            println!("cal:  deliberately mis-set while it searches, and this");
-            println!("cal:  takes a while");
-            effects.calibrate = Some(seconds);
+            println!("cal:  deliberately mis-set while it searches");
+            effects.calibrate = Some((seconds, quiet));
         }
         Command::Sensitive(on) => {
             effects.sensitivity = Some(on);
