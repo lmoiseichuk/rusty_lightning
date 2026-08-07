@@ -24,7 +24,7 @@ const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
 /// destructive register of the four. A new key makes every device that has ever
 /// stored a point fall through to "no stored point" once and re-learn, which
 /// costs minutes; honouring the old bytes would cost a storm.
-const KEY_DEFENCE: &[u8] = b"defence2\0";
+const KEY_DEFENCE: &[u8] = b"defence3\0";
 const KEY_QUIET: &[u8] = b"quiet\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a

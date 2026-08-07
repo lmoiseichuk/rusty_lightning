@@ -8,9 +8,12 @@
 //! ## The layout, most valuable bits first
 //!
 //! ```text
-//!   bit  12 11 10 | 9  8  7  6 | 5  4  3  2 | 1  0
-//!        NF_LEV   |    WDTH    |    SREJ    | MIN_NUM_LIGH
-//!        (3 bits) |  (4 bits)  |  (4 bits)  |  (2 bits)
+//!   bit  10  9  8 | 7  6  5  4 | 3  2  1  0
+//!         NF_LEV   |    WDTH    |    SREJ
+//!        (3 bits)  |  (4 bits)  |  (4 bits)
+//!
+//! `MIN_NUM_LIGH` is deliberately absent -- it is pinned to "report every
+//! strike" and is not representable. See [`MIN_STRIKES_COUNT`].
 //! ```
 //!
 //! **The order is the whole design, and it works because binary search resolves
@@ -76,19 +79,7 @@ pub struct Field {
     /// Bit position of the field's least significant bit.
     pub shift: u32,
     pub width: u32,
-    /// Whether the auto-tune may spend this register.
-    ///
-    /// **`MIN_NUM_LIGH` is the one that may not**, and the reason is decisive:
-    /// it gates *lightning reporting* only. The chip still validates, still
-    /// fires `NoiseTooHigh`, still fires `Disturber` — so raising it does
-    /// nothing whatever to the number the tuner is measuring, while costing the
-    /// first 4, 8 or 15 strikes of a storm. Pure loss against this objective.
-    /// Every notch of it the walk ever spent was wasted.
-    ///
-    /// It stays reachable by hand through `defence <raw>`; it is simply not
-    /// something a noise decision is allowed to reach for.
-    pub walkable: bool,
-    /// Share of the gauge, in percent, for the registers the walk can spend.
+    /// Share of the gauge, in percent.
     ///
     /// **Harm, not magnitude.** The packed value is dominated by whichever
     /// register holds the top bits, and that is `NF_LEV` — the one knob with
@@ -133,21 +124,34 @@ impl Field {
 pub const NOISE_FLOOR: usize = 0;
 pub const WATCHDOG: usize = 1;
 pub const SPIKE: usize = 2;
-pub const MIN_STRIKES: usize = 3;
+
+/// What `MIN_NUM_LIGH` is programmed to, always: **report every strike.**
+///
+/// **Not a field, because it is not tunable.** It gates lightning *reporting*
+/// only — the chip still validates, still fires `NoiseTooHigh`, still fires
+/// `Disturber` — so raising it cannot reduce the number the tuner measures,
+/// while costing the first 4, 8 or 15 strikes of a storm. Pure loss against this
+/// objective.
+///
+/// It was briefly kept in the space and merely excluded from the walk. That left
+/// the calibration sweep still setting it — which is how a 60 s sweep settled on
+/// `ms 2`, waiting nine strikes — and needed a shift, a second maximum and a
+/// consistency check to hold the two halves in step. A constant needs none of
+/// that: what cannot be varied should not be representable.
+pub const MIN_STRIKES_COUNT: u8 = 1;
 
 /// **The layout.** Most valuable first — reorder the `shift` column to try the
 /// opposite arrangement.
-pub const FIELDS: [Field; 4] = [
-    Field { name: "nf", shift: 10, width: 3, walkable: true, weight: 10 },
-    Field { name: "wd", shift: 6, width: 4, walkable: true, weight: 40 },
-    Field { name: "sr", shift: 2, width: 4, walkable: true, weight: 50 },
-    Field { name: "ms", shift: 0, width: 2, walkable: false, weight: 0 },
+pub const FIELDS: [Field; 3] = [
+    Field { name: "nf", shift: 8, width: 3, weight: 10 },
+    Field { name: "wd", shift: 4, width: 4, weight: 40 },
+    Field { name: "sr", shift: 0, width: 4, weight: 50 },
 ];
 
 /// Total width of the packed point.
-pub const BITS: u32 = 13;
+pub const BITS: u32 = 11;
 
-/// One value per bit pattern: 8192 of them, 0..=8191.
+/// One value per bit pattern: 2048 of them, 0..=2047.
 pub const MAX: u16 = (1u16 << BITS) - 1;
 
 // **`SREJ` is deliberately NOT capped**, though an earlier design capped it at
@@ -165,24 +169,6 @@ pub const MAX: u16 = (1u16 << BITS) - 1;
 // quiet point, so it prefers weak spike rejection without being told to, and the
 // runtime tuner only climbs as far as the noise forces it. The judgement the cap
 // encoded is now a property of the search rather than a wall in the space.
-
-/// Low bits belonging to registers neither the walk nor the search may touch.
-///
-/// Currently `MIN_NUM_LIGH`'s two. Excluding it from the ±1 walk was not enough
-/// on its own: [`crate::session::Sweep`] bisects a raw range, so its probes set
-/// the field freely — which is how a 60 s sweep came to settle on 478, `ms 2`,
-/// waiting nine strikes. The search now works in [`SEARCH_MAX`] units and shifts
-/// up, so every point it can reach has these bits clear by construction.
-///
-/// `tests/host/defence.rs` checks this matches the trailing unwalkable entries
-/// in [`FIELDS`], so marking another register unwalkable cannot leave it behind.
-pub const UNWALKABLE_LOW_BITS: u32 = 2;
-
-/// The search range, in units of the smallest step the sweep may take.
-///
-/// 2047 rather than 8191, so a full bisection is **11 probes** instead of 13 —
-/// and none of them can programme a register that cannot reduce noise anyway.
-pub const SEARCH_MAX: u16 = MAX >> UNWALKABLE_LOW_BITS;
 
 /// The whole defence configuration: four register fields in one integer.
 ///
@@ -223,7 +209,6 @@ impl Point {
             FIELDS[NOISE_FLOOR].ceiling() / 2,
             FIELDS[WATCHDOG].ceiling() / 2,
             0,
-            0,
         )
     }
 
@@ -238,11 +223,6 @@ impl Point {
     /// The packed value, for storage and for the search.
     pub fn raw(self) -> u16 {
         self.0
-    }
-
-    /// Build from a search index — see [`SEARCH_MAX`].
-    pub fn from_search(index: u16) -> Point {
-        Point::new(index.min(SEARCH_MAX) << UNWALKABLE_LOW_BITS)
     }
 
     /// One field, by [`FIELDS`] index.
@@ -262,36 +242,24 @@ impl Point {
         self.field(SPIKE)
     }
 
-    /// The raw field, 0..=3. See [`Point::min_strikes_count`] for what the chip
-    /// does with it.
-    pub fn min_strikes(self) -> u8 {
-        self.field(MIN_STRIKES)
-    }
-
-    /// How many strikes the chip waits for, which is not the field value: the
-    /// two bits select 1, 5, 9 or 16.
+    /// Always [`MIN_STRIKES_COUNT`]. Kept as a method so callers that report
+    /// the chip's configuration do not have to know it is fixed.
     pub fn min_strikes_count(self) -> u8 {
-        match self.min_strikes() {
-            0 => 1,
-            1 => 5,
-            2 => 9,
-            _ => 16,
-        }
+        MIN_STRIKES_COUNT
     }
 
-    /// Assemble from four field values, each clamped to its width.
+    /// Assemble from the three field values, each clamped to its width.
     ///
     /// **Unused by the firmware**, which only ever walks raw integers — kept
     /// because it is how `tests/host/defence.rs` states what a layout should
     /// produce, and a packing with no way to write it a field at a time is a
     /// packing nobody can check.
     #[allow(dead_code)]
-    pub fn pack(noise_floor: u8, watchdog: u8, spike: u8, min_strikes: u8) -> Point {
+    pub fn pack(noise_floor: u8, watchdog: u8, spike: u8) -> Point {
         let mut raw = 0u16;
         raw = FIELDS[NOISE_FLOOR].set(raw, noise_floor);
         raw = FIELDS[WATCHDOG].set(raw, watchdog);
         raw = FIELDS[SPIKE].set(raw, spike);
-        raw = FIELDS[MIN_STRIKES].set(raw, min_strikes);
         Point(raw)
     }
 
@@ -317,9 +285,6 @@ impl Point {
     /// [`Point::percent`] keep their direction.
     pub fn tightened(self) -> Option<Point> {
         for index in 0..FIELDS.len() {
-            if !FIELDS[index].walkable {
-                continue;
-            }
             let value = self.field(index);
             if value < FIELDS[index].ceiling() {
                 return Some(Point(FIELDS[index].set(self.0, value + 1)));
@@ -349,9 +314,6 @@ impl Point {
     pub fn relaxed(self) -> Option<Point> {
         // Least significant first, which is the reverse of the table order.
         for index in (0..FIELDS.len()).rev() {
-            if !FIELDS[index].walkable {
-                continue;
-            }
             let value = self.field(index);
             if value > 0 {
                 return Some(Point(FIELDS[index].set(self.0, value - 1)));
@@ -381,14 +343,8 @@ impl Point {
     /// The consequence, stated plainly: this is **not** monotonic in the raw
     /// value any more. It is a harm reading, not a position in the search space.
     pub fn percent(self) -> u32 {
-        if self.min_strikes() > 0 {
-            return 100;
-        }
         let mut total = 0u32;
         for (index, field) in FIELDS.iter().enumerate() {
-            if !field.walkable {
-                continue;
-            }
             let ceiling = field.ceiling() as u32;
             if ceiling == 0 {
                 continue;

@@ -53,17 +53,17 @@ fn main() {
     check("no two fields share a bit", !overlapped);
     check("the fields cover every bit, with no gap", covered == MAX);
     check("the widths add up to BITS", total_width == BITS);
-    check("13 bits means 0..=8191", BITS == 13 && MAX == 8191);
+    check("11 bits means 0..=2047", BITS == 11 && MAX == 2047);
 
     // --- the documented positions ------------------------------------------
-    check("NF_LEV is 3 bits at 10", FIELDS[NOISE_FLOOR].shift == 10
+    check("NF_LEV is 3 bits at 8", FIELDS[NOISE_FLOOR].shift == 8
         && FIELDS[NOISE_FLOOR].width == 3);
-    check("WDTH is 4 bits at 6", FIELDS[WATCHDOG].shift == 6
+    check("WDTH is 4 bits at 4", FIELDS[WATCHDOG].shift == 4
         && FIELDS[WATCHDOG].width == 4);
-    check("SREJ is 4 bits at 2", FIELDS[SPIKE].shift == 2
+    check("SREJ is 4 bits at 0", FIELDS[SPIKE].shift == 0
         && FIELDS[SPIKE].width == 4);
-    check("MIN_NUM_LIGH is 2 bits at 0", FIELDS[MIN_STRIKES].shift == 0
-        && FIELDS[MIN_STRIKES].width == 2);
+    check("min strikes is not a field at all", FIELDS.len() == 3);
+    check("...and is pinned to report every strike", MIN_STRIKES_COUNT == 1);
 
     // **The ordering property the whole design rests on.** `NF_LEV` must be the
     // most significant field, so a bisection decides it first, and
@@ -80,35 +80,8 @@ fn main() {
     }
     check("the cheap knob (NF_LEV) holds the highest bits",
         most_significant == NOISE_FLOOR);
-    check("the destructive knob (MIN_NUM_LIGH) holds the lowest",
-        least_significant == MIN_STRIKES);
-
-    // --- the search cannot reach an unwalkable register ----------------------
-    //
-    // Excluding min strikes from the +/-1 walk was not enough on its own: the
-    // sweep bisects a raw range, so its probes set the field freely -- which is
-    // how a 60 s sweep came to settle on 478, `ms 2`, waiting nine strikes.
-    let mut trailing = 0u32;
-    for field in FIELDS.iter().rev() {
-        if field.walkable {
-            break;
-        }
-        trailing += field.width;
-    }
-    check("UNWALKABLE_LOW_BITS matches the table", UNWALKABLE_LOW_BITS == trailing);
-    check("the search range is 2047, not 8191", SEARCH_MAX == 2047);
-
-    let mut all_clear = true;
-    for index in 0..=SEARCH_MAX {
-        if Point::from_search(index).min_strikes() != 0 {
-            all_clear = false;
-        }
-    }
-    check("no search index can programme min strikes", all_clear);
-    check("the search still reaches every walkable ceiling",
-        Point::from_search(SEARCH_MAX).noise_floor() == 7
-            && Point::from_search(SEARCH_MAX).watchdog() == 15
-            && Point::from_search(SEARCH_MAX).spike_rejection() == 15);
+    check("the dearest tunable knob (SREJ) holds the lowest",
+        least_significant == SPIKE);
 
     // --- what a bisection actually probes -----------------------------------
     //
@@ -116,8 +89,7 @@ fn main() {
     let first = Point::new((MAX + 1) / 2);
     check("the first probe is a noise-floor decision", first.noise_floor() == 4
         && first.watchdog() == 0
-        && first.spike_rejection() == 0
-        && first.min_strikes() == 0);
+        && first.spike_rejection() == 0);
 
     // Replay a full search for a known answer, watching when each field settles.
     let target = 1500u16;
@@ -128,7 +100,7 @@ fn main() {
     // field at its final value -- so a LATER number means the search was still
     // making up its mind about that register.
     let mut floor_settled_at = 0;
-    let mut strikes_settled_at = 0;
+    let mut spike_settled_at = 0;
     let goal = Point::new(target);
     while low < high {
         let mid = low + (high - low) / 2;
@@ -136,8 +108,8 @@ fn main() {
         if Point::new(mid).noise_floor() != goal.noise_floor() {
             floor_settled_at = probes + 1;
         }
-        if Point::new(mid).min_strikes() != goal.min_strikes() {
-            strikes_settled_at = probes + 1;
+        if Point::new(mid).spike_rejection() != goal.spike_rejection() {
+            spike_settled_at = probes + 1;
         }
         if mid >= target {
             high = mid;
@@ -145,25 +117,24 @@ fn main() {
             low = mid + 1;
         }
     }
-    check("a full bisection is 13 probes", probes == 13);
+    check("a full bisection is 11 probes", probes == 11);
     check("...landing exactly on the answer", low == target);
     check("...with the noise floor decided early", floor_settled_at <= 4);
-    check("...and min strikes still moving long after it",
-        strikes_settled_at > floor_settled_at);
+    check("...and spike rejection still moving long after it",
+        spike_settled_at > floor_settled_at);
 
     // --- packing round-trips ------------------------------------------------
-    let p = Point::pack(5, 9, 7, 2);
+    let p = Point::pack(5, 9, 7);
     check("noise floor round-trips", p.noise_floor() == 5);
     check("watchdog round-trips", p.watchdog() == 9);
     check("spike rejection round-trips", p.spike_rejection() == 7);
-    check("min strikes round-trips", p.min_strikes() == 2);
-    check("and the raw value is the four fields packed",
-        p.raw() == (5 << 10) | (9 << 6) | (7 << 2) | 2);
+
+    check("and the raw value is the three fields packed",
+        p.raw() == (5 << 8) | (9 << 4) | 7);
     check("a packed point survives new()", Point::new(p.raw()) == p);
 
     check("OPEN is every field at zero", Point::OPEN.raw() == 0
-        && Point::OPEN.noise_floor() == 0
-        && Point::OPEN.min_strikes() == 0);
+        && Point::OPEN.noise_floor() == 0);
 
     // --- the compiled-in starting point -------------------------------------
     //
@@ -180,15 +151,17 @@ fn main() {
 
     // --- clamping -----------------------------------------------------------
     check("a raw value past MAX clamps", Point::new(60000).raw() <= MAX);
+    check("the chip always reports every strike",
+        Point::new(60000).min_strikes_count() == 1 && Point::OPEN.min_strikes_count() == 1);
     check("a field value past its width clamps",
-        Point::pack(200, 200, 200, 200).noise_floor() == 7);
+        Point::pack(200, 200, 200).noise_floor() == 7);
 
     // **Every raw value is a distinct point.** No field is capped below its
     // width, and this is the check that keeps it that way: a cap would fold
     // several raw values onto one point, which strands the +/-1 tuner in a short
     // cycle it can never climb out of.
     check("spike rejection reaches its full 15",
-        Point::pack(0, 0, 15, 0).spike_rejection() == 15);
+        Point::pack(0, 0, 15).spike_rejection() == 15);
     let mut distinct = true;
     for raw in 0..=MAX {
         if Point::new(raw).raw() != raw {
@@ -212,17 +185,16 @@ fn main() {
     // The check that stops the borrow coming back. A decrement from a point with
     // zero low fields lands deafer than it started, which is the failure this
     // whole operation exists to avoid.
-    let settled = Point::pack(0, 7, 0, 0);
-    check("the observed settle point is 448", settled.raw() == 448);
-    check("a raw decrement from it borrows into 16 strikes",
-        Point::new(settled.raw() - 1).min_strikes_count() == 16
-            && Point::new(settled.raw() - 1).spike_rejection() == 15);
+    let settled = Point::pack(0, 7, 0);
+    check("the observed settle point is wd 7", settled.watchdog() == 7);
+    check("a raw decrement from it borrows into full spike rejection",
+        Point::new(settled.raw() - 1).spike_rejection() == 15);
     let gentler = settled.relaxed().unwrap();
     check("relaxed() steps the watchdog instead", gentler.watchdog() == 6);
     check("...leaving every other field alone", gentler.noise_floor() == 0
         && gentler.spike_rejection() == 0
-        && gentler.min_strikes() == 0);
-    check("...which is 384", gentler.raw() == 384);
+        );
+
 
     // The general property, over the whole space: relaxing never makes any
     // field more defensive. That is the definition, and it is what a floor was
@@ -260,27 +232,23 @@ fn main() {
     // walk owns down to zero and leaves `ms` exactly where it found it.
     check("relaxing from the ceiling empties every walkable register",
         walk.noise_floor() == 0 && walk.watchdog() == 0 && walk.spike_rejection() == 0);
-    check("...without touching min strikes", walk.min_strikes() == 3);
     check("...in one step per notch, not per raw value", steps == 7 + 15 + 15);
 
     // --- climbing, which is NOT raw + 1 -------------------------------------
     //
-    // The mirror of the relax checks. Incrementing the packed number moves the
-    // bottom bits, so a noisy minute would be answered by waiting five strikes.
+    // Incrementing the packed number moves the bottom bits, which are SREJ --
+    // the dearest register still in the space. Climbing spends cheapest first.
     let open = Point::OPEN;
     let firmer = open.tightened().unwrap();
     check("the first step up spends the noise floor", firmer.noise_floor() == 1);
-    check("...not min strikes", firmer.min_strikes() == 0
-        && firmer.spike_rejection() == 0
+    check("...not spike rejection", firmer.spike_rejection() == 0
         && firmer.watchdog() == 0);
-    check("...where raw + 1 would have moved min strikes",
-        Point::new(open.raw() + 1).min_strikes() == 1);
+    check("...where raw + 1 would have moved spike rejection",
+        Point::new(open.raw() + 1).spike_rejection() == 1);
 
-    // The cost order, stated as a sequence: the free knob is exhausted before
-    // anything that can reject a strike is touched at all.
     let mut walk = Point::OPEN;
     let mut steps = 0;
-    while walk.spike_rejection() == 0 && walk.min_strikes() == 0 {
+    while walk.spike_rejection() == 0 {
         walk = match walk.tightened() {
             Some(next) => next,
             None => break,
@@ -290,52 +258,8 @@ fn main() {
             break;
         }
     }
-    // The loop exits on the step that first touches a strike-rejecting
-    // register, so the count includes it: 7 for the floor, 15 for the watchdog,
-    // and the one that broke the condition.
-    check("noise floor and watchdog are spent first, both in full",
-        steps == 7 + 15 + 1
-            && walk.noise_floor() == 7
-            && walk.watchdog() == 15
-            && walk.spike_rejection() == 1);
-
-    // **Min strikes is never spent at all.** It gates lightning reporting only --
-    // the chip still fires NoiseTooHigh and Disturber -- so raising it cannot
-    // reduce the number the tuner measures, while costing the first 4, 8 or 15
-    // strikes of a storm. Pure loss against this objective.
-    let mut walk = Point::OPEN;
-    let mut touched_strikes = false;
-    for _ in 0..200 {
-        walk = match walk.tightened() {
-            Some(next) => next,
-            None => break,
-        };
-        if walk.min_strikes() > 0 {
-            touched_strikes = true;
-        }
-    }
-    check("climbing never reaches for min strikes", !touched_strikes);
-    check("...and stops once the three walkable registers are full",
-        walk.noise_floor() == 7 && walk.watchdog() == 15 && walk.spike_rejection() == 15);
-
-    // Both directions terminate, and the raw number moves the way the gauge
-    // expects: up when tightening, down when relaxing.
-    let mut monotonic = true;
-    let mut walk = Point::OPEN;
-    while let Some(next) = walk.tightened() {
-        if next.raw() <= walk.raw() {
-            monotonic = false;
-        }
-        walk = next;
-    }
-    check("tightening always raises the raw value", monotonic);
-    check("a fully deaf point cannot tighten further", walk.tightened().is_none());
-
-    // --- the strike count is not the field ----------------------------------
-    check("min strikes 0 waits for 1", Point::pack(0, 0, 0, 0).min_strikes_count() == 1);
-    check("min strikes 1 waits for 5", Point::pack(0, 0, 0, 1).min_strikes_count() == 5);
-    check("min strikes 2 waits for 9", Point::pack(0, 0, 0, 2).min_strikes_count() == 9);
-    check("min strikes 3 waits for 16", Point::pack(0, 0, 0, 3).min_strikes_count() == 16);
+    check("noise floor and watchdog are spent before spike rejection",
+        steps == 7 + 15 + 1 && walk.noise_floor() == 7 && walk.watchdog() == 15);
 
     // --- the gauge ----------------------------------------------------------
     //
@@ -349,21 +273,27 @@ fn main() {
     // every single strike -- alarming about the harmless knob and silent about
     // the dangerous ones.
     check("the observed point reads as harm, not as magnitude",
-        Point::pack(7, 6, 0, 0).percent() == 26);
+        Point::pack(7, 6, 0).percent() == 26);
     check("...where the raw value alone would have said 92",
-        Point::pack(7, 6, 0, 0).raw() as u32 * 100 / MAX as u32 == 92);
+        Point::pack(7, 6, 0).raw() as u32 * 100 / MAX as u32 == 92);
     check("the free knob at maximum is only its own weight",
-        Point::pack(7, 0, 0, 0).percent() == 10);
+        Point::pack(7, 0, 0).percent() == 10);
     check("every walkable register full reads 100",
-        Point::pack(7, 15, 15, 0).percent() == 100);
+        Point::pack(7, 15, 15).percent() == 100);
 
     // Min strikes overrides everything: it cannot be spent by the walk, so a
     // non-zero value was set by hand, and any value above zero silences the
     // opening of every storm whatever the other three are doing.
-    check("any min strikes at all reads as maximal harm",
-        Point::pack(0, 0, 0, 1).percent() == 100);
-    check("...even from an otherwise fully open point",
-        Point::pack(0, 0, 0, 3).percent() == 100);
+    // Min strikes needs no override any more: it is not representable, so no
+    // point can express "wait for sixteen strikes" at all. That is the whole
+    // argument for removing it from the space rather than merely skipping it.
+    let mut always_one = true;
+    for raw in 0..=MAX {
+        if Point::new(raw).min_strikes_count() != 1 {
+            always_one = false;
+        }
+    }
+    check("no point can silence the start of a storm", always_one);
 
     // Monotonic along the walk -- which is what the bar tracks -- rather than
     // along the raw value, which it deliberately no longer is.
@@ -379,27 +309,16 @@ fn main() {
     }
     check("the gauge never goes backwards as the walk tightens", monotonic);
 
-    // --- walking the raw number, which is what the tuner does ---------------
-    //
-    // Documents the chosen trade rather than approving of it: with the
-    // destructive register in the bottom bits, the FIRST noisy step moves it.
-    let one_step = Point::new(Point::OPEN.raw() + 1);
-    check("a single step up moves min strikes, not the floor",
-        one_step.min_strikes() == 1 && one_step.noise_floor() == 0);
-    check("...which means the chip waits for five strikes",
-        one_step.min_strikes_count() == 5);
-
-    // The carry that makes the space imperfectly monotonic in *defence*, kept as
-    // a check so the behaviour is written down rather than rediscovered.
-    let below = Point::new(1023);
-    let above = Point::new(1024);
-    check("a carry raises the floor by one",
-        above.noise_floor() == below.noise_floor() + 1);
-    check("...while dropping every cheaper field to zero",
-        above.watchdog() == 0 && above.spike_rejection() == 0 && above.min_strikes() == 0);
-    check("...from having been at their maximums",
-        below.watchdog() == 15 && below.spike_rejection() == 15
-            && below.min_strikes() == 3);
+    // --- the walk is field-wise, not arithmetic -----------------------------
+    let open = Point::OPEN;
+    check("the first step up spends the noise floor",
+        open.tightened().unwrap().noise_floor() == 1);
+    let settled = Point::pack(0, 7, 0);
+    check("relaxing off the watchdog steps the watchdog",
+        settled.relaxed().unwrap().watchdog() == 6);
+    check("...and touches nothing else",
+        settled.relaxed().unwrap().noise_floor() == 0
+            && settled.relaxed().unwrap().spike_rejection() == 0);
 
     println!(
         "\n{} passed, {} failed",

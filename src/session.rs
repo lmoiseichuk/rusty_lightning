@@ -403,7 +403,10 @@ pub fn apply(
     // Takes a strike *count*, not the field, and reports what it actually
     // programmed -- the chip quantises to 1/5/9/16 and the return value is how
     // that is confirmed.
-    sensor.set_min_strikes(i2c, point.min_strikes_count())?;
+    // Always one strike -- see `defence::MIN_STRIKES_COUNT`. Written every
+    // time rather than once at boot, so a chip that glitched or was reset
+    // out from under us cannot quietly start waiting for sixteen.
+    sensor.set_min_strikes(i2c, defence::MIN_STRIKES_COUNT)?;
     Ok(())
 }
 
@@ -509,7 +512,7 @@ impl Sweep {
     pub fn new(window_s: u32) -> Sweep {
         Sweep {
             low: 0,
-            high: defence::SEARCH_MAX,
+            high: defence::MAX,
             probe: 0,
             window_s: window_s.clamp(CALIBRATE_PROBE_MIN_S, CALIBRATE_PROBE_MAX_S),
         }
@@ -517,12 +520,12 @@ impl Sweep {
 
     /// The point this probe is testing: the midpoint of what is left.
     pub fn point(&self) -> defence::Point {
-        defence::Point::from_search(self.low + (self.high - self.low) / 2)
+        defence::Point::new(self.low + (self.high - self.low) / 2)
     }
 
     /// The answer, once `done`.
     pub fn settled(&self) -> defence::Point {
-        defence::Point::from_search(self.low)
+        defence::Point::new(self.low)
     }
 
     pub fn done(&self) -> bool {
