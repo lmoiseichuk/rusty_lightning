@@ -76,6 +76,30 @@ pub struct Field {
     /// Bit position of the field's least significant bit.
     pub shift: u32,
     pub width: u32,
+    /// Whether the auto-tune may spend this register.
+    ///
+    /// **`MIN_NUM_LIGH` is the one that may not**, and the reason is decisive:
+    /// it gates *lightning reporting* only. The chip still validates, still
+    /// fires `NoiseTooHigh`, still fires `Disturber` — so raising it does
+    /// nothing whatever to the number the tuner is measuring, while costing the
+    /// first 4, 8 or 15 strikes of a storm. Pure loss against this objective.
+    /// Every notch of it the walk ever spent was wasted.
+    ///
+    /// It stays reachable by hand through `defence <raw>`; it is simply not
+    /// something a noise decision is allowed to reach for.
+    pub walkable: bool,
+    /// Share of the gauge, in percent, for the registers the walk can spend.
+    ///
+    /// **Harm, not magnitude.** The packed value is dominated by whichever
+    /// register holds the top bits, and that is `NF_LEV` — the one knob with
+    /// essentially no detection cost. So a raw-scaled bar read 92 % while the
+    /// device was in fact reporting every strike. These weights answer the
+    /// question a person actually asks of a bar: how deaf to lightning am I.
+    ///
+    /// Judgement, not measurement: the datasheet gives no detection-probability
+    /// curves to derive them from, so they encode the cost ordering
+    /// `NF_LEV` ≪ `WDTH` < `SREJ` and nothing more.
+    pub weight: u32,
 }
 
 impl Field {
@@ -114,10 +138,10 @@ pub const MIN_STRIKES: usize = 3;
 /// **The layout.** Most valuable first — reorder the `shift` column to try the
 /// opposite arrangement.
 pub const FIELDS: [Field; 4] = [
-    Field { name: "nf", shift: 10, width: 3 },
-    Field { name: "wd", shift: 6, width: 4 },
-    Field { name: "sr", shift: 2, width: 4 },
-    Field { name: "ms", shift: 0, width: 2 },
+    Field { name: "nf", shift: 10, width: 3, walkable: true, weight: 10 },
+    Field { name: "wd", shift: 6, width: 4, walkable: true, weight: 40 },
+    Field { name: "sr", shift: 2, width: 4, walkable: true, weight: 50 },
+    Field { name: "ms", shift: 0, width: 2, walkable: false, weight: 0 },
 ];
 
 /// Total width of the packed point.
@@ -270,6 +294,9 @@ impl Point {
     /// [`Point::percent`] keep their direction.
     pub fn tightened(self) -> Option<Point> {
         for index in 0..FIELDS.len() {
+            if !FIELDS[index].walkable {
+                continue;
+            }
             let value = self.field(index);
             if value < FIELDS[index].ceiling() {
                 return Some(Point(FIELDS[index].set(self.0, value + 1)));
@@ -299,6 +326,9 @@ impl Point {
     pub fn relaxed(self) -> Option<Point> {
         // Least significant first, which is the reverse of the table order.
         for index in (0..FIELDS.len()).rev() {
+            if !FIELDS[index].walkable {
+                continue;
+            }
             let value = self.field(index);
             if value > 0 {
                 return Some(Point(FIELDS[index].set(self.0, value - 1)));
@@ -307,12 +337,41 @@ impl Point {
         None
     }
 
-    /// How hard the device is defending, 0–100, for the gauge.
+    /// How deaf to lightning the device currently is, 0–100.
     ///
-    /// The packed value scaled, with **no inversion**: 0 is a fully receptive
-    /// device and `MAX` is the deafest it can make itself, so a bar labelled
-    /// "Noise" reads the way anyone expects.
+    /// **A weighted sum, not the raw value scaled.** The raw number is dominated
+    /// by whichever register holds the top bits, which is `NF_LEV` — and that is
+    /// the one register with essentially no detection cost. Measured on this
+    /// board: `nf 7, wd 6, sr 0, ms 0` read **92 %** while the device was
+    /// reporting every single strike. The bar was alarming about the harmless
+    /// knob and silent about the dangerous ones.
+    ///
+    /// Each walkable register contributes its [`Field::weight`] scaled by how
+    /// far up its own range it sits, so the same point now reads **25 %**.
+    ///
+    /// **`MIN_NUM_LIGH` overrides everything.** It cannot be spent by the walk,
+    /// so a non-zero value means somebody set it by hand — and any value above
+    /// zero silences the opening of every storm, which is maximal harm for an
+    /// early-warning device whatever the other three are doing. A bar that
+    /// averaged that away would be hiding the worst state the part can be in.
+    ///
+    /// The consequence, stated plainly: this is **not** monotonic in the raw
+    /// value any more. It is a harm reading, not a position in the search space.
     pub fn percent(self) -> u32 {
-        self.0 as u32 * 100 / MAX as u32
+        if self.min_strikes() > 0 {
+            return 100;
+        }
+        let mut total = 0u32;
+        for (index, field) in FIELDS.iter().enumerate() {
+            if !field.walkable {
+                continue;
+            }
+            let ceiling = field.ceiling() as u32;
+            if ceiling == 0 {
+                continue;
+            }
+            total += field.weight * self.field(index) as u32 / ceiling;
+        }
+        total.min(100)
     }
 }

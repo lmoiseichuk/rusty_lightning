@@ -229,8 +229,12 @@ fn main() {
             break;
         }
     }
-    check("relaxing from the ceiling reaches fully open", walk == Point::OPEN);
-    check("...in one step per notch, not per raw value", steps == 7 + 15 + 15 + 3);
+    // Min strikes is not walkable, so a ceiling point relaxes every register the
+    // walk owns down to zero and leaves `ms` exactly where it found it.
+    check("relaxing from the ceiling empties every walkable register",
+        walk.noise_floor() == 0 && walk.watchdog() == 0 && walk.spike_rejection() == 0);
+    check("...without touching min strikes", walk.min_strikes() == 3);
+    check("...in one step per notch, not per raw value", steps == 7 + 15 + 15);
 
     // --- climbing, which is NOT raw + 1 -------------------------------------
     //
@@ -268,20 +272,24 @@ fn main() {
             && walk.watchdog() == 15
             && walk.spike_rejection() == 1);
 
+    // **Min strikes is never spent at all.** It gates lightning reporting only --
+    // the chip still fires NoiseTooHigh and Disturber -- so raising it cannot
+    // reduce the number the tuner measures, while costing the first 4, 8 or 15
+    // strikes of a storm. Pure loss against this objective.
     let mut walk = Point::OPEN;
-    let mut first_strike_cost = 0;
-    for step in 1..=100 {
+    let mut touched_strikes = false;
+    for _ in 0..200 {
         walk = match walk.tightened() {
             Some(next) => next,
             None => break,
         };
         if walk.min_strikes() > 0 {
-            first_strike_cost = step;
-            break;
+            touched_strikes = true;
         }
     }
-    check("min strikes is the very last thing spent",
-        first_strike_cost == 7 + 15 + 15 + 1);
+    check("climbing never reaches for min strikes", !touched_strikes);
+    check("...and stops once the three walkable registers are full",
+        walk.noise_floor() == 7 && walk.watchdog() == 15 && walk.spike_rejection() == 15);
 
     // Both directions terminate, and the raw number moves the way the gauge
     // expects: up when tightening, down when relaxing.
@@ -294,9 +302,6 @@ fn main() {
         walk = next;
     }
     check("tightening always raises the raw value", monotonic);
-    check("...and ends with every field at its ceiling",
-        walk.noise_floor() == 7 && walk.watchdog() == 15
-            && walk.spike_rejection() == 15 && walk.min_strikes() == 3);
     check("a fully deaf point cannot tighten further", walk.tightened().is_none());
 
     // --- the strike count is not the field ----------------------------------
@@ -312,20 +317,40 @@ fn main() {
     // cancelled out here and hid a tuner running backwards.
     check("fully receptive reads as no defence", Point::OPEN.percent() == 0);
     check("the ceiling reads as full defence", Point::new(MAX).percent() == 100);
-    check("the midpoint reads as about half", {
-        let half = Point::new(MAX / 2).percent();
-        (48..=52).contains(&half)
-    });
+    // **Harm, not magnitude.** The measurement that forced this: `nf 7, wd 6,
+    // sr 0, ms 0` read 92 % on a raw-scaled bar while the device was reporting
+    // every single strike -- alarming about the harmless knob and silent about
+    // the dangerous ones.
+    check("the observed point reads as harm, not as magnitude",
+        Point::pack(7, 6, 0, 0).percent() == 26);
+    check("...where the raw value alone would have said 92",
+        Point::pack(7, 6, 0, 0).raw() as u32 * 100 / MAX as u32 == 92);
+    check("the free knob at maximum is only its own weight",
+        Point::pack(7, 0, 0, 0).percent() == 10);
+    check("every walkable register full reads 100",
+        Point::pack(7, 15, 15, 0).percent() == 100);
+
+    // Min strikes overrides everything: it cannot be spent by the walk, so a
+    // non-zero value was set by hand, and any value above zero silences the
+    // opening of every storm whatever the other three are doing.
+    check("any min strikes at all reads as maximal harm",
+        Point::pack(0, 0, 0, 1).percent() == 100);
+    check("...even from an otherwise fully open point",
+        Point::pack(0, 0, 0, 3).percent() == 100);
+
+    // Monotonic along the walk -- which is what the bar tracks -- rather than
+    // along the raw value, which it deliberately no longer is.
     let mut monotonic = true;
-    let mut previous = 0;
-    for raw in 0..=MAX {
-        let percent = Point::new(raw).percent();
-        if percent < previous {
+    let mut walk = Point::OPEN;
+    let mut previous = walk.percent();
+    while let Some(next) = walk.tightened() {
+        if next.percent() < previous {
             monotonic = false;
         }
-        previous = percent;
+        previous = next.percent();
+        walk = next;
     }
-    check("the gauge never goes backwards as the number climbs", monotonic);
+    check("the gauge never goes backwards as the walk tightens", monotonic);
 
     // --- walking the raw number, which is what the tuner does ---------------
     //
