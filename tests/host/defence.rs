@@ -83,6 +83,33 @@ fn main() {
     check("the destructive knob (MIN_NUM_LIGH) holds the lowest",
         least_significant == MIN_STRIKES);
 
+    // --- the search cannot reach an unwalkable register ----------------------
+    //
+    // Excluding min strikes from the +/-1 walk was not enough on its own: the
+    // sweep bisects a raw range, so its probes set the field freely -- which is
+    // how a 60 s sweep came to settle on 478, `ms 2`, waiting nine strikes.
+    let mut trailing = 0u32;
+    for field in FIELDS.iter().rev() {
+        if field.walkable {
+            break;
+        }
+        trailing += field.width;
+    }
+    check("UNWALKABLE_LOW_BITS matches the table", UNWALKABLE_LOW_BITS == trailing);
+    check("the search range is 2047, not 8191", SEARCH_MAX == 2047);
+
+    let mut all_clear = true;
+    for index in 0..=SEARCH_MAX {
+        if Point::from_search(index).min_strikes() != 0 {
+            all_clear = false;
+        }
+    }
+    check("no search index can programme min strikes", all_clear);
+    check("the search still reaches every walkable ceiling",
+        Point::from_search(SEARCH_MAX).noise_floor() == 7
+            && Point::from_search(SEARCH_MAX).watchdog() == 15
+            && Point::from_search(SEARCH_MAX).spike_rejection() == 15);
+
     // --- what a bisection actually probes -----------------------------------
     //
     // The ordering claim stated as behaviour rather than as bit positions.

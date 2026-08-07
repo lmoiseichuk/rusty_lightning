@@ -509,7 +509,7 @@ impl Sweep {
     pub fn new(window_s: u32) -> Sweep {
         Sweep {
             low: 0,
-            high: defence::MAX,
+            high: defence::SEARCH_MAX,
             probe: 0,
             window_s: window_s.clamp(CALIBRATE_PROBE_MIN_S, CALIBRATE_PROBE_MAX_S),
         }
@@ -517,12 +517,12 @@ impl Sweep {
 
     /// The point this probe is testing: the midpoint of what is left.
     pub fn point(&self) -> defence::Point {
-        defence::Point::new(self.low + (self.high - self.low) / 2)
+        defence::Point::from_search(self.low + (self.high - self.low) / 2)
     }
 
     /// The answer, once `done`.
     pub fn settled(&self) -> defence::Point {
-        defence::Point::new(self.low)
+        defence::Point::from_search(self.low)
     }
 
     pub fn done(&self) -> bool {

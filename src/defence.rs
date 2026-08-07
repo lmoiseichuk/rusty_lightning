@@ -166,6 +166,24 @@ pub const MAX: u16 = (1u16 << BITS) - 1;
 // runtime tuner only climbs as far as the noise forces it. The judgement the cap
 // encoded is now a property of the search rather than a wall in the space.
 
+/// Low bits belonging to registers neither the walk nor the search may touch.
+///
+/// Currently `MIN_NUM_LIGH`'s two. Excluding it from the ±1 walk was not enough
+/// on its own: [`crate::session::Sweep`] bisects a raw range, so its probes set
+/// the field freely — which is how a 60 s sweep came to settle on 478, `ms 2`,
+/// waiting nine strikes. The search now works in [`SEARCH_MAX`] units and shifts
+/// up, so every point it can reach has these bits clear by construction.
+///
+/// `tests/host/defence.rs` checks this matches the trailing unwalkable entries
+/// in [`FIELDS`], so marking another register unwalkable cannot leave it behind.
+pub const UNWALKABLE_LOW_BITS: u32 = 2;
+
+/// The search range, in units of the smallest step the sweep may take.
+///
+/// 2047 rather than 8191, so a full bisection is **11 probes** instead of 13 —
+/// and none of them can programme a register that cannot reduce noise anyway.
+pub const SEARCH_MAX: u16 = MAX >> UNWALKABLE_LOW_BITS;
+
 /// The whole defence configuration: four register fields in one integer.
 ///
 /// A newtype rather than a bare `u16` so a raw count from the search cannot be
@@ -220,6 +238,11 @@ impl Point {
     /// The packed value, for storage and for the search.
     pub fn raw(self) -> u16 {
         self.0
+    }
+
+    /// Build from a search index — see [`SEARCH_MAX`].
+    pub fn from_search(index: u16) -> Point {
+        Point::new(index.min(SEARCH_MAX) << UNWALKABLE_LOW_BITS)
     }
 
     /// One field, by [`FIELDS`] index.

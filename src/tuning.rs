@@ -412,7 +412,7 @@ impl Tuning {
         let started = session::Sweep::new(window_s);
         println!(
             "cal:  starting -- 0..={}, {} s per probe, quiet is <={}/min, about {} probes",
-            defence::MAX,
+            defence::SEARCH_MAX,
             started.window_s,
             self.quiet_per_min,
             started.remaining()
