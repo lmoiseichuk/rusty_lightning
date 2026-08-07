@@ -596,3 +596,167 @@ pub fn flow(reading: &Reading, trend: Option<&Trend>) -> Flow {
         None => Flow::Unknown,
     }
 }
+
+
+/// How often the fuel gauge is read.
+///
+/// An I2C transaction for values that move over hours, so ten seconds is
+/// already generous — it exists to keep the screen's figure fresh rather than
+/// because the cell changes that fast.
+pub const GAUGE_POLL_S: u32 = 10;
+
+/// Everything the fuel gauge remembers between polls.
+///
+/// **Eight loop locals that were one subject.** `reading`, `trend`, `range`,
+/// `drain`, `previous_mv` and three timestamps all describe the cell, and every
+/// one of them was threaded separately through `listen`, the console handler and
+/// the redraw path — which is how the learned range came to be widened from the
+/// *drawing* code, three hundred lines from everything else that touches it.
+///
+/// The gauge itself is passed in, not held: it is hardware, and this is state.
+pub struct Fuel {
+    /// The most recent reading, or `None` until the first poll or without a
+    /// gauge. Cached because the screen wants it far less often than the loop
+    /// runs, and it is an I2C transaction.
+    pub reading: Option<Reading>,
+    /// Voltage over time, because `CRATE` cannot see a charger in taper — see
+    /// [`Trend`].
+    pub trend: Option<Trend>,
+    /// §2.1's learned range. Seeded rather than empty, so the first reading has
+    /// something to widen from — and `None` from NVS is a virgin device, not an
+    /// error.
+    pub range: (u16, u16),
+    /// The discharge accumulator (§7). Restored rather than started fresh: it
+    /// averages over days, so a device that reset an hour ago must not go back
+    /// to "no estimate" — that is exactly the window in which somebody is
+    /// watching it and wants one.
+    pub drain: Drain,
+    /// Deliberately RAM-only. Persisting it would cost a flash write every ten
+    /// seconds to protect a value the very next poll re-establishes.
+    previous_mv: Option<u16>,
+    last_drain_s: u32,
+    last_drain_save_s: u32,
+    last_poll_ms: u32,
+}
+
+impl Fuel {
+    /// Read once up front rather than waiting out the first poll interval, so
+    /// the very first screen carries a real battery figure instead of "no gauge".
+    pub fn new(
+        gauge: Option<&Max17048>,
+        i2c: &mut esp_idf_hal::i2c::I2cDriver<'_>,
+        now_ms: u32,
+    ) -> Fuel {
+        let reading = gauge.and_then(|g| g.read(i2c).ok());
+        let now_s = now_ms / 1000;
+        Fuel {
+            reading,
+            trend: reading.map(|r| Trend::new(r.millivolts, now_s)),
+            range: crate::settings::battery_range().unwrap_or(SEED_RANGE),
+            drain: crate::settings::battery_drain().unwrap_or_default(),
+            // Seeded from the reading taken above, so the first interval
+            // measured is a real one rather than the gap between boot and the
+            // first poll.
+            previous_mv: reading.map(|r| r.millivolts),
+            last_drain_s: now_s,
+            last_drain_save_s: now_s,
+            last_poll_ms: now_ms,
+        }
+    }
+
+    pub fn due(&self, now_ms: u32) -> bool {
+        now_ms.saturating_sub(self.last_poll_ms) >= GAUGE_POLL_S * 1000
+    }
+
+    /// Take a reading and fold it into the trend and the discharge baseline.
+    ///
+    /// The accumulator lives here rather than in the redraw path because it must
+    /// see *every* sample: a rate assembled from the handful of polls that
+    /// happened to coincide with a repaint would be an average of nothing in
+    /// particular. `CRATE` cannot supply one — on the frugal policy this cell
+    /// drains at ~0.14 %/hr against a gauge whose LSB is 0.208, so the register
+    /// reads a hard zero for the whole run, and millivolts over hours is the
+    /// only measurement left.
+    pub fn poll(
+        &mut self,
+        gauge: Option<&Max17048>,
+        i2c: &mut esp_idf_hal::i2c::I2cDriver<'_>,
+        now_ms: u32,
+    ) {
+        self.last_poll_ms = now_ms;
+        self.reading = gauge.and_then(|g| g.read(i2c).ok());
+        let reading = match self.reading {
+            Some(reading) => reading,
+            None => return,
+        };
+        let now_s = now_ms / 1000;
+
+        match self.trend.as_mut() {
+            Some(trend) => trend.observe(reading.millivolts, now_s),
+            None => self.trend = Some(Trend::new(reading.millivolts, now_s)),
+        }
+
+        match self.previous_mv {
+            None => self.previous_mv = Some(reading.millivolts),
+            Some(previous) => {
+                let elapsed = now_s.saturating_sub(self.last_drain_s);
+                let (next, reset) = drained(self.drain, previous, reading.millivolts, elapsed);
+                self.previous_mv = Some(reading.millivolts);
+                self.last_drain_s = now_s;
+                self.drain = next;
+
+                // A reset is the one event worth both saying and saving
+                // immediately: it throws away the baseline, and a power cut that
+                // restored the discarded one would put a stale rate back into
+                // service.
+                if reset {
+                    println!("bat:  charging or rebounding -- discharge baseline reset");
+                    if let Err(e) = crate::settings::store_battery_drain(self.drain) {
+                        println!("bat:  baseline reset but NOT saved -- {e}");
+                    }
+                    self.last_drain_save_s = now_s;
+                } else if now_s.saturating_sub(self.last_drain_save_s) >= DRAIN_SAVE_S {
+                    self.last_drain_save_s = now_s;
+                    if let Err(e) = crate::settings::store_battery_drain(self.drain) {
+                        println!("bat:  baseline NOT saved -- {e}");
+                    }
+                }
+            }
+        }
+
+        println!(
+            "bat:  {} mV, {}%, rate {}.{:02} %/hr",
+            reading.millivolts,
+            reading.percent,
+            reading.crate_centi_per_hour / 100,
+            (reading.crate_centi_per_hour % 100).abs()
+        );
+    }
+
+    /// Widen the learned range if this reading is a new extreme.
+    ///
+    /// Written to NVS only when an endpoint actually moves, which the midpoint
+    /// rule makes rare: it takes a NEW extreme, and new extrema in a noisy
+    /// series get rarer the longer it runs. Called from the redraw path, so the
+    /// write cadence is bounded by the panel's rather than by the gauge's.
+    pub fn widen(&mut self) {
+        let reading = match self.reading {
+            Some(reading) => reading,
+            None => return,
+        };
+        let moved = match widened(self.range, reading.millivolts) {
+            Some(moved) => moved,
+            None => return,
+        };
+        match crate::settings::store_battery_range(moved.0, moved.1) {
+            Ok(()) => {
+                println!(
+                    "bat:  range {}-{} -> {}-{} mV",
+                    self.range.0, self.range.1, moved.0, moved.1
+                );
+                self.range = moved;
+            }
+            Err(e) => println!("bat:  range moved but NOT saved -- {e}"),
+        }
+    }
+}

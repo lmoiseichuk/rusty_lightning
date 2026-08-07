@@ -166,14 +166,6 @@ const BATCH_MS: u32 = 1000;
 /// indistinguishable from outside.
 const IRQ_POLL_INTERVAL_S: u32 = 30;
 
-/// How often to read the fuel gauge.
-///
-/// Slower than the batch loop because it is an I2C transaction for values that
-/// move over hours — but far faster than the screen, because the *clock policy*
-/// depends on it and a device that has been unplugged should not stay at
-/// 160 MHz waiting for a redraw.
-const GAUGE_POLL_S: u32 = 10;
-
 /// How long the cold-boot logo stays up before the first status screen.
 ///
 /// The splash is worth a moment and not worth more. Note the panel itself eats
@@ -600,48 +592,18 @@ fn listen(
     }
     let mut screen = screen::Screen::new();
 
-    // §2.1's learned range. Seeded rather than empty, so the first reading has
-    // something to widen from -- and `None` from NVS is a virgin device, not an
-    // error.
-    let mut range = settings::battery_range().unwrap_or(battery::SEED_RANGE);
-
+    let mut fuel = battery::Fuel::new(gauge, i2c, now_ms());
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.
     let mut policy = power::Policy::Awake;
     // `Some(mhz)` while `freq <mhz>` is in force. Deliberately not persisted:
     // it exists so a board can be watched over USB, and one that came back from
-    // a power cut silently refusing to sleep would quietly cost the battery.
     let mut freq_override: Option<u32> = None;
     let mut console = console::Console::new();
     // Uptime at the last console input, and at the last clock save.
     let mut last_console_s: Option<u32> = None;
     let mut last_clock_save_s: u32 = 0;
     let mut last_log_sync_ms: u32 = 0;
-    // The most recent gauge reading, or None until the first poll or if the
-    // gauge is absent. Cached because the screen wants it far less often than
-    // the loop runs, and it is an I2C transaction.
-    let mut reading: Option<battery::Reading>;
-    // Voltage over time, because `CRATE` cannot see a charger in taper -- see
-    // `battery::Trend`.
-    let mut trend: Option<battery::Trend> = None;
-    // Read once up front rather than waiting out the first poll interval, so
-    // the very first screen carries a real battery figure instead of "no gauge".
-    reading = gauge.and_then(|g| g.read(i2c).ok());
-    if let Some(reading) = reading {
-        trend = Some(battery::Trend::new(reading.millivolts, now_ms() / 1000));
-    }
-    let mut last_gauge_ms: u32 = now_ms();
-
-    // The discharge accumulator (§7). Restored rather than started fresh: it
-    // averages over days, so a device that reset an hour ago must not go back
-    // to "no estimate" -- that is exactly the window in which somebody is
-    // watching it and wants one.
-    let mut drain = settings::battery_drain().unwrap_or_default();
-    // Seeded from the reading taken above, so the first interval measured is a
-    // real one rather than the gap between boot and the first poll.
-    let mut previous_mv: Option<u16> = reading.map(|r| r.millivolts);
-    let mut last_drain_s: u32 = now_ms() / 1000;
-    let mut last_drain_save_s: u32 = now_ms() / 1000;
     match power::apply(policy) {
         Ok(()) => match power::config() {
             Some((max, min, sleep)) => println!(
@@ -772,8 +734,8 @@ fn listen(
                     history: &mut history,
                     strike_log: strike_log.as_deref_mut(),
                     chart_period: &mut screen.period,
-                    reading,
-                    range,
+                    reading: fuel.reading,
+                    range: fuel.range,
                     level: tuning.point.percent(),
                     die_temperature,
                     antenna_khz,
@@ -809,11 +771,11 @@ fn listen(
                             );
                             println!(
                                 "batt: {} -- CRATE {}.{:02} %/hr",
-                                battery::flow(&now, trend.as_ref()).label(),
+                                battery::flow(&now, fuel.trend.as_ref()).label(),
                                 now.crate_centi_per_hour / 100,
                                 (now.crate_centi_per_hour % 100).abs()
                             );
-                            match trend.as_ref() {
+                            match fuel.trend.as_ref() {
                                 Some(t) if t.span_s() >= 60 => println!(
                                     "batt: trend {:+} mV over {} min (>= {} mV counts)",
                                     t.delta_mv(),
@@ -824,7 +786,7 @@ fn listen(
                                 // had no time to mean anything.
                                 _ => println!("batt: trend -- not enough history yet"),
                             }
-                            println!("batt: learned range {}-{} mV", range.0, range.1);
+                            println!("batt: learned range {}-{} mV", fuel.range.0, fuel.range.1);
                             println!(
                                 "batt: raw VCELL 0x{vcell:04X}  SOC 0x{soc:04X}  CRATE 0x{crate_raw:04X}"
                             );
@@ -1032,69 +994,8 @@ fn listen(
         // The fuel gauge, on its own slow cadence -- it is an I2C transaction
         // for values that move over hours -- and the clock policy that follows
         // from it (§7).
-        if now_ms().saturating_sub(last_gauge_ms) >= GAUGE_POLL_S * 1000 {
-            last_gauge_ms = now_ms();
-            reading = gauge.and_then(|g| g.read(i2c).ok());
-            if let Some(reading) = reading {
-                let now_s = now_ms() / 1000;
-                match trend.as_mut() {
-                    Some(trend) => trend.observe(reading.millivolts, now_s),
-                    None => trend = Some(battery::Trend::new(reading.millivolts, now_s)),
-                }
-
-                // The long-baseline accumulator behind the runtime estimate.
-                // `CRATE` cannot supply one -- on the frugal policy this cell
-                // drains at ~0.14 %/hr against a gauge whose LSB is 0.208, so
-                // the register reads a hard zero for the whole run. Millivolts
-                // over hours is the only measurement left, and it lives here
-                // rather than in the redraw path because it must see *every*
-                // sample: a rate assembled from the handful of polls that
-                // happened to coincide with a repaint would be an average of
-                // nothing in particular.
-                //
-                // `previous_mv` is deliberately RAM-only. Persisting it would
-                // cost a flash write every ten seconds to protect a value the
-                // very next poll re-establishes.
-                match previous_mv {
-                    None => previous_mv = Some(reading.millivolts),
-                    Some(previous) => {
-                        let elapsed = now_s.saturating_sub(last_drain_s);
-                        let (next, reset) =
-                            battery::drained(drain, previous, reading.millivolts, elapsed);
-                        previous_mv = Some(reading.millivolts);
-                        last_drain_s = now_s;
-                        drain = next;
-
-                        // A reset is the one event worth both saying and saving
-                        // immediately: it throws away the baseline, and a power
-                        // cut that restored the discarded one would put a stale
-                        // rate back into service.
-                        if reset {
-                            println!("bat:  charging or rebounding -- discharge baseline reset");
-                            if let Err(e) = settings::store_battery_drain(drain) {
-                                println!("bat:  baseline reset but NOT saved -- {e}");
-                            }
-                            last_drain_save_s = now_s;
-                        } else if now_s.saturating_sub(last_drain_save_s)
-                            >= battery::DRAIN_SAVE_S
-                        {
-                            last_drain_save_s = now_s;
-                            if let Err(e) = settings::store_battery_drain(drain) {
-                                println!("bat:  baseline NOT saved -- {e}");
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(reading) = reading {
-                println!(
-                    "bat:  {} mV, {}%, rate {}.{:02} %/hr",
-                    reading.millivolts,
-                    reading.percent,
-                    reading.crate_centi_per_hour / 100,
-                    (reading.crate_centi_per_hour % 100).abs()
-                );
-            }
+        if fuel.due(now_ms()) {
+            fuel.poll(gauge, i2c, now_ms());
 
             // Skipped entirely while pinned -- otherwise the next tick would
             // quietly undo the override and the console would go away again,
@@ -1157,20 +1058,9 @@ fn listen(
             };
 
             if let Some(why) = screen.due(&want, now_ms()) {
-                if let Some(reading) = reading {
-                    if let Some(moved) = battery::widened(range, reading.millivolts) {
-                        match settings::store_battery_range(moved.0, moved.1) {
-                            Ok(()) => {
-                                println!(
-                                    "bat:  range {}-{} -> {}-{} mV",
-                                    range.0, range.1, moved.0, moved.1
-                                );
-                                range = moved;
-                            }
-                            Err(e) => println!("bat:  range moved but NOT saved -- {e}"),
-                        }
-                    }
-                }
+                // On the redraw path on purpose: a new extreme is only worth a
+                // flash write at the panel's cadence, not the gauge's.
+                fuel.widen();
 
                 screen.draw(
                     panel,
@@ -1179,10 +1069,10 @@ fn listen(
                         point: tuning.point,
                         totals: &totals,
                         history: &history,
-                        battery: reading,
-                        trend: trend.as_ref(),
-                        range,
-                        drain,
+                        battery: fuel.reading,
+                        trend: fuel.trend.as_ref(),
+                        range: fuel.range,
+                        drain: fuel.drain,
                         die_temperature,
                         log_bytes: strike_log
                             .as_deref()
