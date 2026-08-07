@@ -14,6 +14,7 @@ mod history;
 mod i2c_scan;
 mod log;
 mod power;
+mod screen;
 mod session;
 mod settings;
 mod storage;
@@ -196,27 +197,6 @@ const IRQ_POLL_INTERVAL_S: u32 = 30;
 /// depends on it and a device that has been unplugged should not stay at
 /// 160 MHz waiting for a redraw.
 const GAUGE_POLL_S: u32 = 10;
-
-/// Shortest gap between panel refreshes.
-///
-/// **A full 800×480 refresh measured 3.9 s on this panel.** §6's nominal 5 s
-/// cadence would leave it busy roughly 80 % of the time — the device would
-/// spend its life redrawing, and during a storm every refresh would be stale
-/// before it finished. So the screen is change-gated with a floor under it,
-/// and this is the floor.
-const REDRAW_MIN_GAP_S: u32 = 30;
-
-/// Redraw even if nothing tracked has changed, at most this often.
-///
-/// The backstop for everything the change test deliberately ignores — the
-/// uptime, the disturber count, the battery, the die temperature. Without it
-/// those fields would be correct only at boot, which is exactly how "up 0m" was
-/// still on the glass long after boot.
-///
-/// Five minutes rather than fifteen: at 3.8 s a refresh that is ~1.3 % of the
-/// panel's time, which is affordable, and it keeps every slow-moving field on
-/// screen within a period short enough that nobody mistakes it for frozen.
-const REDRAW_BASELINE_S: u32 = 5 * 60;
 
 /// How long the cold-boot logo stays up before the first status screen.
 ///
@@ -640,8 +620,6 @@ fn listen(
     // a local, which Rust warns about: locals have no docs to attach to.)
     let mut max_sensitivity = false;
     let mut last_button_ms: u32 = 0;
-    // Set by a button press, cleared by the redraw it causes.
-    let mut user_acted = false;
     let mut batch = Batch::default();
     let mut batch_started = now_ms();
 
@@ -663,14 +641,7 @@ fn listen(
             println!("log:  replayed {replayed} record(s) into the charts");
         }
     }
-    // Scratch for the chart series. Held here rather than built per redraw:
-    // the day ring alone is 96 buckets, and a redraw already costs 3.8 s of
-    // panel time without allocating on the way in.
-    // Sized for the longest ring, so one buffer serves all three periods; the
-    // shorter ones simply use a prefix.
-    let mut chart_counts = [0u16; history::MEDIUM_LEN];
-    let mut chart_scores = [0u32; history::MEDIUM_LEN];
-    let mut chart_period = ui::ChartPeriod::Day;
+    let mut screen = screen::Screen::new();
 
     // §2.1's learned range. Seeded rather than empty, so the first reading has
     // something to widen from -- and `None` from NVS is a virgin device, not an
@@ -744,8 +715,6 @@ fn listen(
             session::QUIET_PER_MIN
         }
     };
-    let mut drawn: Option<Drawn> = None;
-    let mut last_draw_ms: u32 = 0;
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -792,7 +761,7 @@ fn listen(
                     last_button_ms = now_ms();
                     toggle_location(sensor, i2c, location);
                     // A deliberate press earns an immediate repaint -- see below.
-                    user_acted = true;
+                    screen.user_acted = true;
                 } else if !held {
                     // Almost always a flashing tool asserting DTR, which the C3
                     // wires to this pin. Said out loud rather than swallowed,
@@ -861,7 +830,7 @@ fn listen(
                     totals: &mut totals,
                     history: &mut history,
                     strike_log: strike_log.as_deref_mut(),
-                    chart_period: &mut chart_period,
+                    chart_period: &mut screen.period,
                     reading,
                     range,
                     level: point.percent(),
@@ -877,8 +846,8 @@ fn listen(
                 last_clock_save_s = now_ms() / 1000;
             }
             if effects.redraw_now {
-                drawn = None;
-                user_acted = true;
+                screen.invalidate();
+                screen.user_acted = true;
             }
             if effects.read_battery {
                 match gauge {
@@ -1122,7 +1091,7 @@ fn listen(
                 window_disturbers = 0;
                 window_strikes = 0;
                 tune_window_ms = now_ms();
-                user_acted = true;
+                screen.user_acted = true;
             }
 
 
@@ -1496,10 +1465,10 @@ fn listen(
 
         // --- the screen ---------------------------------------------------
         //
-        // Change-gated, with a floor and a backstop. The panel takes ~3.9 s per
-        // refresh, so "redraw when anything might have changed" is not an option
-        // -- it would be busy most of the time and every image would be stale
-        // before it finished.
+        // The policy lives in `screen`; what stays here is the one side effect
+        // that is not the screen's business -- widening the learned battery
+        // range -- kept on this path because it must happen only when a redraw
+        // actually does, which is what makes new extrema rare enough to persist.
         if let Some(panel) = panel.as_deref_mut() {
             let want = Drawn {
                 strikes: totals.strikes,
@@ -1507,36 +1476,8 @@ fn listen(
                 location: *location,
                 defence: point.raw() as u32,
             };
-            let since_draw_s = now_ms().saturating_sub(last_draw_ms) / 1000;
-            let changed = drawn.as_ref() != Some(&want);
-            let stale = since_draw_s >= REDRAW_BASELINE_S;
 
-            // **A button press bypasses the rate limit.** The 30 s floor exists
-            // to stop the panel being pinned by things that change on their own;
-            // a person pressing the only button on the device is not one of
-            // those. Waiting out the floor made a press taken shortly after any
-            // other redraw appear to do nothing for half a minute, which reads
-            // as a broken button rather than as a considered refresh policy.
-            //
-            // The worst case is bounded anyway: `show` blocks for the whole
-            // refresh, so a second press during one is handled after it rather
-            // than queued on top of it.
-            let allowed = user_acted || since_draw_s >= REDRAW_MIN_GAP_S;
-
-            if (changed || stale) && allowed {
-                // Uses the cached reading from the poll above rather than
-                // taking a second one: it is at most GAUGE_POLL_S old, against a
-                // value that moves over hours.
-                //
-                // Shadowing it with a fresh read here was also what made the
-                // outer binding look unused to the compiler -- the warning was
-                // pointing at a real duplicate transaction, not at a style
-                // preference.
-
-                // Widen the learned range on the way past. Written to NVS only
-                // when an endpoint actually moves, which the midpoint rule makes
-                // rare: it takes a NEW extreme, and new extrema in a noisy
-                // series get rarer the longer it runs.
+            if let Some(why) = screen.due(&want, now_ms()) {
                 if let Some(reading) = reading {
                     if let Some(moved) = battery::widened(range, reading.millivolts) {
                         match settings::store_battery_range(moved.0, moved.1) {
@@ -1552,75 +1493,34 @@ fn listen(
                     }
                 }
 
-                // Flatten the ring just before drawing it, so the chart shows
-                // the state at draw time rather than whenever it last changed.
-                let (chart_len, chart_capacity) = fill_chart(
-                    &history,
-                    chart_period,
-                    &mut chart_counts,
-                    &mut chart_scores,
-                );
-
-                redraw(
+                screen.draw(
                     panel,
-                    &ui::Status {
+                    &screen::View {
                         location: *location,
-                        health: system::health(
-                            die_temperature,
-                            strike_log.as_deref().map(|l| (l.free_bytes(), l.used_bytes())),
-                        ),
+                        point,
+                        totals: &totals,
+                        history: &history,
                         battery: reading,
-                        battery_flow: match reading {
-                            Some(reading) => battery::flow(&reading, trend.as_ref()),
-                            None => battery::Flow::Unknown,
-                        },
-                        now: clock::now(),
-                        uptime_minutes: now_ms() / 60_000,
+                        trend: trend.as_ref(),
+                        range,
+                        drain,
+                        die_temperature,
+                        log_bytes: strike_log
+                            .as_deref()
+                            .map(|l| (l.free_bytes(), l.used_bytes())),
                         antenna_khz,
                         irq_confirmed,
-                        defence_level: point.percent(),
-                        defence_max: 100,
-                        noise_per_min: totals.noise_per_min,
-                        strikes_total: totals.strikes,
-                        last_strike: totals.last_strike,
-                        disturbers_per_min: totals.disturbers_per_min,
-                        last_hour: history.last_hour(),
-                        battery_range: range,
-                        battery_drain: drain,
-                        chart_period,
-                        chart_counts: &chart_counts[..chart_len],
-                        chart_scores: &chart_scores[..chart_len],
-                        chart_capacity,
-                        light_sleep: power::config().map(|(_, _, ls)| ls).unwrap_or(false),
                     },
-                    if changed { "content changed" } else { "baseline" },
+                    why,
+                    now_ms(),
                 );
-                drawn = Some(want);
-                last_draw_ms = now_ms();
-                user_acted = false;
+                screen.mark_drawn(want, now_ms());
             }
         }
 
 
         batch = Batch::default();
         batch_started = now_ms();
-    }
-}
-
-/// Render and push one status screen.
-fn redraw(panel: &mut display::Panel<'_>, status: &ui::Status<'_>, why: &str) {
-    let mut frame = display::Panel::frame();
-    ui::status(&mut frame, status);
-
-    let started = now_ms();
-    match panel.show(&frame) {
-        Ok(0) => println!("epd:  *** sent, but BUSY never fell -- nothing was drawn ***"),
-        Ok(busy_ms) => println!(
-            "epd:  redrawn ({why}) -- {} ms total, panel busy {} ms",
-            now_ms().saturating_sub(started),
-            busy_ms
-        ),
-        Err(e) => println!("epd:  draw FAILED -- {e}"),
     }
 }
 
@@ -1729,47 +1629,6 @@ fn button_held(button: &PinDriver<'_, esp_idf_hal::gpio::Input>) -> bool {
     button.is_low()
 }
 
-
-/// Flatten whichever ring the chart period selects, returning how many buckets
-/// were written.
-///
-/// One buffer sized for the longest ring rather than three: the rings differ in
-/// length but not in what a chart does with them, and a prefix is cheaper than
-/// three allocations that are each idle two thirds of the time.
-/// Returns `(live, capacity)`: how many buckets hold data, and how many the
-/// ring holds when full.
-///
-/// The chart needs both. `capacity` fixes the column width so bars do not
-/// change size as the ring fills, and `live` says how many to draw — which is
-/// what makes a chart fill from the left and only scroll once it is full.
-fn fill_chart(
-    history: &history::History,
-    period: ui::ChartPeriod,
-    counts: &mut [u16],
-    scores: &mut [u32],
-) -> (usize, usize) {
-    // One generic helper rather than three arms differing only in a const: the
-    // rings have different lengths but a chart does the same thing to all of
-    // them, and three near-identical blocks is three places to fix a bug.
-    fn flatten<const N: usize>(
-        ring: &history::Ring<N>,
-        counts: &mut [u16],
-        scores: &mut [u32],
-    ) -> (usize, usize) {
-        let mut c = [0u16; N];
-        let mut s = [0u32; N];
-        let live = history::series_of(ring, &mut c, &mut s);
-        counts[..N].copy_from_slice(&c);
-        scores[..N].copy_from_slice(&s);
-        (live, N)
-    }
-
-    match period {
-        ui::ChartPeriod::Day => flatten(&history.day, counts, scores),
-        ui::ChartPeriod::Week => flatten(&history.week, counts, scores),
-        ui::ChartPeriod::Month => flatten(&history.month, counts, scores),
-    }
-}
 
 /// The current bucket index for the history rings: minutes since the Unix
 /// epoch.
