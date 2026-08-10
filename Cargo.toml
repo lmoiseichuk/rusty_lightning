@@ -1,6 +1,6 @@
 [package]
 name = "lightning"
-version = "0.5.0"
+version = "0.5.2"
 authors = ["LM"]
 edition = "2021"
 resolver = "2"

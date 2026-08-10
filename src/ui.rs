@@ -349,7 +349,17 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     match s.last_strike {
         Some((distance, intensity_milli, when)) => {
             let _ = last.push_str(match distance {
-                Distance::Overhead => "overhead",
+                // **"forming < 5 km", not "overhead".** The register's nearest
+                // bin means "closer than the table can name", and the table
+                // bottoms out at 5 km -- so the number is the honest reading and
+                // needs no documentation. "forming" carries the rest of it: the
+                // AS3935 estimates distance to the *storm head*, so the nearest
+                // bucket says charge is building close by rather than that a
+                // bolt landed here.
+                //
+                // Measured, not guessed: 14 characters at FONT_9X15 is 126 px
+                // against a 190 px column, and 14 bytes against `Text16`'s 16.
+                Distance::Overhead => "forming < 5 km",
                 Distance::OutOfRange => "out of range",
                 Distance::Km(_) => "",
             });
@@ -780,7 +790,7 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     // strikes an hour, a mean score of 160, and `closest -`.
     let mut closest = Text16::new();
     if hour.overhead {
-        let _ = closest.push_str("overhead");
+        let _ = closest.push_str("forming < 5 km");
     } else if hour.distance_km_min == u8::MAX {
         let _ = closest.push('-');
     } else {
