@@ -80,6 +80,26 @@ pub fn set(epoch: u64) -> Result<(), EspError> {
 /// without a time should say so, because every record it writes until it is
 /// told will be unstamped.
 pub fn restore() -> Option<u64> {
+    // **A clock that is already running wins.**
+    //
+    // The ESP32's RTC keeps counting across a reset -- a reflash, a watchdog, a
+    // button reboot -- so the system clock is often still correct when this
+    // runs. Restoring on top of it does not recover lost time; it *destroys*
+    // good time, replacing a live clock with whatever NVS last saved, which is
+    // up to `SAVE_INTERVAL_S` -- fifteen minutes -- stale.
+    //
+    // Observed: the clock was set, the board reflashed twice within four
+    // minutes, and each boot rewound it to the moment of the set. Every strike
+    // stamped in between would have carried a timestamp minutes early, which is
+    // the one field a strike log cannot be wrong about.
+    //
+    // So restore is now what its name implies: a fallback for a clock that has
+    // nothing, not an overwrite of one that has something. A true power cut
+    // still lands here, because the RTC stops without power.
+    if let Some(running) = now() {
+        return Some(running);
+    }
+
     let nvs = Namespace::open(NAMESPACE).ok()?;
     let epoch = nvs.get_u64(KEY_EPOCH)?;
     if epoch < PLAUSIBLE_EPOCH {
