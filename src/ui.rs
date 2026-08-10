@@ -349,17 +349,22 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
     match s.last_strike {
         Some((distance, intensity_milli, when)) => {
             let _ = last.push_str(match distance {
-                // **"forming < 5 km", not "overhead".** The register's nearest
-                // bin means "closer than the table can name", and the table
-                // bottoms out at 5 km -- so the number is the honest reading and
-                // needs no documentation. "forming" carries the rest of it: the
-                // AS3935 estimates distance to the *storm head*, so the nearest
-                // bucket says charge is building close by rather than that a
-                // bolt landed here.
+                // **"nearby < 5 km".** Two earlier labels were wrong for the
+                // same reason -- they claimed more than the sensor knows.
                 //
-                // Measured, not guessed: 14 characters at FONT_9X15 is 126 px
-                // against a 190 px column, and 14 bytes against `Text16`'s 16.
-                Distance::Overhead => "forming < 5 km",
+                // "overhead" is the datasheet's word and it is a misnomer: the
+                // AS3935 has a single antenna and **no bearing information at
+                // all**, so the nearest bin means "within 5 km in any
+                // direction", not "above you". "forming" was no better -- it
+                // asserts a storm is developing, which the chip cannot know
+                // either; a mature cell that simply moved close reads the same.
+                //
+                // Proximity is the only claim the measurement supports, and the
+                // table bottoms out at 5 km, so that is what the screen says.
+                //
+                // Measured, not guessed: 13 characters at FONT_9X15 is 117 px
+                // against a 190 px column, and 13 bytes against `Text16`'s 16.
+                Distance::Overhead => "nearby < 5 km",
                 Distance::OutOfRange => "out of range",
                 Distance::Km(_) => "",
             });
@@ -790,7 +795,7 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     // strikes an hour, a mean score of 160, and `closest -`.
     let mut closest = Text16::new();
     if hour.overhead {
-        let _ = closest.push_str("forming < 5 km");
+        let _ = closest.push_str("nearby < 5 km");
     } else if hour.distance_km_min == u8::MAX {
         let _ = closest.push('-');
     } else {
