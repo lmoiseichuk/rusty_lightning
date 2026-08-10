@@ -63,6 +63,18 @@ pub struct Bucket {
     pub distance_samples: u16,
     /// Closest strike in this bucket, km. `u8::MAX` when none reported one.
     pub distance_km_min: u8,
+    /// Whether any strike in this window was reported **overhead**.
+    ///
+    /// **A flag rather than a zero in `distance_km_min`.** Overhead is the
+    /// closest a strike can be, but it is not "0 km" — folding it in that way is
+    /// what once made a storm read as permanently overhead, and the correction
+    /// then dropped overhead from the distance statistics altogether. So the
+    /// screen showed `closest -` for the one classification that means *directly
+    /// above*, which is the reading this device exists to give.
+    ///
+    /// Kept separate so `distance_km_min` stays a true minimum over measured
+    /// kilometres, and the display can say "overhead" instead of a number.
+    pub overhead: bool,
 }
 
 /// **Hand-written, because `derive(Default)` is wrong for this type.**
@@ -84,6 +96,7 @@ impl Default for Bucket {
             distance_km_sum: 0,
             distance_samples: 0,
             distance_km_min: u8::MAX,
+            overhead: false,
         }
     }
 }
@@ -155,6 +168,7 @@ impl<const N: usize> Ring<N> {
                 distance_km_sum: 0,
                 distance_samples: 0,
                 distance_km_min: u8::MAX,
+                overhead: false,
             }; N],
             newest_index: 0,
             first_index: 0,
@@ -200,6 +214,9 @@ impl<const N: usize> Ring<N> {
         bucket.strikes = bucket.strikes.saturating_add(1);
         if let Some(score) = score_milli(strike) {
             bucket.score_milli_sum = bucket.score_milli_sum.saturating_add(score);
+        }
+        if let Distance::Overhead = strike.distance {
+            bucket.overhead = true;
         }
         if let Distance::Km(km) = strike.distance {
             bucket.distance_km_sum = bucket.distance_km_sum.saturating_add(km as u32);
@@ -260,6 +277,7 @@ impl<const N: usize> Ring<N> {
             total.distance_samples =
                 total.distance_samples.saturating_add(bucket.distance_samples);
             total.distance_km_min = total.distance_km_min.min(bucket.distance_km_min);
+            total.overhead |= bucket.overhead;
         }
         total
     }

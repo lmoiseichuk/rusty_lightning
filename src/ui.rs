@@ -774,8 +774,14 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     }
     stat(frame, Point::new(16 + COLUMN * 2, TOP), "mean distance", &distance);
 
+    // **Overhead wins.** It is the closest a strike can be, and it used to read
+    // `-` because it is not a kilometre figure -- so the device said "no idea"
+    // about the one classification that means directly above. Observed: 9
+    // strikes an hour, a mean score of 160, and `closest -`.
     let mut closest = Text16::new();
-    if hour.distance_km_min == u8::MAX {
+    if hour.overhead {
+        let _ = closest.push_str("overhead");
+    } else if hour.distance_km_min == u8::MAX {
         let _ = closest.push('-');
     } else {
         let _ = write!(closest, "{}", hour.distance_km_min as u32);
