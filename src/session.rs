@@ -668,6 +668,14 @@ pub fn commit_merged(
     }
     totals.last_strike = Some((strike.distance, strike.intensity_milli(), merged.epoch));
     history.record(merged.minute, strike);
+    // The table's row. Kept whole, where `record` above folds it into buckets.
+    history.recent.push(history::Recent {
+        epoch: merged.epoch,
+        distance: strike.distance,
+        energy_raw: strike.energy_raw,
+        score_milli: history::score_milli(strike).unwrap_or(0),
+        strokes: merged.strokes,
+    });
 
     // An unset clock still logs the strike, with 0 for the time. It happened;
     // what is unknown is when.

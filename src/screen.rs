@@ -135,7 +135,7 @@ impl Screen {
     ) {
         // Flatten the ring just before drawing it, so the chart shows the state
         // at draw time rather than whenever it last changed.
-        let (len, capacity) = self.fill(view.history);
+        let (len, _capacity) = self.fill(view.history);
 
         let status = ui::Status {
             location: view.location,
@@ -153,15 +153,13 @@ impl Screen {
             defence_max: 100,
             noise_per_min: view.totals.noise_per_min,
             strikes_total: view.totals.strikes,
-            last_strike: view.totals.last_strike,
             disturbers_per_min: view.totals.disturbers_per_min,
             last_hour: view.history.last_hour(),
             battery_range: view.range,
             battery_drain: view.drain,
             chart_period: self.period,
-            chart_counts: &self.counts[..len],
+            recent: &view.history.recent,
             chart_scores: &self.scores[..len],
-            chart_capacity: capacity,
             light_sleep: power::config().map(|(_, _, ls)| ls).unwrap_or(false),
         };
 

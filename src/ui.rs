@@ -14,7 +14,7 @@
 
 use core::fmt::Write as _;
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_8X13, FONT_9X15};
+use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_8X13, FONT_9X15};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
@@ -112,8 +112,6 @@ pub fn logo(frame: &mut Display7in5) {
     .draw(frame);
 }
 
-/// The number meant to be read from across the room.
-const HEADLINE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub42_tr>();
 /// Section headings and gauge labels.
 const LABEL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub14_tr>();
 /// Row-2 labels — regular weight, because a label is not the information.
@@ -167,9 +165,6 @@ pub struct Status<'a> {
     /// `defence_level` beside it is a setting. See `session::Totals`.
     pub noise_per_min: u32,
     pub strikes_total: u32,
-    /// The most recent strike: distance, intensity, and when — if there has
-    /// been one, and if the clock was set at the time.
-    pub last_strike: Option<(Distance, u32, Option<u64>)>,
     /// Disturbers in the last measurement window — the same minute the event
     /// rate and the ladder decision use, so all three can be read together.
     pub disturbers_per_min: u32,
@@ -201,7 +196,8 @@ pub struct Status<'a> {
     /// Which period the charts show.
     pub chart_period: ChartPeriod,
     /// Strikes per bucket, oldest first — the count chart.
-    pub chart_counts: &'a [u16],
+    /// The strike log the table draws, newest first.
+    pub recent: &'a crate::history::RecentLog,
     /// Mean score per bucket in thousandths, oldest first, `0` for an empty
     /// bucket. The severity chart.
     pub chart_scores: &'a [u32],
@@ -210,7 +206,6 @@ pub struct Status<'a> {
     /// Separate from the slice length so the column width stays fixed as the
     /// ring fills: bars that grow narrower over the first day would make two
     /// readings of the same chart incomparable.
-    pub chart_capacity: usize,
     /// Whether `esp_pm` is actually light-sleeping, read back rather than
     /// assumed (§7).
     pub light_sleep: bool,
@@ -314,89 +309,22 @@ pub fn status(frame: &mut Display7in5, s: &Status<'_>) {
         .into_styled(black)
         .draw(frame);
 
-    // --- the headline: total strikes --------------------------------------
+    // --- the last hour, across the top ------------------------------------
     //
-    // The one number the device exists to report. Everything else on this
-    // screen is context for it.
-    let mut count = Text16::new();
-    let _ = write!(count, "{}", s.strikes_total);
-    let _ = HEADLINE.render(
-        count.as_str(),
-        Point::new(16, 158),
-        VerticalPosition::Baseline,
-        FontColor::Transparent(INK),
-        frame,
-    );
-    let _ = LABEL.render(
-        if s.strikes_total == 1 { "strike" } else { "strikes" },
-        Point::new(16, 190),
-        VerticalPosition::Baseline,
-        FontColor::Transparent(INK),
-        frame,
-    );
-
-    // --- the last hour ----------------------------------------------------
+    // §4.3's figures, with the running total in front of them. The headline --
+    // the total set in 42 px type -- is gone: it said one number loudly and
+    // left two thirds of the panel to say everything else, and a device being
+    // watched during a storm wants the individual strikes far more than it
+    // wants its own lifetime count in poster type.
     //
-    // §4.3's three figures. Count says how *busy*, mean score says how *severe*,
-    // and distance says how *close* -- and none of the three substitutes for
-    // another. One violent overhead strike and a hundred distant ones produce
-    // the same count and wildly different scores; the reverse is true of the
-    // mean.
+    // `closest` is gone from this row too. It is the minimum over the hour, not
+    // the current distance, and reading it as the latter cost an afternoon --
+    // the table below now says where each strike actually was.
     stats(frame, s);
 
-    // --- last strike ------------------------------------------------------
-    let mut last = Text64::new();
-    match s.last_strike {
-        Some((distance, intensity_milli, when)) => {
-            let _ = last.push_str(match distance {
-                // **"nearby < 5 km".** Two earlier labels were wrong for the
-                // same reason -- they claimed more than the sensor knows.
-                //
-                // "overhead" is the datasheet's word and it is a misnomer: the
-                // AS3935 has a single antenna and **no bearing information at
-                // all**, so the nearest bin means "within 5 km in any
-                // direction", not "above you". "forming" was no better -- it
-                // asserts a storm is developing, which the chip cannot know
-                // either; a mature cell that simply moved close reads the same.
-                //
-                // Proximity is the only claim the measurement supports, and the
-                // table bottoms out at 5 km, so that is what the screen says.
-                //
-                // Measured, not guessed: 13 characters at FONT_9X15 is 117 px
-                // against a 190 px column, and 13 bytes against `Text16`'s 16.
-                Distance::Overhead => "nearby < 5 km",
-                Distance::OutOfRange => "out of range",
-                Distance::Km(_) => "",
-            });
-            if let Distance::Km(km) = distance {
-                let _ = write!(last, "{}", km as u32);
-                let _ = last.push_str(" km");
-            }
-            let _ = last.push_str("  ·  intensity ");
-            let _ = write!(last, "{}", intensity_milli / 1000);
-            // When, to the minute. The point of the strike readout is "what is
-            // happening", and a distance with no time cannot say whether it is
-            // happening now or happened yesterday.
-            if let Some(epoch) = when {
-                let stamp = crate::clock::format_local(epoch);
-                let _ = last.push_str("  ·  ");
-                let _ = last.push_str(stamp.get(11..16).unwrap_or(""));
-            }
-        }
-        None => {
-            let _ = last.push_str("no strikes yet");
-        }
-    }
-    let _ = Text::with_baseline(
-        &last,
-        Point::new(320, 138),
-        MonoTextStyle::new(&FONT_10X20, INK),
-        Baseline::Top,
-    )
-    .draw(frame);
-
-    // --- the charts -------------------------------------------------------
+    // --- the chart, left half; the strike log, right ----------------------
     charts(frame, s);
+    strike_table(frame, s);
 
     // --- the bring-up facts, small, at the foot ---------------------------
     //
@@ -754,14 +682,24 @@ fn status_line(frame: &mut Display7in5, s: &Status<'_>) {
 
 /// The last hour's three figures, in a row under the headline.
 fn stats(frame: &mut Display7in5, s: &Status<'_>) {
-    const TOP: i32 = 232;
-    const COLUMN: i32 = 190;
+    // Directly under the mode separator at y=84. The value sets at 102..116 and
+    // its label at 124..139, so the row closes at 139 and leaves everything
+    // below 158 to the chart and the table.
+    const TOP: i32 = 116;
+    /// Four columns across the 768 px between the margins.
+    const COLUMN: i32 = 192;
 
     let hour = &s.last_hour;
 
+    // The running total, demoted from 42 px type to a column like any other.
+    // It is the least perishable number on the screen.
+    let mut total = Text16::new();
+    let _ = write!(total, "{}", s.strikes_total);
+    stat(frame, Point::new(16, TOP), "strikes total", &total);
+
     let mut count = Text16::new();
     let _ = write!(count, "{}", hour.strikes as u32);
-    stat(frame, Point::new(16, TOP), "strikes / hour", &count);
+    stat(frame, Point::new(16 + COLUMN, TOP), "strikes / hour", &count);
 
     let mut score = Text16::new();
     match hour.mean_score_milli() {
@@ -775,7 +713,7 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = score.push('-');
         }
     }
-    stat(frame, Point::new(16 + COLUMN, TOP), "mean score", &score);
+    stat(frame, Point::new(16 + COLUMN * 2, TOP), "mean score", &score);
 
     let mut distance = Text16::new();
     match hour.mean_distance_km() {
@@ -784,12 +722,8 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = distance.push_str(" km");
         }
         // No measured kilometres, but strikes that were all overhead. That is
-        // not "no idea how far" -- every one of them was inside the nearest
-        // bin, which is a distance statement even though it is not a number.
-        // The mean is deliberately taken over measured kilometres only
-        // (`history::Bucket`), so an hour of nothing but overhead has no
-        // samples and would otherwise render identically to an empty one.
-        // Observed: 917 strikes in an evening, every field on this row a dash.
+        // not "no idea how far" -- every one was inside the nearest bin, which
+        // is a distance statement even though it is not a number.
         None if hour.overhead => {
             let _ = distance.push_str("< 5 km");
         }
@@ -797,22 +731,104 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = distance.push('-');
         }
     }
-    stat(frame, Point::new(16 + COLUMN * 2, TOP), "mean distance", &distance);
+    stat(frame, Point::new(16 + COLUMN * 3, TOP), "mean distance", &distance);
+}
 
-    // **Overhead wins.** It is the closest a strike can be, and it used to read
-    // `-` because it is not a kilometre figure -- so the device said "no idea"
-    // about the one classification that means directly above. Observed: 9
-    // strikes an hour, a mean score of 160, and `closest -`.
-    let mut closest = Text16::new();
-    if hour.overhead {
-        let _ = closest.push_str("nearby < 5 km");
-    } else if hour.distance_km_min == u8::MAX {
-        let _ = closest.push('-');
-    } else {
-        let _ = write!(closest, "{}", hour.distance_km_min as u32);
-        let _ = closest.push_str(" km");
+/// Left edge of the right-hand half, and the width of each half.
+///
+/// The panel splits at x=400 with a 16 px gutter, so the chart owns 16..392 and
+/// the table 408..784 — 376 px each, both inside the 16 px margins.
+const HALF: i32 = 376;
+const RIGHT_HALF: i32 = 408;
+
+/// The strike log: one line per strike, newest at the top.
+///
+/// **This is what the redesign was for.** Every other figure on the panel is an
+/// aggregate — a count, a mean, a bar — and an aggregate cannot answer "what
+/// just happened". The rings bucket a strike out of existence within five
+/// minutes; this keeps the last seventeen whole.
+fn strike_table(frame: &mut Display7in5, s: &Status<'_>) {
+    const TOP: i32 = 158;
+    /// 16 px, so seventeen rows run 176..447 and clear the footer rule at 452.
+    const PITCH: i32 = 16;
+    /// FONT_9X15 is monospace at 9 px, so every column is arithmetic.
+    const CH: i32 = 9;
+    const TIME_X: i32 = RIGHT_HALF;
+    const ENERGY_X: i32 = TIME_X + 8 * CH + 12;
+    const DIST_X: i32 = ENERGY_X + 7 * CH + 12;
+    const SCORE_X: i32 = DIST_X + 6 * CH + 12;
+    const N_X: i32 = SCORE_X + 6 * CH + 12;
+
+    let heading = MonoTextStyle::new(&FONT_9X15, INK);
+    for (x, label) in [
+        (TIME_X, "time"),
+        (ENERGY_X, "energy"),
+        (DIST_X, "dist"),
+        (SCORE_X, "score"),
+        (N_X, "n"),
+    ] {
+        let _ = Text::with_baseline(label, Point::new(x, TOP), heading, Baseline::Top).draw(frame);
     }
-    stat(frame, Point::new(16 + COLUMN * 3, TOP), "closest", &closest);
+    let _ = Line::new(
+        Point::new(RIGHT_HALF, TOP + 16),
+        Point::new(WIDTH as i32 - 16, TOP + 16),
+    )
+    .into_styled(PrimitiveStyle::with_stroke(INK, 1))
+    .draw(frame);
+
+    for (row, entry) in s.recent.iter().take(17).enumerate() {
+        let y = TOP + 18 + row as i32 * PITCH;
+
+        let mut time = Text16::new();
+        match entry.epoch {
+            // Seconds included: two strikes inside one minute are ordinary, and
+            // a log that cannot separate them is not a log.
+            Some(epoch) => {
+                let stamp = crate::clock::format_local(epoch);
+                let _ = time.push_str(stamp.get(11..19).unwrap_or("--:--:--"));
+            }
+            None => {
+                let _ = time.push_str("--:--:--");
+            }
+        }
+
+        let mut energy = Text16::new();
+        let _ = write!(energy, "{}", entry.energy_raw);
+
+        let mut distance = Text16::new();
+        match entry.distance {
+            Distance::Km(km) => {
+                let _ = write!(distance, "{} km", km as u32);
+            }
+            Distance::Overhead => {
+                let _ = distance.push_str("< 5 km");
+            }
+            Distance::OutOfRange => {
+                let _ = distance.push_str("far");
+            }
+        }
+
+        let mut score = Text16::new();
+        let _ = write!(
+            score,
+            "{}.{:02}",
+            entry.score_milli / 1000,
+            (entry.score_milli % 1000) / 10
+        );
+
+        let mut strokes = Text16::new();
+        let _ = write!(strokes, "{}", entry.strokes);
+
+        for (x, text) in [
+            (TIME_X, &time),
+            (ENERGY_X, &energy),
+            (DIST_X, &distance),
+            (SCORE_X, &score),
+            (N_X, &strokes),
+        ] {
+            let _ = Text::with_baseline(text, Point::new(x, y), heading, Baseline::Top).draw(frame);
+        }
+    }
 }
 
 /// One labelled figure: value large, label small beneath it.
@@ -990,29 +1006,24 @@ fn time_axis(
     left: i32,
     top: i32,
     height: u32,
-    gap: i32,
     period: ChartPeriod,
     live: usize,
-    column: i32,
+    bar: i32,
 ) {
     if live == 0 {
         return;
     }
     // The right-hand edge of the newest bucket: the instant the chart is
     // current to.
-    let now_x = left + live as i32 * column;
+    let now_x = left + live as i32 * bar;
+    // Derived from the period rather than assumed, so `scope week` does not
+    // label hour rules on sixty-minute buckets.
     let per_tick = (period.tick_minutes() / period.bucket_minutes()).max(1) as i32;
+    let label_y = top + height as i32 + 4;
 
-    let lower_top = top + height as i32 + gap;
-    let lower_bottom = lower_top + height as i32;
-    // 3 px below the lower chart rather than 15, which put the labels at y=451 --
-    // inside the footer text at 448. They now occupy 439-449 and the footer rule
-    // has moved to 452.
-    let label_y = lower_bottom + 3;
-
-    let mut buckets_back = 0i32;
+    let mut ticks_back = 0i32;
     loop {
-        let x = now_x - buckets_back * column;
+        let x = now_x - ticks_back * per_tick * bar;
         if x < left {
             break;
         }
@@ -1020,29 +1031,24 @@ fn time_axis(
         // Dotted rather than solid, and drawn before the bars so a column of
         // strikes reads as data with a rule behind it rather than as a bar with
         // a line through it.
-        for segment in [(top, top + height as i32), (lower_top, lower_bottom)] {
-            let mut y = segment.0;
-            while y < segment.1 {
-                let _ = Pixel(Point::new(x, y), INK).draw(frame);
-                y += 3;
-            }
+        let mut y = top;
+        while y < top + height as i32 {
+            let _ = Pixel(Point::new(x, y), INK).draw(frame);
+            y += 3;
         }
 
-        let minutes_back = buckets_back as u32 * period.bucket_minutes();
-        let label = period.tick_label(minutes_back);
-        // Centred on the line, then nudged inside the panel at the extremes so
-        // the first and last labels are not half-drawn.
-        let width = label.len() as i32 * 6;
-        let anchor = (x - width / 2).max(0).min(WIDTH as i32 - width);
-        let _ = Text::with_baseline(
-            label.as_str(),
-            Point::new(anchor, label_y),
-            MonoTextStyle::new(&FONT_6X10, INK),
-            Baseline::Top,
-        )
-        .draw(frame);
-
-        buckets_back += per_tick;
+        // The newest edge needs no label -- it is "now" and the chart says so.
+        if ticks_back > 0 {
+            let mark = period.tick_label(ticks_back as u32 * period.tick_minutes());
+            let _ = Text::with_alignment(
+                &mark,
+                Point::new(x, label_y),
+                MonoTextStyle::new(&FONT_6X10, INK),
+                Alignment::Center,
+            )
+            .draw(frame);
+        }
+        ticks_back += 1;
     }
 }
 
@@ -1054,57 +1060,38 @@ fn time_axis(
 /// scores, and the reverse is true of the mean — so §4.3 keeps both and this
 /// draws both, one above the other on a shared time axis.
 fn charts(frame: &mut Display7in5, s: &Status<'_>) {
-    const TOP: i32 = 290;
-    const HEIGHT: u32 = 60;
-    const GAP: i32 = 26;
+    const TOP: i32 = 176;
+    const HEIGHT: u32 = 216;
+    /// 5 px a bar. At the fine ring's 5-minute buckets that is 75 bars in the
+    /// 376 px half — **6h15m**, where an hour was the requirement. Wider bars
+    /// read better across a room than a longer span nobody can resolve.
+    const BAR: i32 = 5;
     let left = 16;
-    let width = WIDTH as i32 - 32;
+
+    // The newest buckets that fit, not the whole ring. A 24 h ring at 5 px a
+    // bar would be 1440 px wide; windowing is what lets the bar stay legible.
+    let fits = (HALF / BAR) as usize;
+    let series = s.chart_scores;
+    let window = &series[series.len().saturating_sub(fits)..];
 
     let mut title = Text32::new();
-    let _ = title.push_str("Last ");
-    let _ = title.push_str(s.chart_period.label());
+    let _ = title.push_str("score  (sum per 5 min)");
     let _ = FIELD_LABEL.render(
         title.as_str(),
-        Point::new(left, TOP - 6),
+        Point::new(left, TOP - 8),
         VerticalPosition::Baseline,
         FontColor::Transparent(INK),
         frame,
     );
 
-    // Before the bars, so the rules sit behind the data rather than through it.
-    // The column width is recomputed from the same expression `chart` uses --
-    // one number, and an axis drawn on a different grid from the bars would be
-    // worse than no axis.
-    if s.chart_capacity > 0 {
-        time_axis(
-            frame,
-            left,
-            TOP,
-            HEIGHT,
-            GAP,
-            s.chart_period,
-            s.chart_counts.len(),
-            (width / s.chart_capacity as i32).max(1),
-        );
-    }
-
+    time_axis(frame, left, TOP, HEIGHT, s.chart_period, window.len(), BAR);
     chart(
         frame,
         Point::new(left, TOP),
-        width,
+        HALF,
         HEIGHT,
-        "strikes",
-        s.chart_counts.iter().map(|v| *v as u32),
-        s.chart_capacity,
-    );
-    chart(
-        frame,
-        Point::new(left, TOP + HEIGHT as i32 + GAP),
-        width,
-        HEIGHT,
-        "",
-        s.chart_scores.iter().copied(),
-        s.chart_capacity,
+        window.iter().copied(),
+        BAR,
     );
 }
 
@@ -1120,9 +1107,8 @@ fn chart<I>(
     at: Point,
     width: i32,
     height: u32,
-    label: &str,
     values: I,
-    capacity: usize,
+    bar: i32,
 ) where
     I: Iterator<Item = u32> + Clone,
 {
@@ -1136,54 +1122,35 @@ fn chart<I>(
     .draw(frame);
 
     let peak = values.clone().max().unwrap_or(0);
-
-    // **An empty label draws no caption.** The lower chart's used to read
-    // `mean score  none`, which duplicated a figure already shown mid-screen and
-    // put it at y=439 -- straight through the footer rule at 440.
-    if !label.is_empty() {
-    let mut caption = Text32::new();
-    let _ = caption.push_str(label);
-    if peak > 0 {
-        let _ = caption.push_str("  peak ");
-        let _ = write!(caption, "{}", peak);
-    } else {
-        let _ = caption.push_str("  none");
+    if peak == 0 {
+        return;
     }
+
+    // The peak, inside the plot's top-left rather than captioned beneath it.
+    // The rows under the chart are the axis labels now, and an auto-scaled chart
+    // without its scale cannot be compared with itself an hour later.
+    let mut scale = Text16::new();
+    let _ = write!(scale, "{}", peak / 1000);
     let _ = Text::with_baseline(
-        &caption,
-        Point::new(at.x, at.y + height as i32 + 3),
+        &scale,
+        Point::new(at.x + 2, at.y + 2),
         MonoTextStyle::new(&FONT_6X10, INK),
         Baseline::Top,
     )
     .draw(frame);
-    }
 
-    if peak == 0 || capacity == 0 {
-        return;
-    }
-
-    // Column width comes from the ring's **capacity**, not from how much of it
-    // is filled -- so bars keep their size as the chart fills and two readings
-    // taken hours apart are the same shape.
-    //
-    // Drawing starts at the left edge and the iterator is the live tail
-    // oldest-first, so a new device fills left to right and only begins
-    // scrolling once the ring is genuinely full. Anchoring to the right instead
-    // would show one bar at the far edge behind a day of blank columns, which
-    // reads as "a day of silence, then this" -- a different and wrong story.
-    let column = (width / capacity as i32).max(1);
     for (index, value) in values.enumerate() {
         if value == 0 {
             continue;
         }
-        // At least one pixel for any non-zero bucket: a quiet hour that saw a
-        // single distant strike must not render identically to one that saw
-        // nothing, which is the difference between "calm" and "no data".
-        let bar = ((value as u64 * height as u64 / peak as u64) as u32).max(1);
-        let x = at.x + index as i32 * column;
+        // At least one pixel for any non-zero bucket: five quiet minutes that
+        // saw a single distant strike must not render identically to five that
+        // saw nothing, which is the difference between calm and no data.
+        let column = ((value as u64 * height as u64 / peak as u64) as u32).max(1);
+        let x = at.x + index as i32 * bar;
         let _ = Rectangle::new(
-            Point::new(x, at.y + height as i32 - bar as i32),
-            Size::new(column.max(1) as u32, bar),
+            Point::new(x, at.y + height as i32 - column as i32),
+            Size::new(bar.max(1) as u32, column),
         )
         .into_styled(PrimitiveStyle::with_fill(INK))
         .draw(frame);

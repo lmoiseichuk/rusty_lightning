@@ -284,8 +284,8 @@ impl<const N: usize> Ring<N> {
 }
 
 /// Bucket widths and lengths for the three rings.
-pub const FINE_MINUTES: u32 = 15;
-pub const FINE_LEN: usize = 96; // 24 h
+pub const FINE_MINUTES: u32 = 5;
+pub const FINE_LEN: usize = 288; // 24 h
 pub const MEDIUM_MINUTES: u32 = 60;
 pub const MEDIUM_LEN: usize = 168; // 7 days
 pub const COARSE_MINUTES: u32 = 6 * 60;
@@ -296,6 +296,9 @@ pub struct History {
     pub day: Ring<FINE_LEN>,
     pub week: Ring<MEDIUM_LEN>,
     pub month: Ring<COARSE_LEN>,
+    /// The last few strikes, whole rather than bucketed — what the screen's
+    /// table draws.
+    pub recent: RecentLog,
 }
 
 impl History {
@@ -304,6 +307,7 @@ impl History {
             day: Ring::new(FINE_MINUTES),
             week: Ring::new(MEDIUM_MINUTES),
             month: Ring::new(COARSE_MINUTES),
+            recent: RecentLog::new(),
         }
     }
 
@@ -353,10 +357,72 @@ pub fn series_of<const N: usize>(
     for offset in 0..live {
         let bucket = buckets[start + offset];
         counts[offset] = bucket.strikes;
-        // Zero for an empty bucket. The chart treats zero as "no bar", which is
-        // right: a bucket with no strikes has no mean score, and drawing it at
-        // the baseline says exactly that.
-        scores[offset] = bucket.mean_score_milli().unwrap_or(0);
+        // **The sum, not the mean.** A mean flattens exactly the thing the
+        // chart is for: ten violent strikes in a bucket and one give the same
+        // mean and wildly different weather. The sum is `energy/distance`
+        // accumulated over the bucket, so a bar's height is how much the sky
+        // threw during it. Zero stays zero -- an empty bucket has no bar, which
+        // is the difference between calm and no data.
+        scores[offset] = bucket.score_milli_sum;
     }
     live
+}
+
+/// How many recent strikes the screen's log keeps.
+///
+/// Seventeen because that is what fits: the table runs from y=176 to the footer
+/// rule at 452 at a 16 px pitch, and the last row ends at 447.
+pub const RECENT_LEN: usize = 17;
+
+/// One line of the screen's strike log.
+///
+/// **Separate from [`Bucket`], which cannot answer this.** The rings aggregate
+/// into 5-minute, 1-hour and 6-hour buckets, so an individual strike stops
+/// existing the moment it is recorded. This keeps the last few whole, which is
+/// what a person watching a storm actually reads.
+#[derive(Clone, Copy)]
+pub struct Recent {
+    pub epoch: Option<u64>,
+    pub distance: Distance,
+    pub energy_raw: u32,
+    pub score_milli: u32,
+    /// Strokes folded into this record by §4.3's merge window.
+    pub strokes: u32,
+}
+
+/// The last [`RECENT_LEN`] strikes, newest first.
+///
+/// **Not rebuilt from the CSV at boot**, deliberately: reboots are rare, the
+/// charts already carry the history, and teaching the log reader to return the
+/// stroke column would be work in service of the first thirty seconds after a
+/// restart.
+pub struct RecentLog {
+    entries: [Option<Recent>; RECENT_LEN],
+}
+
+impl RecentLog {
+    pub const fn new() -> Self {
+        Self {
+            entries: [None; RECENT_LEN],
+        }
+    }
+}
+
+impl Default for RecentLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RecentLog {
+    /// Newest to the front, oldest off the end.
+    pub fn push(&mut self, entry: Recent) {
+        self.entries.rotate_right(1);
+        self.entries[0] = Some(entry);
+    }
+
+    /// Newest first, skipping the slots never filled.
+    pub fn iter(&self) -> impl Iterator<Item = &Recent> {
+        self.entries.iter().flatten()
+    }
 }
