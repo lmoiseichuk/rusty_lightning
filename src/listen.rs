@@ -362,6 +362,10 @@ pub fn listen(
             now_ms(),
         );
 
+        // Checked here rather than at commit time: the decision needs the bus,
+        // and `commit_merged` deliberately has none.
+        session::reset_if_stuck_overhead(sensor, i2c, &mut totals);
+
         tuning.observe(&batch);
 
         if tuning.due(now_ms()) {

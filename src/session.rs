@@ -55,6 +55,18 @@ pub struct Totals {
     /// the merge would need a new parameter through four signatures, or would
     /// apply to only one of the two paths that must stay identical.
     pub merger: Merger,
+    /// Consecutive strikes reported at the nearest bin.
+    ///
+    /// A long run means one of two things and they are indistinguishable from
+    /// the reading alone: the storm is overhead, or the estimator is stuck.
+    /// See [`reset_if_stuck_overhead`].
+    pub overhead_run: u32,
+    /// Whether this run of nearest-bin readings has already been acted on.
+    ///
+    /// `false` by default, so a device that has only ever reported the nearest
+    /// bin still gets one attempt — which is precisely the case that produced
+    /// 917 consecutive `Overhead` readings and no way to tell why.
+    pub overhead_reset_done: bool,
     /// **Interference** per minute — noise *and* disturbers — from the last
     /// probe. The number the screen shows.
     ///
@@ -291,6 +303,15 @@ pub struct StormWatch {
 
 /// Quiet windows before the statistics are discarded. One window is a minute.
 pub const STORM_END_QUIET_WINDOWS: u32 = 30;
+
+/// Consecutive nearest-bin readings before the estimate is suspected of being
+/// stuck rather than correct.
+///
+/// **Three, and a false trigger is free.** If the storm really is overhead the
+/// estimator rebuilds from the next strikes and reports overhead again, which
+/// costs nothing; if it was stuck, this is the only thing that unsticks it. The
+/// asymmetry is what makes a small number safe.
+pub const OVERHEAD_RUN_BEFORE_RESET: u32 = 3;
 
 impl Default for StormWatch {
     fn default() -> Self {
@@ -634,6 +655,17 @@ pub fn commit_merged(
 ) {
     let strike = &merged.strike;
     totals.strikes += 1;
+
+    // **A kilometre reading re-arms; the nearest bin counts toward a reset.**
+    // `OutOfRange` re-arms too: it is a real answer about distance, so an
+    // estimator producing it is demonstrably not stuck.
+    match strike.distance {
+        Distance::Overhead => totals.overhead_run += 1,
+        Distance::Km(_) | Distance::OutOfRange => {
+            totals.overhead_run = 0;
+            totals.overhead_reset_done = false;
+        }
+    }
     totals.last_strike = Some((strike.distance, strike.intensity_milli(), merged.epoch));
     history.record(merged.minute, strike);
 
@@ -794,6 +826,32 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
 /// would mean the estimator never accumulated enough to say anything — which
 /// is the failure this whole mechanism exists to prevent, arrived at from the
 /// other direction.
+/// Reset the distance statistics when the nearest bin keeps repeating.
+///
+/// The AS3935's nearest bin means "closer than 5 km", and a run of them is
+/// ambiguous in a way no single reading can resolve: either the storm is
+/// overhead, or the estimator has stopped tracking. Observed as 917 in a row
+/// across a storm that approached, sat overhead and departed — a field that had
+/// become a constant, which is the one thing a measurement must never be.
+///
+/// **Fires once per run, then waits for a kilometre reading to re-arm it.** A
+/// plain counter would clear every third strike of a genuinely overhead cell,
+/// so the estimator would never accumulate anything; worse, a freshly cleared
+/// estimator has no data, and if its first readings fall back to the nearest
+/// bin then clearing causes the condition that triggers clearing. One attempt,
+/// then quiet, is the shape that cannot run away.
+pub fn reset_if_stuck_overhead(sensor: &As3935, i2c: &mut I2cDriver<'_>, totals: &mut Totals) {
+    if totals.overhead_run < OVERHEAD_RUN_BEFORE_RESET || totals.overhead_reset_done {
+        return;
+    }
+    totals.overhead_reset_done = true;
+    restart_statistics(
+        sensor,
+        i2c,
+        "nearest bin repeated -- the estimate may be stuck rather than close",
+    );
+}
+
 pub fn restart_statistics(sensor: &As3935, i2c: &mut I2cDriver<'_>, why: &str) {
     match sensor.clear_statistics(i2c) {
         Ok(()) => println!("as:   distance statistics cleared -- {why}"),
