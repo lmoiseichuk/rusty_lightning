@@ -118,6 +118,10 @@ sleep would quietly cost the battery, and you would not find out for weeks.
 Type `help` on the device for the current list. Everything below also counts as
 console activity, which is what holds the awake window open.
 
+Six commands answer to a second name, so a half-remembered one usually still
+works: `time`→`date`, `chart`→`scope`, `point`→`defence`, `cal`→`calibrate`,
+`sens`→`sensitive`, `batt`→`battery`.
+
 ### Looking around
 
 | Command | What it does |
@@ -149,6 +153,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 
 | Command | What it does |
 |---|---|
+| `battery` | force a fresh gauge read — voltage, charge, and the `%/hr` rate |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the four register fields |
 | `defence <raw>` | set the tuning point by hand, 0–2047. `0` is fully receptive |
