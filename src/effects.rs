@@ -20,7 +20,9 @@ use esp_idf_hal::i2c::I2cDriver;
 
 use crate::as3935::{As3935, Location};
 use crate::session::Totals;
-use crate::{battery, commands, console, history, log, power, screen, session, system, tuning};
+use crate::{
+    battery, commands, console, history, log, power, screen, session, settings, system, tuning,
+};
 
 /// What the effects may talk to. Borrowed for one call, never held.
 pub struct Hardware<'a, 'd> {
@@ -210,7 +212,20 @@ pub fn handle(
                 // half: indoor gain is ~4x, and a strike close enough to hear
                 // saturates the front end, fails validation, and is reported
                 // as a disturber. Less gain is what recovers a near storm.
-                Ok(()) => println!("mode: {} gain applied", rt.location.label()),
+                //
+                // **Persisted, exactly as the button's copy of this does.**
+                // Until 0.7.4 it was not, so the two ways of changing the mode
+                // disagreed about whether the change survived a reboot: BOOT
+                // saved it, `mode` did not. A reset during an overhead storm
+                // silently restored the gain the *button* had last chosen,
+                // which is the one setting that was actually mattering.
+                Ok(()) => match settings::store_location(*rt.location) {
+                    Ok(()) => println!("mode: {} gain applied (saved)", rt.location.label()),
+                    Err(e) => println!(
+                        "mode: {} gain applied but NOT saved -- {e}",
+                        rt.location.label()
+                    ),
+                },
                 Err(e) => println!("mode: could not apply -- {e}"),
             }
         }

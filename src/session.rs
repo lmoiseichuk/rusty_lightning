@@ -673,13 +673,24 @@ pub fn commit_merged(
 /// One line per batch that heard interference. Silent otherwise — a quiet
 /// device should be quiet, and the earlier per-event printing made the console
 /// unreadable in a noisy room.
+/// **Strikes are counted here as the interrupt lands**, before the merge window
+/// and before anything can drop them, so this line is the only place that says
+/// "the chip classified something as lightning" independently of whether a
+/// record was ever written.
+///
+/// It was missing until 0.7.4, and its absence cost an overhead storm. The
+/// symptom was 103,000 disturbers, one strike, and no way to tell from the
+/// console whether the chip was rejecting the strikes at validation or whether
+/// something downstream was losing them — two very different faults that looked
+/// identical from outside. A count that only appears once a record is committed
+/// cannot answer that; this one can.
 pub fn report(batch: &Batch) {
-    if !batch.heard_interference() && batch.unknown == 0 {
+    if batch.strikes == 0 && !batch.heard_interference() && batch.unknown == 0 {
         return;
     }
     println!(
-        "batch: {} disturber(s), {} noise, {} unknown",
-        batch.disturbers, batch.noise, batch.unknown
+        "batch: {} strike(s), {} disturber(s), {} noise, {} unknown",
+        batch.strikes, batch.disturbers, batch.noise, batch.unknown
     );
 }
 
