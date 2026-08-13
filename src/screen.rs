@@ -76,8 +76,8 @@ pub struct Screen {
     /// Held across iterations rather than built per redraw: the day ring alone
     /// is 96 buckets, and a redraw already costs 3.8 s of panel time without
     /// allocating on the way in.
-    counts: [u16; history::MEDIUM_LEN],
-    scores: [u32; history::MEDIUM_LEN],
+    counts: [u16; history::LONGEST_LEN],
+    scores: [u32; history::LONGEST_LEN],
 }
 
 impl Screen {
@@ -90,8 +90,8 @@ impl Screen {
             last_draw_ms: 0,
             user_acted: false,
             period: ui::ChartPeriod::Day,
-            counts: [0u16; history::MEDIUM_LEN],
-            scores: [0u32; history::MEDIUM_LEN],
+            counts: [0u16; history::LONGEST_LEN],
+            scores: [0u32; history::LONGEST_LEN],
         }
     }
 

@@ -291,6 +291,26 @@ pub const MEDIUM_LEN: usize = 168; // 7 days
 pub const COARSE_MINUTES: u32 = 6 * 60;
 pub const COARSE_LEN: usize = 120; // 30 days
 
+/// The longest of the three rings, which is what any buffer holding a flattened
+/// series must be sized to.
+///
+/// **Named rather than spelled `MEDIUM_LEN`.** The chart buffers were sized to
+/// the week ring because it was the longest, which stopped being true the moment
+/// the fine ring went from 15-minute buckets to 5 — 288 against 168. The first
+/// redraw after that panicked on a slice range and the board boot-looped. A
+/// constant that says what it is for cannot go stale the same way.
+pub const LONGEST_LEN: usize = if FINE_LEN > MEDIUM_LEN {
+    if FINE_LEN > COARSE_LEN {
+        FINE_LEN
+    } else {
+        COARSE_LEN
+    }
+} else if MEDIUM_LEN > COARSE_LEN {
+    MEDIUM_LEN
+} else {
+    COARSE_LEN
+};
+
 /// All three, written together.
 pub struct History {
     pub day: Ring<FINE_LEN>,
