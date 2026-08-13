@@ -311,11 +311,27 @@ impl StormWatch {
     /// Takes the cumulative total rather than a per-window count so it needs
     /// nothing from the tuner, whose own counters are reset inside its step.
     pub fn step(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, strikes_total: u32) {
-        if strikes_total != self.seen {
+        // A strike arrived: restart the lull and re-arm.
+        if strikes_total > self.seen {
             self.seen = strikes_total;
             self.quiet_windows = 0;
             self.cleared = false;
             return;
+        }
+
+        // **The counter went backwards, which is not a strike.** Only `clear`
+        // does that, and it means a log erase rather than weather. Resync and
+        // let the current lull continue counting.
+        //
+        // Testing `!=` here instead treated an erase as strike activity and
+        // restarted the thirty-minute countdown from it — observed once, and
+        // harmless because clearing an estimator that holds nothing is a no-op.
+        // Testing `>` alone would be the worse half of the same mistake: with
+        // `seen` left at its pre-erase value, real strikes would fail the
+        // comparison until they climbed back past it, and the detector would be
+        // deaf for exactly as long as the storm it had already counted.
+        if strikes_total < self.seen {
+            self.seen = strikes_total;
         }
 
         if self.cleared {
