@@ -26,6 +26,7 @@ const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
 /// costs minutes; honouring the old bytes would cost a storm.
 const KEY_DEFENCE: &[u8] = b"defence3\0";
 const KEY_QUIET: &[u8] = b"quiet\0";
+const KEY_MERGE: &[u8] = b"merge_ms\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -187,5 +188,23 @@ pub fn quiet_per_min() -> Option<u32> {
 pub fn store_quiet_per_min(rate: u32) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u32(KEY_QUIET, rate)?;
+    nvs.commit()
+}
+
+/// The strike-merge window in milliseconds (§4.3).
+///
+/// Stored like the quiet threshold and for the same reason: it describes the
+/// weather a room sees rather than a debugging session, so it should survive a
+/// power cut. `None` on a device never told, where the caller uses
+/// [`crate::session::MERGE_WINDOW_MS`].
+pub fn merge_window_ms() -> Option<u32> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    Some(nvs.get_u32(KEY_MERGE)?)
+}
+
+/// Persist the merge window.
+pub fn store_merge_window_ms(window_ms: u32) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_MERGE, window_ms)?;
     nvs.commit()
 }

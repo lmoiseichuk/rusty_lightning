@@ -296,6 +296,32 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Defence(None) => effects.show_point = true,
         Command::Defence(Some(raw)) => effects.set_point = Some(raw),
 
+        Command::Merge(None) => {
+            let window_ms = ctx.totals.merger.window_ms();
+            match window_ms {
+                0 => println!("merge: off -- every return stroke is its own record"),
+                ms => println!("merge: {ms} ms -- strokes inside it become one flash"),
+            }
+        }
+        Command::Merge(Some(window_ms)) => {
+            // Whatever was mid-flash under the old window is committed rather
+            // than dropped. Those strokes were detected; a settings change is
+            // not a reason to lose them.
+            let flushed = ctx.totals.merger.set_window_ms(window_ms);
+            if let Some(merged) = flushed {
+                session::commit_merged(
+                    ctx.totals,
+                    ctx.history,
+                    ctx.strike_log.as_deref_mut(),
+                    &merged,
+                );
+            }
+            match crate::settings::store_merge_window_ms(window_ms) {
+                Ok(()) => println!("merge: {window_ms} ms (saved)"),
+                Err(e) => println!("merge: {window_ms} ms but NOT saved -- {e}"),
+            }
+        }
+
         Command::Calibrate(seconds, quiet) => {
             // Acknowledged here so the reply lands before the sweep starts.
             println!("cal:  queued at {seconds} s per probe -- the sensor is");

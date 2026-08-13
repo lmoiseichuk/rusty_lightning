@@ -82,6 +82,18 @@ pub fn listen(
     // Running totals, and what the glass currently shows. The screen is redrawn
     // when the two disagree -- never on a timer alone.
     let mut totals = Totals::default();
+
+    // §4.3's merge window, restored like the quiet threshold and for the same
+    // reason: it describes the weather a room produces rather than a debugging
+    // session, so it should survive a power cut. Nothing can be pending this
+    // early, so the flush this returns is always empty.
+    let merge_window_ms = crate::settings::merge_window_ms().unwrap_or(session::MERGE_WINDOW_MS);
+    let _ = totals.merger.set_window_ms(merge_window_ms);
+    match merge_window_ms {
+        0 => println!("as:   strike merge off -- every return stroke is its own record"),
+        ms => println!("as:   strike merge window {ms} ms"),
+    }
+
     let mut history = history::History::new();
 
     // Rebuild the rings from the file (§5). The charts are RAM and die with a
@@ -337,6 +349,19 @@ pub fn listen(
         // the measurement and the decision -- the rate on screen used to come
         // from a separate 5-minute probe, so it read `0/min` while the ladder
         // was visibly climbing on events it had just counted.
+        // --- §4.3's flash merge ---------------------------------------------
+        //
+        // Before the tuner and the screen, so a flash whose window has just
+        // closed is counted this pass rather than next. The last stroke of a
+        // storm has nothing behind it to push it out, so without this it would
+        // wait in memory for a strike that might be a week away.
+        session::flush_due(
+            &mut totals,
+            &mut history,
+            strike_log.as_deref_mut(),
+            now_ms(),
+        );
+
         tuning.observe(&batch);
 
         if tuning.due(now_ms()) {

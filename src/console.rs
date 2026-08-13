@@ -80,6 +80,9 @@ pub enum Command {
     Calibrate(u32, u32),
     /// `defence` shows the point; `defence <raw>` sets it.
     Defence(Option<u16>),
+    /// `merge` shows the strike-merge window; `merge <ms>` sets it (§4.3).
+    /// `0` turns merging off, so every return stroke is its own record.
+    Merge(Option<u32>),
     Sensitive(bool),
     /// Typed, but not understood. Still counts as activity.
     Unknown,
@@ -243,6 +246,16 @@ fn parse(line: &str) -> Command {
                 _ => Command::Unknown,
             }
         }
+        // Refused rather than defaulted, for the same reason `calibrate` refuses
+        // a bad number: this one changes what the log means, and a typo that
+        // silently fell back to a default would change it quietly.
+        "merge" => match arg {
+            None => Command::Merge(None),
+            Some(value) => match value.parse::<u32>() {
+                Ok(ms) if ms <= crate::session::MERGE_WINDOW_MAX_MS => Command::Merge(Some(ms)),
+                _ => Command::Unknown,
+            },
+        },
         "sensitive" | "sens" => match arg {
             Some("on") => Command::Sensitive(true),
             Some("off") => Command::Sensitive(false),
@@ -304,6 +317,7 @@ pub fn print_help() {
         crate::defence::MAX
     );
     println!("  calibrate [s] [/min]  bisect the whole space for the most sensitive quiet point");
+    println!("  merge [ms]            strike-merge window; 0 logs every return stroke");
     println!(
         "                        s    seconds per probe ({}-{}, default {}); ~13 probes",
         crate::session::CALIBRATE_PROBE_MIN_S,

@@ -783,6 +783,16 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
             let _ = write!(distance, "{}", km);
             let _ = distance.push_str(" km");
         }
+        // No measured kilometres, but strikes that were all overhead. That is
+        // not "no idea how far" -- every one of them was inside the nearest
+        // bin, which is a distance statement even though it is not a number.
+        // The mean is deliberately taken over measured kilometres only
+        // (`history::Bucket`), so an hour of nothing but overhead has no
+        // samples and would otherwise render identically to an empty one.
+        // Observed: 917 strikes in an evening, every field on this row a dash.
+        None if hour.overhead => {
+            let _ = distance.push_str("< 5 km");
+        }
         None => {
             let _ = distance.push('-');
         }

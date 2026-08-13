@@ -30,8 +30,12 @@ const PATH: &str = "/lfs/strikes.csv";
 /// detected real lightning? — cannot be asked of it. A digit rather than a word
 /// because this column is for filtering, where `distance_km`'s `overhead` and
 /// `far` are for reading.
-const HEADER: &str =
-    "timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated";
+/// `strokes` is how many return strokes the merge window folded into this row
+/// (§4.3). One flash is normally three to four of them, so without this column a
+/// merged record is indistinguishable from a single strike — the same ambiguity
+/// `simulated` was added to remove, and `energy_raw` is a *sum* across them.
+const HEADER: &str = "timestamp,iso_local,distance_km,energy_raw,\
+                      intensity_milli,score_milli,simulated,strokes";
 
 /// How often buffered lines are flushed and synced.
 pub const SYNC_INTERVAL_MS: u32 = 60_000;
@@ -158,7 +162,7 @@ impl Log {
     }
 
     /// Record a strike. Buffered; see [`Log::sync`].
-    pub fn append(&mut self, epoch: u64, strike: &Strike, simulated: bool) {
+    pub fn append(&mut self, epoch: u64, strike: &Strike, simulated: bool, strokes: u32) {
         let mut line = String::with_capacity(96);
 
         // Words rather than numbers for the two sentinels. "Overhead" and "out
@@ -187,14 +191,15 @@ impl Log {
 
         let _ = write!(
             line,
-            "{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{}",
             epoch,
             iso,
             distance,
             strike.energy_raw,
             strike.intensity_milli(),
             score,
-            simulated as u8
+            simulated as u8,
+            strokes
         );
         self.pending.push(line);
     }

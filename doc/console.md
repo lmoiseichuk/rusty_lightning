@@ -137,6 +137,7 @@ console activity, which is what holds the awake window open.
 | `scope day\|week\|month` | which span the charts cover |
 | `mode indoor\|outdoor` | AFE gain — the same switch as holding the BOOT button |
 | `clear` | erase the strike log. No confirmation. |
+| `merge [ms]` | strike-merge window (§4.3). Bare, it reports. `0` logs every return stroke. |
 
 Setting the clock from the host, which is almost always what you want:
 
@@ -237,6 +238,36 @@ the point at `0/2047 (0%)` for three and a half hours while 909 strikes were
 recorded. The risk it does *not* cover is the run-up: a storm throws disturbers
 ahead of itself, and a tuner that climbs on those is deaf before the first strike
 arrives, so the rule never arms. That is what `sensitive on` is for.
+
+**`merge` decides whether the log counts flashes or strokes.** One flash is
+normally three to four return strokes down the same channel, tens to hundreds of
+milliseconds apart, and the sensor reports each. So the raw count is always
+higher than what anyone standing outside would count — on 2026-08-12 the log
+read 930 while flashes were audible every 10–30 seconds.
+
+Inside the window, strokes become one record: **energies summed**, distance
+averaged over measured kilometres, and a `strokes` column recording how many
+went in. Nothing is silently collapsed — a merged row says so.
+
+```
+merge            report the current window
+merge 1000       the default: one second
+merge 0          off, every return stroke gets its own record
+```
+
+Stored in NVS, so it survives a power cut. Accepted range is 0–10000 ms; a bad
+number is refused rather than defaulted, because this setting changes what the
+log *means* and a typo should not change that quietly.
+
+The window runs from the **first** stroke of a flash, not the last. A sliding
+window would let a continuous train merge without limit, so a storm overhead
+could collapse into a single record hours long.
+
+Two things it deliberately does not do. It does not fold `overhead` into the
+distance average — overhead is not a kilometre figure, and averaging it in as 1
+is what once made a storm read as permanently overhead. And it does not change
+what §4.2 sees: the auto-tune still counts every stroke, because that is its
+evidence that lightning is present and the strike-hold rule wants all of it.
 
 **`defence <raw>` skips the sweep** when you already know the answer for a room.
 `0` is fully receptive; higher is deafer. A device that has never calibrated

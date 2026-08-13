@@ -537,6 +537,35 @@ coming in (distance ↓), moving out (distance ↑), stronger (same distance, hi
 > varying, that was it; if they do not, the cause is elsewhere and this remains a real fix for a
 > different problem — the first strike of each storm being judged against the last one's weather.
 
+> #### ⚠⚠ AS BUILT (0.7.0): strokes are merged into flashes
+>
+> One lightning **flash** is normally three to four **return strokes** down the same ionised
+> channel, tens to hundreds of milliseconds apart, and the AS3935 validates and reports each one.
+> So a device counting interrupts counts *strokes*, and calls them strikes.
+>
+> That is what made 2026-08-12 read **930** when the sky produced perhaps a third of that. The check
+> is the ear: flashes were audible every 10–30 s — 2–6/min — while the log recorded a mean of
+> 4.4/min with a peak of 15. The log was counting something finer than what a person sees.
+>
+> `session::Merger` folds every stroke inside a **merge window** into one record: energies summed,
+> distance averaged over *measured* kilometres, and a `strokes` column saying how many went in.
+> Default 1000 ms, set by `merge <ms>` and stored in NVS, `0` to switch merging off and log every
+> stroke as before.
+>
+> **The window runs from the first stroke, not the last.** A sliding window would let a long enough
+> train merge without limit, so a storm directly overhead could collapse into one record hours long
+> — the opposite of the intent. The ceiling is 10 s because the busiest minute of 2026-08-12
+> averaged a strike every four seconds, so a window near that would merge genuinely separate flashes.
+>
+> Two deliberate asymmetries:
+>
+> * **`Totals::strikes` counts flashes; `Batch::strikes` still counts strokes.** The batch figure is
+>   §4.2's evidence that lightning is present, and the strike-hold rule wants all of it; the totals
+>   figure is what a person reads.
+> * **Overhead is not averaged into the distance.** With no measured kilometres in the window,
+>   overhead wins if any stroke reported it — folding it in as a number is the bug `history::Bucket`
+>   documents at length.
+
 - **Thresholds are placeholders to calibrate in the final enclosure** — breadboard vs. enclosed
   sensitivity differs, so expose the band/hysteresis limits as config constants and tune on-site
   (the auto noise-floor helps absorb some of this).
@@ -560,9 +589,22 @@ Refine later from the logged database once enough storms are recorded.
 > #### ⚠ AS BUILT: `/lfs/strikes.csv`, and **LittleFS specifically**
 >
 > ```text
-> timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli
-> 1785727634,2026-08-02 23:27:14,6,50331,3000,500
+> timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated,strokes
+> 1785727634,2026-08-02 23:27:14,6,50331,3000,500,0,1
 > ```
+>
+> Two columns were added after the fact, both to remove an ambiguity the file could not otherwise
+> answer about itself. **`simulated`** distinguishes a `strike`-injected record from a detected one,
+> because four records of unknown provenance once made "has this device ever seen real lightning?"
+> unanswerable. **`strokes`** (0.7.0) says how many return strokes §4.3's merge window folded into
+> the row — without it a merged record is indistinguishable from a single strike, and `energy_raw`
+> is a *sum* across them.
+>
+> **A format change never reaches an existing log.** The header is written only to an empty file, so
+> a device upgraded in place keeps the header it was created with while new rows carry the new
+> columns. `Log::ensure_header` detects the mismatch at boot and says so rather than rewriting the
+> file — rewriting would discard records to correct a label. `clear` is the deliberate way to start
+> again, and a log dumped beforehand keeps everything.
 >
 > **LittleFS, not SPIFFS.** The board has a battery ON/OFF switch, so power is removed abruptly and
 > often — that is how the device is normally turned off, not an edge case. SPIFFS is not power-loss

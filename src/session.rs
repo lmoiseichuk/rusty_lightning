@@ -41,9 +41,20 @@ impl Batch {
 /// Everything counted since boot.
 #[derive(Default)]
 pub struct Totals {
+    /// **Flashes, not strokes** — one per merge window (§4.3). `Batch::strikes`
+    /// still counts every stroke, deliberately: it is the tuner's evidence that
+    /// lightning is present, and more of it is better, where this is the number
+    /// a person reads.
     pub strikes: u32,
     pub disturbers: u32,
     pub last_strike: Option<(Distance, u32, Option<u64>)>,
+    /// Folds return strokes into flashes.
+    ///
+    /// **Housed here because `Totals` is already threaded to both callers of
+    /// `record_strike`** — the real path and the simulator. Anywhere else and
+    /// the merge would need a new parameter through four signatures, or would
+    /// apply to only one of the two paths that must stay identical.
+    pub merger: Merger,
     /// **Interference** per minute — noise *and* disturbers — from the last
     /// probe. The number the screen shows.
     ///
@@ -332,7 +343,257 @@ impl StormWatch {
     }
 }
 
-/// Record one strike: counters, rings, log, console — in that order.
+/// Default strike-merge window, in milliseconds.
+///
+/// One lightning *flash* is normally three to four *return strokes* down the
+/// same channel, tens to hundreds of milliseconds apart, and the AS3935 reports
+/// each one it validates. So a device counting interrupts counts strokes, and
+/// the storm of 2026-08-12 read 930 where the sky produced perhaps a third of
+/// that — the log and the audible flash rate disagreed by exactly that factor.
+///
+/// A second is comfortably longer than a flash and far shorter than the gap
+/// between them: that storm's busiest minute held 15 strikes, so even at its
+/// peak the mean spacing was four seconds.
+pub const MERGE_WINDOW_MS: u32 = 1000;
+
+/// Longest merge window `merge <ms>` accepts.
+///
+/// Ten seconds. Beyond that the window stops folding one flash together and
+/// starts swallowing separate ones: the busiest minute of 2026-08-12 averaged a
+/// strike every four seconds, so a window near this ceiling would already be
+/// merging across genuinely distinct events during a storm overhead.
+pub const MERGE_WINDOW_MAX_MS: u32 = 10_000;
+
+/// One flash: the strokes that arrived inside a merge window, folded together.
+pub struct Merged {
+    pub strike: Strike,
+    /// How many strokes went into it. Never zero.
+    pub strokes: u32,
+    /// The **first** stroke's clock, not the last. The flash began then, and a
+    /// merge must not move an event later than it happened.
+    pub epoch: Option<u64>,
+    pub minute: u32,
+    pub simulated: bool,
+}
+
+/// Folds return strokes into flashes (§4.3).
+///
+/// **The window runs from the first stroke, not the last.** A sliding window
+/// would let a long enough train merge without limit — a storm directly
+/// overhead could collapse into a single record hours long, which is the
+/// opposite of what this is for.
+pub struct Merger {
+    window_ms: u32,
+    pending: Option<Accumulator>,
+}
+
+struct Accumulator {
+    started_ms: u32,
+    energy_sum: u32,
+    /// Kilometre readings only. Overhead and out-of-range are not distances and
+    /// averaging them in as 1 and 63 is the bug `history::Bucket` documents.
+    distance_km_sum: u32,
+    distance_samples: u32,
+    overhead: bool,
+    strokes: u32,
+    epoch: Option<u64>,
+    minute: u32,
+    simulated: bool,
+}
+
+impl Default for Merger {
+    fn default() -> Self {
+        Self {
+            window_ms: MERGE_WINDOW_MS,
+            pending: None,
+        }
+    }
+}
+
+impl Accumulator {
+    fn fold(&mut self, strike: &Strike) {
+        self.strokes += 1;
+        self.energy_sum = self.energy_sum.saturating_add(strike.energy_raw);
+        match strike.distance {
+            Distance::Km(km) => {
+                self.distance_km_sum = self.distance_km_sum.saturating_add(km as u32);
+                self.distance_samples += 1;
+            }
+            Distance::Overhead => self.overhead = true,
+            Distance::OutOfRange => {}
+        }
+    }
+
+    /// The flash these strokes describe.
+    ///
+    /// Distance is the mean over *measured* kilometres. With none, overhead
+    /// wins if any stroke reported it — it is the closest reading there is, and
+    /// folding it into the mean as a number is what once made a storm read as
+    /// permanently overhead.
+    fn finish(self) -> Merged {
+        let distance = match (self.distance_samples, self.overhead) {
+            (0, true) => Distance::Overhead,
+            (0, false) => Distance::OutOfRange,
+            (samples, _) => Distance::Km((self.distance_km_sum / samples as u32) as u8),
+        };
+        Merged {
+            strike: Strike {
+                distance,
+                energy_raw: self.energy_sum,
+            },
+            strokes: self.strokes,
+            epoch: self.epoch,
+            minute: self.minute,
+            simulated: self.simulated,
+        }
+    }
+}
+
+impl Merger {
+    pub fn window_ms(&self) -> u32 {
+        self.window_ms
+    }
+
+    /// Change the window, flushing whatever is pending under the old one.
+    ///
+    /// Returned rather than dropped: those strokes were detected, and a setting
+    /// change is no reason to lose them.
+    pub fn set_window_ms(&mut self, window_ms: u32) -> Option<Merged> {
+        let flushed = self.pending.take().map(Accumulator::finish);
+        self.window_ms = window_ms;
+        flushed
+    }
+
+    /// Fold one stroke in.
+    ///
+    /// Returns the *previous* flash when this stroke fell outside its window,
+    /// because that flash is now complete and this stroke starts the next one.
+    pub fn observe(
+        &mut self,
+        strike: &Strike,
+        epoch: Option<u64>,
+        minute: u32,
+        simulated: bool,
+        now_ms: u32,
+    ) -> Option<Merged> {
+        // A window of zero switches merging off entirely: every stroke is its
+        // own flash, which is what the device did before 0.7.0 and what anyone
+        // studying individual strokes wants back.
+        if self.window_ms == 0 {
+            return Some(
+                Accumulator {
+                    started_ms: now_ms,
+                    energy_sum: 0,
+                    distance_km_sum: 0,
+                    distance_samples: 0,
+                    overhead: false,
+                    strokes: 0,
+                    epoch,
+                    minute,
+                    simulated,
+                }
+                .tap_fold(strike),
+            );
+        }
+
+        let expired = match self.pending.as_ref() {
+            None => false,
+            Some(pending) => now_ms.saturating_sub(pending.started_ms) >= self.window_ms,
+        };
+
+        let flushed = if expired {
+            self.pending.take().map(Accumulator::finish)
+        } else {
+            None
+        };
+
+        match self.pending.as_mut() {
+            Some(pending) => pending.fold(strike),
+            None => {
+                let mut fresh = Accumulator {
+                    started_ms: now_ms,
+                    energy_sum: 0,
+                    distance_km_sum: 0,
+                    distance_samples: 0,
+                    overhead: false,
+                    strokes: 0,
+                    epoch,
+                    minute,
+                    simulated,
+                };
+                fresh.fold(strike);
+                self.pending = Some(fresh);
+            }
+        }
+
+        flushed
+    }
+
+    /// Release a flash whose window has closed.
+    ///
+    /// Called from the loop, because the last stroke of a storm has nothing
+    /// after it to push it out — without this it would sit in memory until the
+    /// next strike, which might be next week.
+    pub fn take_due(&mut self, now_ms: u32) -> Option<Merged> {
+        let expired = match self.pending.as_ref() {
+            None => false,
+            Some(pending) => now_ms.saturating_sub(pending.started_ms) >= self.window_ms,
+        };
+        match expired {
+            true => self.pending.take().map(Accumulator::finish),
+            false => None,
+        }
+    }
+}
+
+impl Accumulator {
+    /// `fold` then `finish`, for the merging-disabled path.
+    fn tap_fold(mut self, strike: &Strike) -> Merged {
+        self.fold(strike);
+        self.finish()
+    }
+}
+
+/// Fold a stroke into the current flash, committing whichever flash completes.
+///
+/// **The merge sits here rather than at the call sites** because both the real
+/// and the simulated paths already come through this function, and §4.3's whole
+/// point is that they behave identically. A merge applied to only one of them
+/// would make the simulator stop exercising the path it exists to exercise.
+pub fn record_strike(
+    totals: &mut Totals,
+    history: &mut history::History,
+    strike_log: Option<&mut log::Log>,
+    strike: &Strike,
+    epoch: Option<u64>,
+    minute: u32,
+    simulated: bool,
+) {
+    let flushed = totals
+        .merger
+        .observe(strike, epoch, minute, simulated, crate::now_ms());
+    if let Some(merged) = flushed {
+        commit_merged(totals, history, strike_log, &merged);
+    }
+}
+
+/// Commit a flash whose merge window has closed, if there is one.
+///
+/// Driven from the loop: see [`Merger::take_due`] for why a stroke cannot be
+/// left waiting for the next one to push it out.
+pub fn flush_due(
+    totals: &mut Totals,
+    history: &mut history::History,
+    strike_log: Option<&mut log::Log>,
+    now_ms: u32,
+) {
+    let due = totals.merger.take_due(now_ms);
+    if let Some(merged) = due {
+        commit_merged(totals, history, strike_log, &merged);
+    }
+}
+
+/// Record one flash: counters, rings, log, console — in that order.
 ///
 /// **Shared by the real and simulated paths, which must stay behaviourally
 /// identical.** They were written twice and did the same four things in the
@@ -349,37 +610,47 @@ impl StormWatch {
 /// device ever seen real lightning?" unanswerable from its own log. A flag that
 /// only reaches the console answers it for whoever was watching at the time,
 /// which is the one reader who did not need telling.
-pub fn record_strike(
+pub fn commit_merged(
     totals: &mut Totals,
     history: &mut history::History,
     strike_log: Option<&mut log::Log>,
-    strike: &Strike,
-    epoch: Option<u64>,
-    minute: u32,
-    simulated: bool,
+    merged: &Merged,
 ) {
+    let strike = &merged.strike;
     totals.strikes += 1;
-    totals.last_strike = Some((strike.distance, strike.intensity_milli(), epoch));
-    history.record(minute, strike);
+    totals.last_strike = Some((strike.distance, strike.intensity_milli(), merged.epoch));
+    history.record(merged.minute, strike);
 
     // An unset clock still logs the strike, with 0 for the time. It happened;
     // what is unknown is when.
     if let Some(log) = strike_log {
-        log.append(epoch.unwrap_or(0), strike, simulated);
+        log.append(
+            merged.epoch.unwrap_or(0),
+            strike,
+            merged.simulated,
+            merged.strokes,
+        );
     }
 
-    let when = match epoch {
+    let when = match merged.epoch {
         Some(epoch) => clock::format_local(epoch),
         None => heapless::String::try_from("(no clock)").unwrap_or_default(),
     };
+    // Only when it merged something. A "1 stroke" on every line would be noise
+    // on the one console this device has.
+    let strokes = match merged.strokes {
+        1 => String::new(),
+        n => format!("  [{n} strokes]"),
+    };
     println!(
-        "STRIKE  {}  {:?}  energy {} (intensity {}.{:03}){}",
+        "STRIKE  {}  {:?}  energy {} (intensity {}.{:03}){}{}",
         when,
         strike.distance,
         strike.energy_raw,
         strike.intensity_milli() / 1000,
         strike.intensity_milli() % 1000,
-        if simulated { "  [SIMULATED]" } else { "" }
+        strokes,
+        if merged.simulated { "  [SIMULATED]" } else { "" }
     );
 }
 
