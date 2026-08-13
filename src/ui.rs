@@ -739,7 +739,9 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
 /// The panel splits at x=400 with a 16 px gutter, so the chart owns 16..392 and
 /// the table 408..784 — 376 px each, both inside the 16 px margins.
 const HALF: i32 = 376;
-const RIGHT_HALF: i32 = 408;
+/// 437: the columns total 318 px in a 376 px half, centred, so 29 px sit
+/// either side rather than all 58 piling up after the last column.
+const RIGHT_HALF: i32 = 437;
 
 /// The strike log: one line per strike, newest at the top.
 ///
@@ -756,22 +758,38 @@ fn strike_table(frame: &mut Display7in5, s: &Status<'_>) {
     const TIME_X: i32 = RIGHT_HALF;
     const ENERGY_X: i32 = TIME_X + 8 * CH + 12;
     const DIST_X: i32 = ENERGY_X + 7 * CH + 12;
+    /// Seven, not six. The ceiling is an overhead strike at full intensity --
+    /// 62500 milli over the 0.1 km floor -- which prints `625.00` and fills six
+    /// exactly, leaving nothing for a column that is read as a column.
+    const SCORE_W: i32 = 7;
     const SCORE_X: i32 = DIST_X + 6 * CH + 12;
-    const N_X: i32 = SCORE_X + 6 * CH + 12;
+    const N_X: i32 = SCORE_X + SCORE_W * CH + 12;
 
     let heading = MonoTextStyle::new(&FONT_9X15, INK);
-    for (x, label) in [
-        (TIME_X, "time"),
-        (ENERGY_X, "energy"),
-        (DIST_X, "dist"),
-        (SCORE_X, "score"),
-        (N_X, "n"),
-    ] {
+    for (x, label) in [(TIME_X, "time"), (DIST_X, "dist")] {
         let _ = Text::with_baseline(label, Point::new(x, TOP), heading, Baseline::Top).draw(frame);
     }
+    for (right, label) in [
+        (ENERGY_X + 7 * CH, "energy"),
+        (SCORE_X + SCORE_W * CH, "score"),
+        (N_X + 2 * CH, "n"),
+    ] {
+        let _ = Text::with_text_style(
+            label,
+            Point::new(right, TOP),
+            heading,
+            TextStyleBuilder::new()
+                .alignment(Alignment::Right)
+                .baseline(Baseline::Top)
+                .build(),
+        )
+        .draw(frame);
+    }
+    // The rule spans the columns, not the margin: a line running past the last
+    // column to the panel edge reads as a table that lost its right-hand side.
     let _ = Line::new(
         Point::new(RIGHT_HALF, TOP + 16),
-        Point::new(WIDTH as i32 - 16, TOP + 16),
+        Point::new(N_X + 2 * CH, TOP + 16),
     )
     .into_styled(PrimitiveStyle::with_stroke(INK, 1))
     .draw(frame);
@@ -819,14 +837,28 @@ fn strike_table(frame: &mut Display7in5, s: &Status<'_>) {
         let mut strokes = Text16::new();
         let _ = write!(strokes, "{}", entry.strokes);
 
-        for (x, text) in [
-            (TIME_X, &time),
-            (ENERGY_X, &energy),
-            (DIST_X, &distance),
-            (SCORE_X, &score),
-            (N_X, &strokes),
-        ] {
+        // **Numbers right, words left.** A column of left-aligned figures of
+        // different lengths does not read as a column at all -- it reads as a
+        // ragged edge, which is what made the score field look too narrow when
+        // it was merely holding short values.
+        for (x, text) in [(TIME_X, &time), (DIST_X, &distance)] {
             let _ = Text::with_baseline(text, Point::new(x, y), heading, Baseline::Top).draw(frame);
+        }
+        for (right, text) in [
+            (ENERGY_X + 7 * CH, &energy),
+            (SCORE_X + SCORE_W * CH, &score),
+            (N_X + 2 * CH, &strokes),
+        ] {
+            let _ = Text::with_text_style(
+                text,
+                Point::new(right, y),
+                heading,
+                TextStyleBuilder::new()
+                    .alignment(Alignment::Right)
+                    .baseline(Baseline::Top)
+                    .build(),
+            )
+            .draw(frame);
         }
     }
 }
@@ -1060,8 +1092,12 @@ fn time_axis(
 /// scores, and the reverse is true of the mean — so §4.3 keeps both and this
 /// draws both, one above the other on a shared time axis.
 fn charts(frame: &mut Display7in5, s: &Status<'_>) {
-    const TOP: i32 = 176;
-    const HEIGHT: u32 = 216;
+    // 180 rather than 176, which puts the title's baseline at 172 and lines it
+    // up with the table header opposite instead of sitting 4 px proud of it.
+    const TOP: i32 = 180;
+    /// Stretched to 252: the axis labels then run 436..446 and leave 6 px above
+    /// the footer rule, where 216 left a 46 px band doing nothing.
+    const HEIGHT: u32 = 252;
     /// 5 px a bar. At the fine ring's 5-minute buckets that is 75 bars in the
     /// 376 px half — **6h15m**, where an hour was the requirement. Wider bars
     /// read better across a room than a longer span nobody can resolve.
