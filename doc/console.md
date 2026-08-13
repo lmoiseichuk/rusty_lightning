@@ -197,18 +197,29 @@ Two arguments, both optional and positional:
 * **`s`** — seconds per probe, 5–60, default 60. A whole sweep is about
   11 probes, so 60 s costs roughly twelve minutes, once.
 * **`/min`** — events per minute at or below which a window counts as **quiet**,
-  0–240, default 12. **Stored in NVS**; omit it to keep the current one.
+  0–240, default 60. **Stored in NVS**; omit it to keep the current one.
 
 That threshold is not cosmetic. Testing quiet as *zero* makes the answer depend
 on how long you listened — a 60 s window has six times a 10 s window's chances
 of catching one stray event. Three sweeps of the same room settled at 448, 448
 and 478, differing only by probe length; the long one bought spike rejection
 *and* min strikes on one to two events a minute, having rejected other points at
-a hundred a minute by the identical test. Twelve a minute is one every five
-seconds, and every genuinely noisy point in those sweeps ran at 39–102 per
-probe — so the boundary moves nowhere that matters. The same threshold governs
-the ±1 walk between calibrations, so the two can never disagree about what quiet
-means.
+a hundred a minute by the identical test. The same threshold governs the ±1 walk
+between calibrations, so the two can never disagree about what quiet means.
+
+**Pick it for the room, and pick it high enough.** The default was 12/min until
+0.7.3, which is one event every five seconds — no house with a refrigerator in
+it manages that. This room measured 90–150/min with the air conditioning on, and
+121–132/min through the lulls of a live storm. Against 12 every one of those
+windows reads as noisy, so the tuner climbs continuously and spends its whole
+budget on the house rather than the sky: observed pinned at `nf 7 wd 15`, 53 %
+harm, hearing nothing.
+
+At 120 in the same room a sweep settled at `wd 6` where 12 would have forced
+`wd 7` plus spike rejection on top, the walk then found 20–23 % harm, and the
+strike-hold rule kept it wide open through a whole storm. If the device is
+climbing and never coming back down, the threshold is too low for the room —
+that is the symptom, and `calibrate 5 <per-min>` re-sets it in about a minute.
 
 `calibrate` runs as ordinary measurement windows driven by the main loop, one
 probe each, so the console keeps answering and the normal screen keeps updating

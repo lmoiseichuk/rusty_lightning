@@ -821,23 +821,38 @@ pub const CALIBRATE_PROBE_MAX_S: u32 = 60;
 /// What counts as **quiet**, in events per minute, when the device has never
 /// been told otherwise.
 ///
-/// **Twelve, not zero.** A probe's question is "was that window quiet", and
-/// testing it as `count == 0` makes the answer depend on how long you listened:
-/// a 60 s window has six times a 10 s window's chances of catching one stray
-/// event. Measured here, three sweeps of the same room settled at 448, 448 and
-/// 478 — differing only by probe length, with the long one buying spike
+/// **Not zero**, first of all. A probe's question is "was that window quiet",
+/// and testing it as `count == 0` makes the answer depend on how long you
+/// listened: a 60 s window has six times a 10 s window's chances of catching one
+/// stray event. Measured here, three sweeps of the same room settled at 448, 448
+/// and 478 — differing only by probe length, with the long one buying spike
 /// rejection *and* min strikes on one to two events a minute, while rejecting
 /// other points at a hundred a minute by the same verdict.
-///
-/// Twelve a minute is one every five seconds. Every point those sweeps genuinely
-/// rejected ran at 39–102 *per probe*, so the boundary moves nowhere that
-/// matters — it just stops a single click costing the registers that decide
-/// whether a strike is reported at all.
 ///
 /// A rate rather than a count, so the verdict means the same thing at 5 s and at
 /// 60 s. That is the whole point: it makes a longer probe strictly better rather
 /// than quietly deafer.
-pub const QUIET_PER_MIN: u32 = 12;
+///
+/// **Sixty, and it was twelve until 0.7.3.** Twelve a minute is one event every
+/// five seconds, which no room with a refrigerator in it manages. Measured in
+/// this one: 90–150 events/min with the air conditioning running, and 121–132
+/// during the lulls of a live storm. Against a threshold of twelve, every one of
+/// those windows reads as noisy, so the tuner climbs continuously and spends its
+/// whole budget defending against the house rather than against the sky —
+/// observed sitting at `nf 7 wd 15`, 53 % harm, hearing nothing.
+///
+/// Raising it to 120 in the same room let a sweep settle at `wd 6` where twelve
+/// would have forced `wd 7` and high spike rejection on top; the walk then found
+/// 20–23 % harm, and the strike-hold rule held it at 0 % right through the storm
+/// of 2026-08-12. Sixty is the middle of that: one event a second, comfortably
+/// above a quiet house and an order of magnitude below the ~480/min a genuinely
+/// jammed band produces, which is what [`QUIET_PER_MIN_MAX`] guards.
+///
+/// This is only the value for a device that has never been calibrated. Anything
+/// with a stored threshold keeps it — `calibrate <s> <per-min>` is the only way
+/// to change one, deliberately, because it decides what the room is allowed to
+/// sound like.
+pub const QUIET_PER_MIN: u32 = 60;
 
 /// The range `calibrate <seconds> <per-min>` accepts for the threshold.
 ///
