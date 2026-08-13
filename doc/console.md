@@ -150,7 +150,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 |---|---|
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the four register fields |
-| `defence <raw>` | set the tuning point by hand, 0–8191. `0` is fully receptive |
+| `defence <raw>` | set the tuning point by hand, 0–2047. `0` is fully receptive |
 | `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
 | `sensitive on\|off` | every rejection knob wide open, with the auto-tune frozen |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
@@ -174,18 +174,22 @@ saturate the front end, fail the chip's waveform validation, and be reported as
 a disturber — so when a near storm produces disturbers and no strikes, *less*
 gain is the thing to try.
 
-**`calibrate` is the one worth understanding.** The four noise-rejection
-registers are bit fields in two bytes, so the whole tunable state is one 13-bit
-number, 0–8191 — and the bisection over it is **13 probes**, not hundreds. The
-layout puts `NF_LEV` in the top bits and `MIN_NUM_LIGH` in the bottom two, which
+**`calibrate` is the one worth understanding.** The three noise-rejection
+registers are bit fields in two bytes, so the whole tunable state is one 11-bit
+number, 0–2047 — and the bisection over it is **11 probes**, not hundreds. The
+layout puts `NF_LEV` in the top bits and `SREJ` in the bottom four, which
 matters because binary search resolves high bits first: the knob that cannot
-reject a strike is decided in the first few probes, and the knob that can
-silence a storm is decided last.
+reject a strike is decided in the first few probes, and the finer ones are
+decided last.
+
+`MIN_NUM_LIGH` is **not** in that number. It suppresses strikes outright until N
+of them have arrived, so every notch of it hides the events the device exists to
+report — it is pinned at 1 and neither the sweep nor the walk may spend it.
 
 Two arguments, both optional and positional:
 
 * **`s`** — seconds per probe, 5–60, default 60. A whole sweep is about
-  13 probes, so 60 s costs roughly fourteen minutes, once.
+  11 probes, so 60 s costs roughly twelve minutes, once.
 * **`/min`** — events per minute at or below which a window counts as **quiet**,
   0–240, default 12. **Stored in NVS**; omit it to keep the current one.
 
@@ -209,8 +213,8 @@ the asymmetry is deliberate:
 
 | Window | What happens |
 |---|---|
-| `<= threshold` | relax **one** notch — refunding `MIN_NUM_LIGH` first, `NF_LEV` last |
-| `> threshold` | tighten `rate / threshold` notches — spending `NF_LEV` first, `MIN_NUM_LIGH` last |
+| `<= threshold` | relax **one** notch — refunding `SREJ` first, `NF_LEV` last |
+| `> threshold` | tighten `rate / threshold` notches — spending `NF_LEV` first, `SREJ` last |
 | contains a strike | **hold** — never escalate |
 
 Quick to defend, slow to relax. The proportional step is what lets it answer a
@@ -223,15 +227,22 @@ whatever you set for the room.
 The strike rule matters more than it looks. A nearby strike throws harmonics
 that arrive as disturbers, so a close storm looks like a noisy band to a counter
 that cannot tell them apart — and climbing on that would deafen the device at
-the one moment it exists for, with each notch of `MIN_NUM_LIGH` hiding the
-strikes that follow. You will see `tune: holding at ...` on the console when
-this fires.
+the one moment it exists for. You will see `tune: holding at ...` on the console
+when this fires.
+
+**It has now been watched doing its job.** Through the storm of 2026-08-12 the
+band ran at 208–299/min against a 120/min threshold — enough to climb one to two
+notches every minute — and every window containing a strike held instead, keeping
+the point at `0/2047 (0%)` for three and a half hours while 909 strikes were
+recorded. The risk it does *not* cover is the run-up: a storm throws disturbers
+ahead of itself, and a tuner that climbs on those is deaf before the first strike
+arrives, so the rule never arms. That is what `sensitive on` is for.
 
 **`defence <raw>` skips the sweep** when you already know the answer for a room.
 `0` is fully receptive; higher is deafer. A device that has never calibrated
 starts mid-range on the two volume knobs (`NF_LEV`, `WDTH`) with spike rejection
-and min strikes at their most sensitive — neither of those is a volume control,
-so neither is pre-set to a guess.
+at its most sensitive — spike rejection is not a volume control, so it is not
+pre-set to a guess.
 
 **`sensitive on` opens every knob and freezes the auto-tune**, because otherwise
 the first disturber climbs straight back off it. Expect a lot of disturbers —

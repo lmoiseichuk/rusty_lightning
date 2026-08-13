@@ -311,11 +311,11 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 ### 4.1 Indoor/outdoor
 Set the AFE gain at startup (`0x24` indoor / `0x1C` outdoor). Selectable via config.
 
-### 4.2 Noise-floor auto-tune — one packed 13-bit point
+### 4.2 Noise-floor auto-tune — one packed 11-bit point
 Asymmetric, per the reference: **any** disturber/noise IRQ in the ~1 s processing batch → **+1
 immediately**; **60 s with no events** → **−1**. Quick to defend, slow to relax.
 
-> #### ⚠⚠⚠ AS BUILT: the ladder is gone — the four registers are one 13-bit number
+> #### ⚠⚠⚠ AS BUILT: the ladder is gone — the three registers are one 11-bit number
 >
 > Everything below this block is the history of a state machine that no longer exists. It is kept
 > because the *arguments* in it are still the arguments — what each register costs, and why the
@@ -331,25 +331,32 @@ immediately**; **60 s with no events** → **−1**. Quick to defend, slow to re
 > come back. Two units were suspected and one was replaced before the fault was found to be
 > configuration, both times.
 >
-> The fix was not to flip the sign. The four registers are bit fields in two bytes, so the entire
-> tunable state is 13 bits:
+> The fix was not to flip the sign. The registers are bit fields in two bytes, so the entire
+> tunable state is 11 bits:
 >
 > ```
->   bit  12 11 10 | 9  8  7  6 | 5  4  3  2 | 1  0
->        NF_LEV   |    WDTH    |    SREJ    | MIN_NUM_LIGH
->        (3 bits) |  (4 bits)  |  (4 bits)  |  (2 bits)
+>   bit  10  9  8 | 7  6  5  4 | 3  2  1  0
+>        NF_LEV   |    WDTH    |    SREJ
+>        (3 bits) |  (4 bits)  |  (4 bits)
 > ```
 >
-> **Ordering is free, because binary search resolves high bits first.** A bisection over 0..=8191
-> probes 4096 first, which is a decision about `NF_LEV` alone; the last probes decide the bottom two
-> bits. So the one knob that cannot reject a strike is settled coarsely up front, and the one that
+> **`MIN_NUM_LIGH` left the space entirely**, which is what took the point from 13 bits to 11. It is
+> not a volume control: it suppresses strikes outright until N of them arrive, so every notch of it
+> hides the very events the device exists to report. It is pinned at 1 — report every strike — and
+> the tuner is not allowed to spend it.
+>
+> **Ordering is free, because binary search resolves high bits first.** A bisection over 0..=2047
+> probes 1024 first, which is a decision about `NF_LEV` alone; the last probes decide `SREJ`'s
+> bottom bits. So the one knob that cannot reject a strike is settled coarsely up front, and the one that
 > can silence a storm moves last and least — the exact property the cursor, the per-register strides,
 > the mixed-radix position and the never-retreat rule were all built to enforce by hand. All four are
 > deleted. So is the original bug: the fields **are** the register values, so there is no second
 > convention left to disagree with.
 >
-> A full sweep is **13 probes** rather than hundreds, which is what makes a 60 s probe window
-> affordable. Measured on this board three times:
+> A full sweep is **11 probes** rather than hundreds, which is what makes a 60 s probe window
+> affordable. Measured on this board three times (before `MIN_NUM_LIGH` left the space, so the
+> `min strikes` column below records what those sweeps chose rather than what a sweep can still
+> change):
 >
 > | sweep | probe window | settled | min strikes |
 > |---|---|---|---|
@@ -505,6 +512,30 @@ immediately**; **60 s with no events** → **−1**. Quick to defend, slow to re
 Per lightning strike collect `distance`, `intensity`, `score`. Estimate the situation from the trend:
 coming in (distance ↓), moving out (distance ↑), stronger (same distance, higher intensity), weaker,
 **aggravating** (closer *and* higher score), **fading** (farther, lower score).
+
+> #### ⚠⚠ AS BUILT (0.6.0): the sensor's own statistics are cleared at storm end
+>
+> The AS3935 does not estimate distance from one strike. It accumulates statistics over a storm and
+> reports the distance to the storm *head*, and `CL_STAT` — register `0x02` bit 6, edge-triggered
+> high–low–high — is the only way to discard them. `As3935::clear_statistics` implemented that
+> correctly and **nothing called it until 0.6.0**: the only occurrence of the name in the source was
+> its own definition, carrying `#[allow(dead_code)]` and a comment saying it was waiting for this
+> section to be built.
+>
+> **A reboot is not a substitute.** `find` issues `PRESET_DEFAULT`, which restores registers; the
+> datasheet treats clearing the statistics as a separate operation. So the estimator accumulated
+> from the sensor's first power-on onward, through every power cycle since.
+>
+> `session::StormWatch` steps once per tuner window and clears after **thirty consecutive windows
+> with no new strike** — thirty because that is the public-safety rule for calling a storm over, so
+> the number is borrowed rather than invented. A bus error deliberately does not mark the lull
+> handled, so the next window retries rather than recording a success that did not happen.
+>
+> **Whether this is what pinned every strike of 2026-08-12 in the nearest bin (§9 item 6) is
+> unproven.** The chip's accumulator cannot be read, so the mechanism is inferred from an operation
+> that is documented as necessary and had never run. The next storm is the test: if distances start
+> varying, that was it; if they do not, the cause is elsewhere and this remains a real fix for a
+> different problem — the first strike of each storm being judged against the last one's weather.
 
 - **Thresholds are placeholders to calibrate in the final enclosure** — breadboard vs. enclosed
   sensitivity differs, so expose the band/hysteresis limits as config constants and tune on-site
@@ -880,24 +911,45 @@ than applied unconditionally: an always-frugal build is an unflashable one.
    than wrapping: that is the only choice that cannot lose data already recorded, and at ~40 000
    records the question is years away. Note the charts self-clean (24 h / 7 d / 30 d windows) while
    the file does not.
-6. **A real strike** — *still open, and now the only thing left to prove.* Everything below
-   `Interrupt::Lightning` has run only on synthetic input. A piezo lighter cannot provoke one — the
-   AS3935 validates a waveform against a lightning signature, so a spark raises a *disturber* by
-   design, which is the chip working correctly. Hence the `strike` console command; hence also that
-   the chip's own classification remains unverified.
+6. **A real strike** — ***answered, 2026-08-12: 909 of them in three and a half hours.*** Everything
+   below `Interrupt::Lightning` has now run on real lightning rather than on synthetic input, and
+   the three defects found while chasing this — the 100 kHz bus harmonic on the 500 kHz passband
+   (§3); the auto-tune climbing into `WDTH`/`SREJ` (§4.2); the IRQ settle raised to 30 ms on a
+   misquotation (§8) — are validated against weather rather than against reasoning, which is what
+   this item existed to ask for.
 
-   **Three defects were found and fixed while chasing this, none of them confirmed to be the last
-   one.** In the order they mattered: the 100 kHz bus harmonic sitting on the 500 kHz passband (§3);
-   the auto-tune ladder climbing into `WDTH`/`SREJ` (§4.2); and the IRQ settle raised to 30 ms on a
-   misquotation (§8). Each was real, each is fixed, and **none has yet been validated against
-   lightning** — which is the same trap that produced the 30 ms change, so it is worth stating
-   plainly rather than assuming the problem is now solved.
-   
-   What *is* established: the sensor is electrically sound (self-test drives its LC tank and reads
-   499 kHz), the IRQ wire is confirmed, everything below the interrupt logs and renders correctly on
-   synthetic input, and the log now distinguishes injected records from real ones by a `simulated`
-   column — added because four historical records of unknown provenance made this very question
-   unanswerable from the device's own data.
+   **The counts cross-check against the sky.** The device logged 4–9 strikes a minute while a flash
+   was audible outside every 10–30 s. A single flash carries three to four return strokes, so a
+   detector counting individual strokes *should* read a small multiple of the audible flash rate —
+   and it read a conservative one. That is an independent check that these are detections rather
+   than noise passing validation.
+
+   **§4.2's strike-hold rule is what kept it listening, and it was observed doing so.** At 208–299
+   events/min, far over the 120/min this room needs, the tuner would ordinarily have climbed one to
+   two notches a minute and deafened itself. Every window containing a strike held instead, pinning
+   the point wide open for the duration:
+
+   ```
+   tune: holding at 0/2047 (0%) -- 7 strike(s) this window, 208/min
+   ```
+
+   The failure mode it guards against is real and was avoided by a margin: a storm throws disturbers
+   ahead of itself, so a tuner that climbs on those is deaf before the first strike arrives, and the
+   hold rule can never arm.
+
+   **What is NOT established is the chip's distance estimate.** All 909 reported the nearest bin,
+   with no variation as the cell approached, sat overhead and departed, while thunder was audibly
+   5–10 km away. Inside that single bin the energy field spanned **243×** (2,126 to 515,563) at 49 %
+   of full scale — so the front end is neither saturating nor usable as a distance proxy, because
+   strike intensity varies more than distance does. The decode was checked against the reference
+   driver and is identical. The cause is believed to be §4.3's statistics, never cleared before
+   0.6.0; that is a hypothesis with a test attached, not a diagnosis.
+
+   Also established: the sensor is electrically sound (self-test drives its LC tank and reads
+   499 kHz), the IRQ wire is confirmed, and the log distinguishes injected records from real ones by
+   a `simulated` column — added because four historical records of unknown provenance made this very
+   question unanswerable from the device's own data. Those four are now identifiable in the log by
+   exactly that: they are the records with a kilometre distance and no provenance column at all.
 
 ---
 
@@ -907,7 +959,7 @@ than applied unconditionally: an always-frugal build is an unflashable one.
 2. ✅ I2C on GPIO6/7 → scan → confirm AS3935 @ 0x03; port the register driver.
 3. ✅ Wire IRQ — on **GPIO21 (D6)**, not GPIO20; ISR-notifies pattern; decode reason → distance and
    intensity on lightning.
-4. ✅ Storm logic + noise auto-tune (§4.2 — now one packed 13-bit point bisected in 13 probes; it was
+4. ✅ Storm logic + noise auto-tune (§4.2 — now one packed 11-bit point bisected in 11 probes; it was
    a 31-rung ladder, then 7, and the state machine in between had the sign inverted). Pure logic,
    host-tested.
 5. ✅ CSV logging on LittleFS; clock over the console rather than SNTP; **rings rebuilt from the file
