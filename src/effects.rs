@@ -219,13 +219,18 @@ pub fn handle(
                 // saved it, `mode` did not. A reset during an overhead storm
                 // silently restored the gain the *button* had last chosen,
                 // which is the one setting that was actually mattering.
-                Ok(()) => match settings::store_location(*rt.location) {
-                    Ok(()) => println!("mode: {} gain applied (saved)", rt.location.label()),
-                    Err(e) => println!(
-                        "mode: {} gain applied but NOT saved -- {e}",
-                        rt.location.label()
-                    ),
-                },
+                Ok(()) => {
+                    // Same reason as the button's path: a gain change rescales
+                    // every energy the distance estimate was built from.
+                    session::restart_statistics(hw.sensor, hw.i2c, "gain changed");
+                    match settings::store_location(*rt.location) {
+                        Ok(()) => println!("mode: {} gain applied (saved)", rt.location.label()),
+                        Err(e) => println!(
+                            "mode: {} gain applied but NOT saved -- {e}",
+                            rt.location.label()
+                        ),
+                    }
+                }
                 Err(e) => println!("mode: could not apply -- {e}"),
             }
         }

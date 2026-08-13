@@ -754,6 +754,11 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
     }
     *location = next;
 
+    // Indoor gain is ~4x outdoor, so every energy figure already accumulated
+    // was measured on a different scale and the distance estimate built from
+    // them is now describing a receiver that no longer exists.
+    restart_statistics(sensor, i2c, "gain changed");
+
     match settings::store_location(next) {
         Ok(()) => println!("btn:  switched to {} (saved)", next.label()),
         // Worth saying out loud rather than swallowing: the device is running
@@ -774,6 +779,28 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
 /// **All four fields, every time.** The tuner and the search both move the
 /// packed number as a whole, and a carry changes fields that were not the
 /// obvious target of the step.
+/// Discard the sensor's distance statistics, saying why.
+///
+/// **The statistics describe the instrument that gathered them.** The AS3935
+/// estimates distance from the energies of recent strikes, so anything that
+/// changes what those energies *mean* invalidates the entire accumulation. A
+/// gain change rescales every one of them; a jump in the rejection point
+/// changes which population of events is being averaged at all; and a
+/// calibration sweep deliberately mis-sets the receiver eleven times in a row.
+/// Carrying figures across any of those is averaging two different instruments.
+///
+/// **Deliberately not called from the ±1 walk.** One notch a minute barely
+/// moves the receiver and does not move the storm, and clearing on every step
+/// would mean the estimator never accumulated enough to say anything — which
+/// is the failure this whole mechanism exists to prevent, arrived at from the
+/// other direction.
+pub fn restart_statistics(sensor: &As3935, i2c: &mut I2cDriver<'_>, why: &str) {
+    match sensor.clear_statistics(i2c) {
+        Ok(()) => println!("as:   distance statistics cleared -- {why}"),
+        Err(e) => println!("as:   could not clear distance statistics ({why}) -- {e}"),
+    }
+}
+
 pub fn apply(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
@@ -802,6 +829,7 @@ pub fn force_max_sensitivity(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
+    restart_statistics(sensor, i2c, "sensitivity override");
     apply(sensor, i2c, defence::Point::OPEN)
 }
 

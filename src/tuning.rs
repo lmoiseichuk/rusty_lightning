@@ -208,6 +208,9 @@ impl Tuning {
     ) {
         let tested = self.point;
         let events = self.events;
+        // Each probe is a different receiver, so the previous probe's figures
+        // cannot describe this one.
+        session::restart_statistics(sensor, i2c, "next probe");
         let (finished, next) = match self.sweep.as_mut() {
             None => return,
             Some(active) => {
@@ -393,6 +396,10 @@ impl Tuning {
             started.remaining()
         );
         self.point = started.point();
+        // The sweep deliberately mis-sets the sensor while it searches, so
+        // everything the estimator holds was gathered by a receiver the next
+        // eleven probes will not resemble.
+        session::restart_statistics(sensor, i2c, "calibration started");
         if let Err(e) = session::apply(sensor, i2c, self.point) {
             println!("cal:  could not program the first probe -- {e}");
         }
@@ -405,6 +412,9 @@ impl Tuning {
     /// the sweep.
     pub fn place(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, raw: u16, now_ms: u32) {
         self.point = defence::Point::new(raw);
+        // A jump rather than a ±1 step: the population of events feeding the
+        // estimate changes with it.
+        session::restart_statistics(sensor, i2c, "point set by hand");
         match session::apply(sensor, i2c, self.point) {
             Ok(()) => println!(
                 "def:  set to {}/{} ({}%) -- {}",
@@ -425,6 +435,7 @@ impl Tuning {
     pub fn open(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, now_ms: u32) -> Result<(), esp_idf_hal::sys::EspError> {
         self.point = defence::Point::OPEN;
         self.restart(now_ms);
+        session::restart_statistics(sensor, i2c, "sensitivity override lifted");
         session::apply(sensor, i2c, self.point)
     }
 

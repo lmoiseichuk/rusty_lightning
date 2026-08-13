@@ -124,6 +124,10 @@ pub fn configure(
         }
     };
     session::apply(sensor, i2c, point)?;
+    // `reset` issues PRESET_DEFAULT, which restores registers -- the datasheet
+    // treats discarding the statistics as a separate operation, so until this
+    // line no power cycle in the device's life had ever cleared them.
+    session::restart_statistics(sensor, i2c, "boot");
 
     println!(
         "as:   {}, {} pF, defence {}/{} ({}%), report after {} strike(s)",
