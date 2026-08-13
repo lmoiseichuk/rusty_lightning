@@ -286,9 +286,19 @@ fn parse(line: &str) -> Command {
         "dump" => Command::Dump,
         "clear" => Command::Clear,
 
+        // **`arg2`, not `parts.next()`.** The iterator was already advanced past
+        // both arguments when `arg` and `arg2` were bound, so asking it for
+        // another token returned a third that is never there -- and the
+        // intensity silently fell back to its default on every injection. The
+        // command took the argument, printed a strike, and ignored what it was
+        // told: `strike 5 3000` and `strike 5 9000` produced identical records.
+        //
+        // It hid because the default is plausible and nothing cross-checked it.
+        // Found by merging two injections with different intensities and
+        // watching the summed energy come out as twice the default.
         "strike" => Command::Simulate(
             arg.and_then(|v| v.parse::<u8>().ok()).unwrap_or(8),
-            parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(4000),
+            arg2.and_then(|v| v.parse::<u32>().ok()).unwrap_or(4000),
         ),
 
         _ => Command::Unknown,
