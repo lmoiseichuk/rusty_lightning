@@ -14,7 +14,7 @@
 
 use core::fmt::Write as _;
 
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_8X13, FONT_9X15};
+use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_8X13, FONT_9X15, FONT_9X15_BOLD};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
@@ -734,11 +734,6 @@ fn stats(frame: &mut Display7in5, s: &Status<'_>) {
     stat(frame, Point::new(16 + COLUMN * 3, TOP), "mean distance", &distance);
 }
 
-/// Left edge of the right-hand half, and the width of each half.
-///
-/// The panel splits at x=400 with a 16 px gutter, so the chart owns 16..392 and
-/// the table 408..784 — 376 px each, both inside the 16 px margins.
-const HALF: i32 = 376;
 /// 437: the columns total 318 px in a 376 px half, centred, so 29 px sit
 /// either side rather than all 58 piling up after the last column.
 const RIGHT_HALF: i32 = 437;
@@ -1072,11 +1067,21 @@ fn time_axis(
         // The newest edge needs no label -- it is "now" and the chart says so.
         if ticks_back > 0 {
             let mark = period.tick_label(ticks_back as u32 * period.tick_minutes());
-            let _ = Text::with_alignment(
+            // **`Baseline::Top`, explicitly.** `with_alignment` defaults to the
+            // alphabetic baseline, so the label grew *upward* from `label_y`
+            // and its top half sat inside the plot it was labelling.
+            //
+            // Bold and 9x15 rather than 6x10: an hour is 60 px of gridline
+            // spacing and `-12h` is 36 px of that, so there is room for a label
+            // that can actually be read from across a room.
+            let _ = Text::with_text_style(
                 &mark,
                 Point::new(x, label_y),
-                MonoTextStyle::new(&FONT_6X10, INK),
-                Alignment::Center,
+                MonoTextStyle::new(&FONT_9X15_BOLD, INK),
+                TextStyleBuilder::new()
+                    .alignment(Alignment::Center)
+                    .baseline(Baseline::Top)
+                    .build(),
             )
             .draw(frame);
         }
@@ -1095,9 +1100,9 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
     // 180 rather than 176, which puts the title's baseline at 172 and lines it
     // up with the table header opposite instead of sitting 4 px proud of it.
     const TOP: i32 = 180;
-    /// Stretched to 252: the axis labels then run 436..446 and leave 6 px above
-    /// the footer rule, where 216 left a 46 px band doing nothing.
-    const HEIGHT: u32 = 252;
+    /// 247: the axis labels below are now 15 px rather than 10, so they run
+    /// 431..446 and still clear the footer rule at 452 by 6.
+    const HEIGHT: u32 = 247;
     /// 5 px a bar. At the fine ring's 5-minute buckets that is 75 bars in the
     /// 376 px half — **6h15m**, where an hour was the requirement. Wider bars
     /// read better across a room than a longer span nobody can resolve.
@@ -1106,7 +1111,11 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
 
     // The newest buckets that fit, not the whole ring. A 24 h ring at 5 px a
     // bar would be 1440 px wide; windowing is what lets the bar stay legible.
-    let fits = (HALF / BAR) as usize;
+    // 400 px, not the 376 of a strict half: the table opposite starts at 437,
+    // so the chart can run to 416 and leave a 21 px gutter. 80 bars rather than
+    // 75 -- 6h40m instead of 6h15m, for free.
+    const CHART_W: i32 = 400;
+    let fits = (CHART_W / BAR) as usize;
     let series = s.chart_scores;
     let window = &series[series.len().saturating_sub(fits)..];
 
@@ -1124,7 +1133,7 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
     chart(
         frame,
         Point::new(left, TOP),
-        HALF,
+        CHART_W,
         HEIGHT,
         window.iter().copied(),
         BAR,
