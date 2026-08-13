@@ -248,6 +248,90 @@ fn read_and_handle(
 }
 
 
+/// §4.3's storm-end detection: the caller [`As3935::clear_statistics`] waited for.
+///
+/// The sensor's distance estimate is built from statistics over a storm, and it
+/// has no idea when one ends. Left alone it carries the last storm's figures
+/// into the next one, and this firmware never told it otherwise — so the
+/// estimator has been accumulating since the board was first switched on.
+///
+/// **Counted in windows rather than milliseconds** so it shares the tuner's
+/// clock. One window is `crate::tuning::MEASURE_INTERVAL_S`; the caller steps
+/// this once per window, and the definition of "quiet" is simply that the
+/// cumulative strike count did not move.
+///
+/// Thirty minutes because that is the rule everyone else already uses: the
+/// public safety guidance is to wait thirty minutes after the last thunder
+/// before calling a storm over. Borrowing it means the number is defensible
+/// rather than invented, and a cell that goes quiet for half an hour and comes
+/// back is a new storm by any reading.
+pub struct StormWatch {
+    /// Cumulative strikes as of the last window boundary.
+    seen: u32,
+    /// Consecutive windows in which `seen` did not move.
+    quiet_windows: u32,
+    /// Whether this lull has already been acted on.
+    ///
+    /// Without it a week of fine weather would re-clear every minute — harmless
+    /// on the wire, but it would bury the console line that says the clear
+    /// happened, and that line is the only evidence the mechanism ran.
+    cleared: bool,
+}
+
+/// Quiet windows before the statistics are discarded. One window is a minute.
+pub const STORM_END_QUIET_WINDOWS: u32 = 30;
+
+impl Default for StormWatch {
+    fn default() -> Self {
+        Self {
+            seen: 0,
+            quiet_windows: 0,
+            // Starts `true` so a board that boots into fine weather does not
+            // announce a storm ending that never happened. A real strike clears
+            // the flag, which is what arms the detector.
+            cleared: true,
+        }
+    }
+}
+
+impl StormWatch {
+    /// One window's worth of storm-end bookkeeping.
+    ///
+    /// Takes the cumulative total rather than a per-window count so it needs
+    /// nothing from the tuner, whose own counters are reset inside its step.
+    pub fn step(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, strikes_total: u32) {
+        if strikes_total != self.seen {
+            self.seen = strikes_total;
+            self.quiet_windows = 0;
+            self.cleared = false;
+            return;
+        }
+
+        if self.cleared {
+            return;
+        }
+
+        self.quiet_windows += 1;
+        if self.quiet_windows < STORM_END_QUIET_WINDOWS {
+            return;
+        }
+
+        match sensor.clear_statistics(i2c) {
+            Ok(()) => {
+                self.cleared = true;
+                println!(
+                    "as:   {} min without a strike -- distance statistics cleared",
+                    STORM_END_QUIET_WINDOWS
+                );
+            }
+            // Deliberately not marking it cleared: a bus error here means the
+            // chip still holds the old storm, so the next window should try
+            // again rather than record a success that did not happen.
+            Err(e) => println!("as:   could not clear distance statistics -- {e}"),
+        }
+    }
+}
+
 /// Record one strike: counters, rings, log, console — in that order.
 ///
 /// **Shared by the real and simulated paths, which must stay behaviourally

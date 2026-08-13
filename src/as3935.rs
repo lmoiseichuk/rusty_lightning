@@ -452,16 +452,23 @@ impl As3935 {
 
     /// Discard the accumulated distance estimate.
     ///
-    /// Not on the wake path yet: it belongs to §4.3's storm-end detection,
-    /// which is unbuilt. Kept rather than deleted because it is a complete,
-    /// correct operation waiting for a caller — not a stub standing in for one.
-    #[allow(dead_code)]
-    ///
     /// The AS3935 estimates distance from statistics gathered over a *storm*,
     /// not from a single strike — so the figure is only meaningful while the
     /// strikes it was built from belong to the same weather. When a storm has
     /// clearly ended, those statistics describe weather that is no longer there
     /// and will bias the first strike of the next one.
+    ///
+    /// **Called from `crate::session::StormWatch`, and it was not called until
+    /// 0.6.0.** A device left running reported the nearest bin for every strike
+    /// of a whole storm — 909 of them, with no variation as the cell approached,
+    /// sat overhead and departed — while the same sensor driven from short-lived
+    /// scripts produced a normal spread of kilometres. Short-lived scripts get a
+    /// fresh estimator on every launch; this firmware runs for days.
+    ///
+    /// Note [`As3935::reset`] is **not** a substitute. `PRESET_DEFAULT` restores
+    /// registers, and the datasheet treats clearing the statistics as a separate
+    /// operation — so rebooting the board does not do this, and nothing else
+    /// ever did.
     ///
     /// Cleared by toggling `CL_STAT` high–low–high, which is the datasheet's
     /// sequence and not a mistake in the reference: the bit is edge-triggered,

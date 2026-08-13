@@ -16,7 +16,7 @@ use esp_idf_hal::i2c::I2cDriver;
 use esp_idf_hal::task::notification::Notification;
 
 use crate::as3935::{As3935, Location};
-use crate::session::{collect, report, toggle_location, Batch, Drawn, Totals};
+use crate::session::{collect, report, toggle_location, Batch, Drawn, StormWatch, Totals};
 use crate::{
     battery, boot, clock, console, defence, display, effects, history, log, power, screen,
     session, system, tuning,
@@ -125,6 +125,7 @@ pub fn listen(
         Err(e) => println!("pm:   could not apply {} -- {e}", policy.label()),
     }
     let mut tuning = tuning::Tuning::new(start_point, now_ms());
+    let mut storm_watch = StormWatch::default();
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -339,6 +340,20 @@ pub fn listen(
         tuning.observe(&batch);
 
         if tuning.due(now_ms()) {
+            // --- §4.3's storm end -----------------------------------------
+            //
+            // Shares the tuner's window rather than keeping a clock of its
+            // own, and goes first because `tuning.step` restarts the window it
+            // has just judged. It reads the cumulative total, so it does not
+            // care that the tuner is about to zero its own counters.
+            //
+            // One wrinkle worth knowing: a `calibrate` sweep sets its own probe
+            // length, so during a sweep these windows are shorter than a minute
+            // and the thirty of them are correspondingly shorter. A sweep only
+            // runs on command and takes a quarter of an hour, so the effect is
+            // to notice a storm ending slightly early, once, while someone is
+            // watching.
+            storm_watch.step(sensor, i2c, totals.strikes);
             tuning.step(sensor, i2c, &mut totals, now_ms());
         }
 
