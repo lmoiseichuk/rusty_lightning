@@ -154,6 +154,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | Command | What it does |
 |---|---|
 | `battery` | force a fresh gauge read — voltage, charge, and the `%/hr` rate |
+| `clearstats` | discard the sensor's accumulated distance estimate and rebuild from the next strikes |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the four register fields |
 | `defence <raw>` | set the tuning point by hand, 0–2047. `0` is fully receptive |
@@ -254,6 +255,21 @@ the point at `0/2047 (0%)` for three and a half hours while 909 strikes were
 recorded. The risk it does *not* cover is the run-up: a storm throws disturbers
 ahead of itself, and a tuner that climbs on those is deaf before the first strike
 arrives, so the rule never arms. That is what `sensitive on` is for.
+
+**`clearstats` is the only way to say "re-estimate from here"** without changing
+anything else. The AS3935 builds its distance figure from the energies of recent
+strikes, so it describes a receiver *and* a storm; every other reset is a side
+effect of changing the gain, the point or the sensitivity, each of which alters
+what is being measured as well as what is remembered.
+
+Reach for it when the distance stops moving — a run of `nearby < 5 km` while the
+thunder is plainly getting further away. The firmware does this itself at boot,
+at storm end, on any gain or point change, and after three nearest-bin readings
+in a row; this is the manual door for the cases none of those cover.
+
+Note what `closest` actually means before concluding it is stuck: it is the
+**minimum over the last hour**, not the current distance. A storm that has moved
+off keeps it at `nearby < 5 km` for an hour afterwards, correctly.
 
 **`merge` decides whether the log counts flashes or strokes.** One flash is
 normally three to four return strokes down the same channel, tens to hundreds of

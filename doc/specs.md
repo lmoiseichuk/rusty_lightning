@@ -531,11 +531,39 @@ coming in (distance ↓), moving out (distance ↑), stronger (same distance, hi
 > the number is borrowed rather than invented. A bus error deliberately does not mark the lull
 > handled, so the next window retries rather than recording a success that did not happen.
 >
-> **Whether this is what pinned every strike of 2026-08-12 in the nearest bin (§9 item 6) is
-> unproven.** The chip's accumulator cannot be read, so the mechanism is inferred from an operation
-> that is documented as necessary and had never run. The next storm is the test: if distances start
-> varying, that was it; if they do not, the cause is elsewhere and this remains a real fix for a
-> different problem — the first strike of each storm being judged against the last one's weather.
+> **Cleared at every discontinuity, not just at storm end (0.8.0).** The statistics describe the
+> instrument that gathered them, so anything changing what the energies *mean* invalidates the whole
+> accumulation: boot, a gain change (indoor is ~4× outdoor, so every stored figure was measured on a
+> different scale), the start of a calibration sweep and each of its probes, a point set by hand, and
+> the sensitivity override going on or coming off. Not the ±1 walk — one notch a minute barely moves
+> the receiver and does not move the storm, and clearing on every step would leave the estimator with
+> nothing to estimate from.
+>
+> **A run of nearest-bin readings also resets it (0.8.1).** Three in a row is ambiguous in a way no
+> single reading can resolve — the storm is overhead, or the estimator has stopped tracking — and a
+> false trigger is free: if the cell really is overhead the estimate rebuilds and says so again. It
+> fires **once per run** and re-arms only on a kilometre reading, because a plain counter would clear
+> every third strike of a genuinely overhead cell, and because a freshly cleared estimator has no
+> data, so falling back to the nearest bin would cause the very condition that triggers clearing.
+>
+> #### ⚠ What 2026-08-13 did and did not establish
+>
+> **Weaker evidence than it first appeared.** Of 27 strikes, **three** reported a kilometre figure
+> and 24 the nearest bin. The three fell in a 70-second window (16:06:52–16:08:02) directly after a
+> boot cleared the statistics; everything from 16:08:22 onward was `overhead`.
+>
+> That is consistent with "clearing works, then the estimate saturates within a few strikes" — and
+> equally consistent with the estimate simply being **correct**, because the cell was overhead for
+> most of that hour: visible, at a five-second pace, and confirmed from outside. The two cannot be
+> separated from this record.
+>
+> What remains genuinely unexplained is 2026-08-12: 917 consecutive nearest-bin readings while the
+> thunder was delayed 15–30 s, which is 5–10 km. That is the anomaly the clearing was written for,
+> and it is still the thing a future storm has to confirm.
+>
+> **One misreading to avoid**, recorded because it wasted time: `closest` on the screen and in
+> `status` is the **minimum over the last hour**, not the current distance. A receding storm keeps
+> reporting `nearby < 5 km` for an hour afterwards and is right to.
 
 > #### ⚠⚠ AS BUILT (0.7.0): strokes are merged into flashes
 >
@@ -978,6 +1006,25 @@ than applied unconditionally: an always-frugal build is an unflashable one.
    The failure mode it guards against is real and was avoided by a margin: a storm throws disturbers
    ahead of itself, so a tuner that climbs on those is deaf before the first strike arrives, and the
    hold rule can never arm.
+
+   **2026-08-13 added a second storm, and a caution.** 27 strikes over an hour from a cell that was
+   *overhead* — visible, five-second pace — against 917 the night before from one at 5–10 km. The
+   detection rate collapsed by two orders of magnitude, and the two settings that recovered anything
+   were **outdoor gain** and leaving the auto-tune alone. That is §6's saturation warning in the
+   field: a strike close enough to see overloads the front end, fails the chip's waveform validation,
+   and is counted as a **disturber**. 103,000 disturbers in an afternoon were not noise — they were
+   the storm, arriving too strong to classify. So the instrument is at its worst directly underneath,
+   which is the opposite of the intuition, and no software lever fixes it: outdoor is the lowest gain
+   the AS3935 has.
+
+   **Three lessons about observability, all paid for the same afternoon.** `batch.strikes` was not
+   printed, so a decoded Lightning interrupt was invisible unless it survived all the way to a
+   record — which made "the chip is rejecting them" and "something downstream is losing them"
+   indistinguishable from the console. `mode` from the console did not persist, so a reset silently
+   restored the gain the *button* had last chosen. And two host processes reading one serial port
+   split the byte stream between them, which removed strike lines from the log and was twice
+   diagnosed as the firmware losing strikes. Only the first two were the device's fault; all three
+   cost the same hour.
 
    **What is NOT established is the chip's distance estimate.** All 909 reported the nearest bin,
    with no variation as the cell approached, sat overhead and departed, while thunder was audibly

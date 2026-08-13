@@ -80,6 +80,8 @@ pub enum Command {
     Calibrate(u32, u32),
     /// `defence` shows the point; `defence <raw>` sets it.
     Defence(Option<u16>),
+    /// `clearstats` — discard the sensor's accumulated distance statistics.
+    ClearStats,
     /// `merge` shows the strike-merge window; `merge <ms>` sets it (§4.3).
     /// `0` turns merging off, so every return stroke is its own record.
     Merge(Option<u32>),
@@ -249,6 +251,7 @@ fn parse(line: &str) -> Command {
         // Refused rather than defaulted, for the same reason `calibrate` refuses
         // a bad number: this one changes what the log means, and a typo that
         // silently fell back to a default would change it quietly.
+        "clearstats" | "cs" => Command::ClearStats,
         "merge" => match arg {
             None => Command::Merge(None),
             Some(value) => match value.parse::<u32>() {
@@ -328,6 +331,7 @@ pub fn print_help() {
     );
     println!("  calibrate [s] [/min]  bisect the whole space for the most sensitive quiet point");
     println!("  merge [ms]            strike-merge window; 0 logs every return stroke");
+    println!("  clearstats            discard the accumulated distance estimate");
     println!(
         "                        s    seconds per probe ({}-{}, default {}); ~13 probes",
         crate::session::CALIBRATE_PROBE_MIN_S,

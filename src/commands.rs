@@ -69,6 +69,8 @@ pub struct Effects {
     /// console command is pure, and one hardware command should not change that
     /// for all of them.
     pub sensitivity: Option<bool>,
+    /// Set by `clearstats`; the caller owns the bus, same as `regs`.
+    pub clear_statistics: bool,
     /// Set by `regs`; the caller owns the bus. Same reason as `sensitivity`.
     pub dump_registers: bool,
     /// `Some(indoor)` when `mode` was used.
@@ -296,6 +298,9 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Defence(None) => effects.show_point = true,
         Command::Defence(Some(raw)) => effects.set_point = Some(raw),
 
+        // A read of the sensor's state rather than a change to ours, so it
+        // goes to the caller like `regs` does -- `Ctx` has no bus by design.
+        Command::ClearStats => effects.clear_statistics = true,
         Command::Merge(None) => {
             let window_ms = ctx.totals.merger.window_ms();
             match window_ms {

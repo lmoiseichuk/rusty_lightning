@@ -234,6 +234,13 @@ pub fn handle(
                 Err(e) => println!("mode: could not apply -- {e}"),
             }
         }
+        if effects.clear_statistics {
+            // The one way to say "re-estimate from here" without perturbing the
+            // receiver. Every other reset is a side effect of changing the gain,
+            // the point or the sensitivity -- each of which changes what is
+            // being measured as well as what is remembered.
+            session::restart_statistics(hw.sensor, hw.i2c, "asked for");
+        }
         if effects.dump_registers {
             match hw.sensor.dump_registers(hw.i2c) {
                 Ok(r) => {
