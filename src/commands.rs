@@ -261,17 +261,28 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 ctx.totals.strikes, ctx.totals.disturbers
             );
             let hour = ctx.history.last_hour();
+            // **Overhead wins**, the same way it does on the screen -- see the
+            // matching branch in `ui.rs`. The flag exists so a reader can be
+            // told the closest classification there is, but this line went on
+            // testing `distance_km_min` alone, which overhead deliberately does
+            // not touch. A storm of 417 overhead strikes therefore reported
+            // `closest -`: the console saying "no idea how far" about the one
+            // reading that means directly above. Same data, two renderings, and
+            // only the screen had been fixed.
+            let closest = if hour.overhead {
+                "nearby < 5 km".to_string()
+            } else if hour.distance_km_min == u8::MAX {
+                "-".to_string()
+            } else {
+                format!("{} km", hour.distance_km_min)
+            };
             println!(
                 "status: last hour -- {} strikes, mean score {}, closest {}",
                 hour.strikes,
                 hour.mean_score_milli()
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".into()),
-                if hour.distance_km_min == u8::MAX {
-                    "-".to_string()
-                } else {
-                    format!("{} km", hour.distance_km_min)
-                }
+                closest
             );
             println!("status: antenna {} kHz, IRQ {}", ctx.antenna_khz,
                 if ctx.irq_confirmed { "confirmed" } else { "NOT CONFIRMED" });
