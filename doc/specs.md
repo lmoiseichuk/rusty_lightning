@@ -311,11 +311,11 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 ### 4.1 Indoor/outdoor
 Set the AFE gain at startup (`0x24` indoor / `0x1C` outdoor). Selectable via config.
 
-### 4.2 Noise-floor auto-tune — one packed 11-bit point
+### 4.2 Noise-floor auto-tune — one packed 7-bit point
 Asymmetric, per the reference: **any** disturber/noise IRQ in the ~1 s processing batch → **+1
 immediately**; **60 s with no events** → **−1**. Quick to defend, slow to relax.
 
-> #### ⚠⚠⚠ AS BUILT: the ladder is gone — the three registers are one 11-bit number
+> #### ⚠⚠⚠ AS BUILT: the ladder is gone — the two volume knobs are one 7-bit number
 >
 > Everything below this block is the history of a state machine that no longer exists. It is kept
 > because the *arguments* in it are still the arguments — what each register costs, and why the
@@ -335,25 +335,44 @@ immediately**; **60 s with no events** → **−1**. Quick to defend, slow to re
 > tunable state is 11 bits:
 >
 > ```
->   bit  10  9  8 | 7  6  5  4 | 3  2  1  0
->        NF_LEV   |    WDTH    |    SREJ
->        (3 bits) |  (4 bits)  |  (4 bits)
+>   bit   6  5  4 | 3  2  1  0
+>        NF_LEV   |    WDTH
+>        (3 bits) |  (4 bits)
 > ```
 >
-> **`MIN_NUM_LIGH` left the space entirely**, which is what took the point from 13 bits to 11. It is
-> not a volume control: it suppresses strikes outright until N of them arrive, so every notch of it
-> hides the very events the device exists to report. It is pinned at 1 — report every strike — and
-> the tuner is not allowed to spend it.
+> The gauge weights rescaled with it — 10/40 for `NF_LEV`/`WDTH` became **20/80**, so the two
+> survivors still span 0–100 % of harm rather than topping out at half.
 >
-> **Ordering is free, because binary search resolves high bits first.** A bisection over 0..=2047
-> probes 1024 first, which is a decision about `NF_LEV` alone; the last probes decide `SREJ`'s
-> bottom bits. So the one knob that cannot reject a strike is settled coarsely up front, and the one that
+> **Two registers have left the space**, taking the point from 13 bits to 7. Neither is a volume
+> control, and the tuner could damage the device's purpose with both — in opposite directions.
+>
+> `MIN_NUM_LIGH` suppresses strikes outright until N arrive, so every notch hides the very events the
+> device exists to report. Pinned at 1.
+>
+> `SREJ` rejects short man-made impulses and is the only knob that does. **The walk refunds the least
+> valuable field first, and by the sensitivity weighting that is SREJ** — so every quiet spell walked
+> it to zero, and at zero the chip validated an electric hammer on a neighbouring roof as lightning:
+> 503 false strikes in three and a half hours (§9 item 6). Now a *setting* — datasheet default 2,
+> `srej <0-15>` on the console, stored in NVS, written at boot and on change. `session::apply` does
+> not touch it, which is the actual fix: **what the tuner cannot write, it cannot spend.**
+>
+> #### ⚠⚠ The sweep could not have caught this, and that is a flaw in its objective
+>
+> `calibrate` searches for the most sensitive point that stays **quiet**. In a quiet room `sr 0`
+> scores perfectly, because a knob that rejects nothing has nothing to reject. **Quiet is not
+> correct** — a setting that admits every impulse and a setting that admits none both measure as
+> silent when the room is silent. Removing SREJ from the space stops this particular consequence; the
+> objective is still "minimise events", where what is wanted is "maximise true detections", and those
+> differ whenever the interference is intermittent. Unresolved.
+>
+> **Ordering is free, because binary search resolves high bits first.** A bisection over 0..=127
+> probes 64 first, which is a decision about `NF_LEV` alone; the last probes decide `WDTH`. So the one knob that cannot reject a strike is settled coarsely up front, and the one that
 > can silence a storm moves last and least — the exact property the cursor, the per-register strides,
 > the mixed-radix position and the never-retreat rule were all built to enforce by hand. All four are
 > deleted. So is the original bug: the fields **are** the register values, so there is no second
 > convention left to disagree with.
 >
-> A full sweep is **11 probes** rather than hundreds, which is what makes a 60 s probe window
+> A full sweep is **7 probes** rather than hundreds, which is what makes a 60 s probe window
 > affordable. Measured on this board three times (before `MIN_NUM_LIGH` left the space, so the
 > `min strikes` column below records what those sweeps chose rather than what a sweep can still
 > change):
@@ -981,12 +1000,44 @@ than applied unconditionally: an always-frugal build is an unflashable one.
    than wrapping: that is the only choice that cannot lose data already recorded, and at ~40 000
    records the question is years away. Note the charts self-clean (24 h / 7 d / 30 d windows) while
    the file does not.
-6. **A real strike** — ***answered, 2026-08-12: 909 of them in three and a half hours.*** Everything
-   below `Interrupt::Lightning` has now run on real lightning rather than on synthetic input, and
-   the three defects found while chasing this — the 100 kHz bus harmonic on the 500 kHz passband
-   (§3); the auto-tune climbing into `WDTH`/`SREJ` (§4.2); the IRQ settle raised to 30 ms on a
-   misquotation (§8) — are validated against weather rather than against reasoning, which is what
-   this item existed to ask for.
+6. **A real strike** — ***reopened on 2026-08-14, and the count is unknown.*** This item was marked
+   answered on the strength of 909 records in three and a half hours. It should not have been.
+
+   > #### ⚠⚠⚠ The device was reporting man-made impulses as lightning
+   >
+   > On 2026-08-14 it logged **503 strikes between 07:00 and 10:36 with no lightning within range** —
+   > confirmed from outside and against the public network. Roofers next door, electric hammers.
+   >
+   > The overnight records are **statistically indistinguishable** from them, and from the storm at
+   > 22:00 the night before that was directly observed:
+   >
+   > | period | n | energy median | gap median | gap CV |
+   > |---|---|---|---|---|
+   > | 22:00–00:00, observed real | 299 | 317,789 | 16 s | 1.04 |
+   > | 00:00–06:00 | 651 | 290,366 | 21 s | 1.12 |
+   > | 07:00–10:36, known false | 503 | 285,990 | 18 s | 0.96 |
+   >
+   > A coefficient of variation near 1.0 is Poisson — random arrivals — in every period including the
+   > one that was a hammer. **Nothing in the record distinguishes them**, so the log cannot be
+   > labelled, and the 909 from 2026-08-12 are in the same doubt.
+   >
+   > **The cause was a setting this project chose.** `SREJ` is the only knob that rejects short
+   > man-made impulses, and §4.2's relaxation refunds the least valuable field first — which by the
+   > sensitivity weighting is SREJ. Every quiet spell walked it to zero. Measured directly: setting
+   > `sr 8` by hand stopped the false strikes dead, none in five minutes where they had been arriving
+   > every 10–40 seconds, and the walk then refunded it 8→7→6→5→4 at one notch a minute.
+   >
+   > It also explains every `Overhead` reading without appeal to stale statistics: a hammer twenty
+   > metres away genuinely is inside the nearest bin.
+   >
+   > Fixed in 0.10.0 — SREJ left the tuning space (§4.2). What this item now needs is a storm whose
+   > records can be **labelled**, which means §9's Blitzortung cross-reference rather than another
+   > count.
+
+   The three defects found while chasing a first strike — the 100 kHz bus harmonic on the 500 kHz
+   passband (§3); the auto-tune climbing into `WDTH`/`SREJ` (§4.2); the IRQ settle raised to 30 ms on
+   a misquotation (§8) — were each real and each is fixed. None of them is validated by a record that
+   might not be lightning.
 
    **The counts cross-check against the sky.** The device logged 4–9 strikes a minute while a flash
    was audible outside every 10–30 s. A single flash carries three to four return strokes, so a
@@ -1048,7 +1099,7 @@ than applied unconditionally: an always-frugal build is an unflashable one.
 2. ✅ I2C on GPIO6/7 → scan → confirm AS3935 @ 0x03; port the register driver.
 3. ✅ Wire IRQ — on **GPIO21 (D6)**, not GPIO20; ISR-notifies pattern; decode reason → distance and
    intensity on lightning.
-4. ✅ Storm logic + noise auto-tune (§4.2 — now one packed 11-bit point bisected in 11 probes; it was
+4. ✅ Storm logic + noise auto-tune (§4.2 — now one packed 7-bit point bisected in 7 probes; it was
    a 31-rung ladder, then 7, and the state machine in between had the sign inverted). Pure logic,
    host-tested.
 5. ✅ CSV logging on LittleFS; clock over the console rather than SNTP; **rings rebuilt from the file

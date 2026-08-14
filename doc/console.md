@@ -155,9 +155,10 @@ echo "date $(date +%s)" > /dev/ttyACM0
 |---|---|
 | `battery` | force a fresh gauge read — voltage, charge, and the `%/hr` rate |
 | `clearstats` | discard the sensor's accumulated distance estimate and rebuild from the next strikes |
+| `srej [0-15]` | spike rejection. **`0` reports man-made impulses as lightning** — see below |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the four register fields |
-| `defence <raw>` | set the tuning point by hand, 0–2047. `0` is fully receptive |
+| `defence <raw>` | set the tuning point by hand, 0–127. `0` is fully receptive |
 | `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
 | `sensitive on\|off` | every rejection knob wide open, with the auto-tune frozen |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
@@ -181,22 +182,24 @@ saturate the front end, fail the chip's waveform validation, and be reported as
 a disturber — so when a near storm produces disturbers and no strikes, *less*
 gain is the thing to try.
 
-**`calibrate` is the one worth understanding.** The three noise-rejection
-registers are bit fields in two bytes, so the whole tunable state is one 11-bit
-number, 0–2047 — and the bisection over it is **11 probes**, not hundreds. The
-layout puts `NF_LEV` in the top bits and `SREJ` in the bottom four, which
-matters because binary search resolves high bits first: the knob that cannot
-reject a strike is decided in the first few probes, and the finer ones are
-decided last.
+**`calibrate` is the one worth understanding.** The two noise-rejection registers
+still in the search are bit fields in one byte, so the whole tunable state is one
+7-bit number, 0–127 — and the bisection over it is **7 probes**, not hundreds.
+`NF_LEV` holds the top bits, so binary search decides the knob that cannot reject
+a strike first, and the watchdog last.
 
-`MIN_NUM_LIGH` is **not** in that number. It suppresses strikes outright until N
-of them have arrived, so every notch of it hides the events the device exists to
-report — it is pinned at 1 and neither the sweep nor the walk may spend it.
+**Two registers are deliberately not in that number**, and for opposite reasons.
+`MIN_NUM_LIGH` suppresses strikes until N have arrived, hiding the events the
+device exists to report; it is pinned at 1. `SREJ` rejects short man-made
+impulses and is the only knob that does — while it was in the space the walk
+refunded it first on every quiet spell, and at zero the sensor reported an
+electric hammer next door as lightning, 503 times in one morning. It is a
+setting now: see `srej`.
 
 Two arguments, both optional and positional:
 
 * **`s`** — seconds per probe, 5–60, default 60. A whole sweep is about
-  11 probes, so 60 s costs roughly twelve minutes, once.
+  7 probes, so 60 s costs roughly seven minutes, once.
 * **`/min`** — events per minute at or below which a window counts as **quiet**,
   0–240, default 60. **Stored in NVS**; omit it to keep the current one.
 
@@ -270,6 +273,25 @@ in a row; this is the manual door for the cases none of those cover.
 Note what `closest` actually means before concluding it is stuck: it is the
 **minimum over the last hour**, not the current distance. A storm that has moved
 off keeps it at `nearby < 5 km` for an hour afterwards, correctly.
+
+**`srej` is the difference between a lightning detector and an impulse
+counter.** It rejects short man-made transients on waveform shape, and nothing
+else in the chip does. It used to be part of the tuning point, where §4.2's
+relaxation — which refunds the least valuable register first — walked it to zero
+on every quiet spell. On 2026-08-14 that produced **503 "strikes" between 07:00
+and 10:36 from roofers next door with electric hammers**, with no lightning
+within range, statistically indistinguishable from a real storm.
+
+It is a setting now, defaulting to the datasheet's 2, stored in NVS and written
+at boot. Raise it if the log fills during obvious local work — construction, a
+failing appliance, anything impulsive — and remember that every notch also costs
+real detections, so raise it only as far as it needs to go.
+
+```
+srej          report the current level
+srej 2        the datasheet default
+srej 8        measured here as enough to silence an electric hammer entirely
+```
 
 **`merge` decides whether the log counts flashes or strokes.** One flash is
 normally three to four return strokes down the same channel, tens to hundreds of
