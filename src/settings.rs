@@ -27,6 +27,7 @@ const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
 const KEY_DEFENCE: &[u8] = b"defence3\0";
 const KEY_QUIET: &[u8] = b"quiet\0";
 const KEY_MERGE: &[u8] = b"merge_ms\0";
+const KEY_SREJ: &[u8] = b"srej\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -188,6 +189,23 @@ pub fn quiet_per_min() -> Option<u32> {
 pub fn store_quiet_per_min(rate: u32) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u32(KEY_QUIET, rate)?;
+    nvs.commit()
+}
+
+/// Spike rejection, 0..=15.
+///
+/// A setting rather than part of the tuning point: see
+/// [`crate::defence::SPIKE_REJECTION_DEFAULT`] for what it cost to have the
+/// tuner able to spend it. `None` on a device never told.
+pub fn spike_rejection() -> Option<u8> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    Some(nvs.get_u32(KEY_SREJ)? as u8)
+}
+
+/// Persist the spike rejection level.
+pub fn store_spike_rejection(level: u8) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_SREJ, level as u32)?;
     nvs.commit()
 }
 

@@ -80,6 +80,8 @@ pub enum Command {
     Calibrate(u32, u32),
     /// `defence` shows the point; `defence <raw>` sets it.
     Defence(Option<u16>),
+    /// `srej` shows spike rejection; `srej <0-15>` sets it and stores it.
+    Srej(Option<u8>),
     /// `clearstats` — discard the sensor's accumulated distance statistics.
     ClearStats,
     /// `merge` shows the strike-merge window; `merge <ms>` sets it (§4.3).
@@ -251,6 +253,17 @@ fn parse(line: &str) -> Command {
         // Refused rather than defaulted, for the same reason `calibrate` refuses
         // a bad number: this one changes what the log means, and a typo that
         // silently fell back to a default would change it quietly.
+        // Refused rather than defaulted: this one decides whether man-made
+        // impulses are reported as lightning, and a typo should not choose.
+        "srej" | "spike" => match arg {
+            None => Command::Srej(None),
+            Some(value) => match value.parse::<u8>() {
+                Ok(level) if level <= crate::defence::SPIKE_REJECTION_MAX => {
+                    Command::Srej(Some(level))
+                }
+                _ => Command::Unknown,
+            },
+        },
         "clearstats" | "cs" => Command::ClearStats,
         "merge" => match arg {
             None => Command::Merge(None),
@@ -332,6 +345,7 @@ pub fn print_help() {
     println!("  calibrate [s] [/min]  bisect the whole space for the most sensitive quiet point");
     println!("  merge [ms]            strike-merge window; 0 logs every return stroke");
     println!("  clearstats            discard the accumulated distance estimate");
+    println!("  srej [0-15]           spike rejection; 0 lets man-made impulses through");
     println!(
         "                        s    seconds per probe ({}-{}, default {}); ~13 probes",
         crate::session::CALIBRATE_PROBE_MIN_S,

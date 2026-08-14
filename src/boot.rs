@@ -124,6 +124,18 @@ pub fn configure(
         }
     };
     session::apply(sensor, i2c, point)?;
+
+    // **Written here and nowhere else on the hot path.** Spike rejection is a
+    // setting rather than part of the point, so `apply` no longer touches it --
+    // which is the whole fix: while the tuner could write it, it walked it to
+    // zero on every quiet spell and the chip began reporting man-made impulses
+    // as lightning.
+    let spike = crate::settings::spike_rejection()
+        .unwrap_or(defence::SPIKE_REJECTION_DEFAULT);
+    match sensor.set_spike_rejection(i2c, spike) {
+        Ok(()) => println!("as:   spike rejection {spike}"),
+        Err(e) => println!("as:   could not set spike rejection -- {e}"),
+    }
     // `reset` issues PRESET_DEFAULT, which restores registers -- the datasheet
     // treats discarding the statistics as a separate operation, so until this
     // line no power cycle in the device's life had ever cleared them.

@@ -69,6 +69,10 @@ pub struct Effects {
     /// console command is pure, and one hardware command should not change that
     /// for all of them.
     pub sensitivity: Option<bool>,
+    /// `Some(level)` when `srej` was used; the caller owns the bus.
+    pub set_spike_rejection: Option<u8>,
+    /// Set by a bare `srej`, which only wants to be told.
+    pub show_spike_rejection: bool,
     /// Set by `clearstats`; the caller owns the bus, same as `regs`.
     pub clear_statistics: bool,
     /// Set by `regs`; the caller owns the bus. Same reason as `sensitivity`.
@@ -300,6 +304,8 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
 
         // A read of the sensor's state rather than a change to ours, so it
         // goes to the caller like `regs` does -- `Ctx` has no bus by design.
+        Command::Srej(None) => effects.show_spike_rejection = true,
+        Command::Srej(Some(level)) => effects.set_spike_rejection = Some(level),
         Command::ClearStats => effects.clear_statistics = true,
         Command::Merge(None) => {
             let window_ms = ctx.totals.merger.window_ms();

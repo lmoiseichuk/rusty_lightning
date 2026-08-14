@@ -874,7 +874,6 @@ pub fn apply(
 ) -> Result<(), esp_idf_hal::sys::EspError> {
     sensor.set_noise_floor(i2c, point.noise_floor())?;
     sensor.set_watchdog_threshold(i2c, point.watchdog())?;
-    sensor.set_spike_rejection(i2c, point.spike_rejection())?;
     // Takes a strike *count*, not the field, and reports what it actually
     // programmed -- the chip quantises to 1/5/9/16 and the return value is how
     // that is confirmed.

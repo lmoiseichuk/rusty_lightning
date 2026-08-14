@@ -234,6 +234,23 @@ pub fn handle(
                 Err(e) => println!("mode: could not apply -- {e}"),
             }
         }
+        if effects.show_spike_rejection {
+            let level = crate::settings::spike_rejection()
+                .unwrap_or(crate::defence::SPIKE_REJECTION_DEFAULT);
+            match level {
+                0 => println!("srej: 0 -- man-made impulses will be reported as strikes"),
+                n => println!("srej: {n} (`regs` reads it back off the chip)"),
+            }
+        }
+        if let Some(level) = effects.set_spike_rejection {
+            match hw.sensor.set_spike_rejection(hw.i2c, level) {
+                Ok(()) => match crate::settings::store_spike_rejection(level) {
+                    Ok(()) => println!("srej: {level} (saved)"),
+                    Err(e) => println!("srej: {level} applied but NOT saved -- {e}"),
+                },
+                Err(e) => println!("srej: could not apply -- {e}"),
+            }
+        }
         if effects.clear_statistics {
             // The one way to say "re-estimate from here" without perturbing the
             // receiver. Every other reset is a side effect of changing the gain,

@@ -151,7 +151,7 @@ fn main() {
     // something fails when they diverge, and this is that something: change a
     // ring's bucket without changing the axis and the gridlines silently start
     // labelling the wrong columns.
-    check("day buckets are 15 min, as the axis assumes", FINE_MINUTES == 15);
+    check("day buckets are 5 min, as the axis assumes", FINE_MINUTES == 5);
     check("week buckets are 60 min, as the axis assumes", MEDIUM_MINUTES == 60);
     check("month buckets are 6 h, as the axis assumes", COARSE_MINUTES == 6 * 60);
 

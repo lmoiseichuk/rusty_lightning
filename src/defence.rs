@@ -123,7 +123,27 @@ impl Field {
 /// Index into [`FIELDS`], named so the accessors below read as English.
 pub const NOISE_FLOOR: usize = 0;
 pub const WATCHDOG: usize = 1;
-pub const SPIKE: usize = 2;
+
+/// What `SREJ` is programmed to unless the operator says otherwise.
+///
+/// **Two, the datasheet's own default** — and a *setting* rather than a field,
+/// which is the whole point of this constant existing.
+///
+/// SREJ rejects short man-made impulses, and it is the only knob that does.
+/// While it was in the search space the tuner treated it as the cheapest thing
+/// to give away — relaxation refunds the least valuable field first, and by the
+/// sensitivity weighting that is SREJ — so every quiet spell walked it to zero.
+/// At zero the chip validated an electric hammer on a neighbouring roof as
+/// lightning: 503 "strikes" in three and a half hours on 2026-08-14 with no
+/// storm within range, statistically indistinguishable from a real one.
+///
+/// The sweep could not have caught it either. `calibrate` searches for the most
+/// sensitive point that stays *quiet*, and in a quiet room `sr 0` scores
+/// perfectly because there is nothing to reject. Quiet is not correct.
+pub const SPIKE_REJECTION_DEFAULT: u8 = 2;
+
+/// The range `srej <n>` accepts. The register is four bits.
+pub const SPIKE_REJECTION_MAX: u8 = 15;
 
 /// What `MIN_NUM_LIGH` is programmed to, always: **report every strike.**
 ///
@@ -142,16 +162,21 @@ pub const MIN_STRIKES_COUNT: u8 = 1;
 
 /// **The layout.** Most valuable first — reorder the `shift` column to try the
 /// opposite arrangement.
-pub const FIELDS: [Field; 3] = [
-    Field { name: "nf", shift: 8, width: 3, weight: 10 },
-    Field { name: "wd", shift: 4, width: 4, weight: 40 },
-    Field { name: "sr", shift: 0, width: 4, weight: 50 },
+pub const FIELDS: [Field; 2] = [
+    Field { name: "nf", shift: 4, width: 3, weight: 20 },
+    Field { name: "wd", shift: 0, width: 4, weight: 80 },
 ];
 
 /// Total width of the packed point.
-pub const BITS: u32 = 11;
+pub const BITS: u32 = 7;
 
-/// One value per bit pattern: 2048 of them, 0..=2047.
+/// One value per bit pattern: 128 of them, 0..=127.
+///
+/// **Seven bits, down from eleven.** `MIN_NUM_LIGH` left first because it
+/// suppresses strikes outright; `SREJ` followed because the tuner reliably
+/// walked it to zero and zero admits man-made impulses as lightning. What is
+/// left is the two knobs that are genuinely volume controls, and a sweep over
+/// them is seven probes rather than eleven.
 pub const MAX: u16 = (1u16 << BITS) - 1;
 
 // **`SREJ` is deliberately NOT capped**, though an earlier design capped it at
@@ -196,11 +221,10 @@ impl Point {
     ///   drowning on its first window. Booting fully open was measured here at
     ///   7–9 noise events per batch, continuously, which is a receiver with
     ///   nothing left to say about anything.
-    /// * `SREJ` and `MIN_NUM_LIGH` decide whether a strike is *reported at all* —
-    ///   one rejects on waveform shape, the other silences the first fifteen
-    ///   strikes of a storm. Neither is a volume control, so neither has any
-    ///   business being pre-set to a guess. They start at zero and only a
-    ///   measurement moves them.
+    /// `SREJ` and `MIN_NUM_LIGH` are no longer here to be started at anything.
+    /// Both decide whether a strike is *reported at all* rather than how loud
+    /// the receiver is, and both left the space for that reason — see
+    /// [`SPIKE_REJECTION_DEFAULT`] and [`MIN_STRIKES_COUNT`].
     ///
     /// Computed from [`FIELDS`] rather than written as a literal, so reordering
     /// the layout moves this with it.
@@ -208,7 +232,6 @@ impl Point {
         Point::pack(
             FIELDS[NOISE_FLOOR].ceiling() / 2,
             FIELDS[WATCHDOG].ceiling() / 2,
-            0,
         )
     }
 
@@ -238,10 +261,6 @@ impl Point {
         self.field(WATCHDOG)
     }
 
-    pub fn spike_rejection(self) -> u8 {
-        self.field(SPIKE)
-    }
-
     /// Always [`MIN_STRIKES_COUNT`]. Kept as a method so callers that report
     /// the chip's configuration do not have to know it is fixed.
     pub fn min_strikes_count(self) -> u8 {
@@ -255,11 +274,10 @@ impl Point {
     /// produce, and a packing with no way to write it a field at a time is a
     /// packing nobody can check.
     #[allow(dead_code)]
-    pub fn pack(noise_floor: u8, watchdog: u8, spike: u8) -> Point {
+    pub fn pack(noise_floor: u8, watchdog: u8) -> Point {
         let mut raw = 0u16;
         raw = FIELDS[NOISE_FLOOR].set(raw, noise_floor);
         raw = FIELDS[WATCHDOG].set(raw, watchdog);
-        raw = FIELDS[SPIKE].set(raw, spike);
         Point(raw)
     }
 
