@@ -65,8 +65,8 @@ fn main() {
     // Why SREJ left: the tuner refunds the least valuable field first, which
     // was SREJ, so every quiet spell walked it to zero -- and at zero the chip
     // reports man-made impulses as lightning.
-    check("spike rejection defaults to the datasheet's 2",
-        SPIKE_REJECTION_DEFAULT == 2);
+    check("spike rejection defaults to 1, between the reference's 0 and the datasheet's 2",
+        SPIKE_REJECTION_DEFAULT == 1);
     check("...and is settable across the register's range",
         SPIKE_REJECTION_MAX == 15);
 

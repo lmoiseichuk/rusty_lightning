@@ -126,8 +126,20 @@ pub const WATCHDOG: usize = 1;
 
 /// What `SREJ` is programmed to unless the operator says otherwise.
 ///
-/// **Two, the datasheet's own default** — and a *setting* rather than a field,
-/// which is the whole point of this constant existing.
+/// **One: between the reference driver's 0 and the datasheet's 2**, and a
+/// *setting* rather than a field, which is the whole point of this constant.
+///
+/// The measurements it sits between, all on this board: at **0** the chip
+/// logged 503 false strikes in three and a half hours from electric hammers
+/// next door. At **2** that fell to five in eight hours — but the same period
+/// missed 5–6 real strikes an hour at 10+ km, which is the cost of rejection
+/// showing up on the other side. At **8** nothing man-made got through at all.
+///
+/// One is chosen against that spread rather than measured at it. It is the
+/// least rejection that is not none, on the reasoning that a detector which
+/// reports hammers is useless and a detector which misses distant storms is
+/// merely limited — and that the interference this room suffers is better
+/// answered by moving the sensor than by deafening it.
 ///
 /// SREJ rejects short man-made impulses, and it is the only knob that does.
 /// While it was in the search space the tuner treated it as the cheapest thing
@@ -140,7 +152,7 @@ pub const WATCHDOG: usize = 1;
 /// The sweep could not have caught it either. `calibrate` searches for the most
 /// sensitive point that stays *quiet*, and in a quiet room `sr 0` scores
 /// perfectly because there is nothing to reject. Quiet is not correct.
-pub const SPIKE_REJECTION_DEFAULT: u8 = 2;
+pub const SPIKE_REJECTION_DEFAULT: u8 = 1;
 
 /// The range `srej <n>` accepts. The register is four bits.
 pub const SPIKE_REJECTION_MAX: u8 = 15;

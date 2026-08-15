@@ -282,14 +282,15 @@ on every quiet spell. On 2026-08-14 that produced **503 "strikes" between 07:00
 and 10:36 from roofers next door with electric hammers**, with no lightning
 within range, statistically indistinguishable from a real storm.
 
-It is a setting now, defaulting to the datasheet's 2, stored in NVS and written
-at boot. Raise it if the log fills during obvious local work — construction, a
+It is a setting now, defaulting to **1** — between the reference driver's 0 and
+the datasheet's 2 — stored in NVS and written at boot. Raise it if the log fills during obvious local work — construction, a
 failing appliance, anything impulsive — and remember that every notch also costs
 real detections, so raise it only as far as it needs to go.
 
 ```
 srej          report the current level
-srej 2        the datasheet default
+srej 1        the default: least rejection that is not none
+srej 2        the datasheet's value
 srej 8        measured here as enough to silence an electric hammer entirely
 ```
 
