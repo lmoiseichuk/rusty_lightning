@@ -332,7 +332,14 @@ pub fn handle(
             };
             match outcome {
                 Ok(()) if on => println!(
-                    "sens: MAX -- nf 0, wdth 0, srej 0, min strikes 1; auto-tune frozen"
+                    // **Says nothing about SREJ, because it no longer touches
+                    // it.** Since 0.10.0 the override opens the two volume
+                    // knobs and leaves spike rejection where the operator set
+                    // it -- which is the point: max sensitivity to weak distant
+                    // strikes without re-admitting man-made impulses. The old
+                    // wording claimed `srej 0` while the chip held 2.
+                    "sens: MAX -- nf 0, wdth 0, min strikes 1; auto-tune frozen \
+(spike rejection unchanged -- `srej`)"
                 ),
                 Ok(()) => println!("sens: normal -- defence back to 0"),
                 Err(e) => println!("sens: could not apply -- {e}"),
