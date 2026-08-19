@@ -126,8 +126,15 @@ pub const WATCHDOG: usize = 1;
 
 /// What `SREJ` is programmed to unless the operator says otherwise.
 ///
-/// **One: between the reference driver's 0 and the datasheet's 2**, and a
-/// *setting* rather than a field, which is the whole point of this constant.
+/// **Zero, matching the reference driver and this project's own working Python
+/// setup**, and a *setting* rather than a field, which is the whole point of
+/// this constant.
+///
+/// It was 1 -- "between the reference driver's 0 and the datasheet's 2" -- until
+/// the storm of 2026-08-19, when `deep_demo.py` turned out to be the record of
+/// what had actually worked here: `setSpikeRejection(0)` beside
+/// `setWatchdogThreshold(2)`. The watchdog is the filter that earns its keep on
+/// this board; spike rejection was rejecting the weather with the hammers.
 ///
 /// The measurements it sits between, all on this board: at **0** the chip
 /// logged 503 false strikes in three and a half hours from electric hammers
@@ -152,7 +159,7 @@ pub const WATCHDOG: usize = 1;
 /// The sweep could not have caught it either. `calibrate` searches for the most
 /// sensitive point that stays *quiet*, and in a quiet room `sr 0` scores
 /// perfectly because there is nothing to reject. Quiet is not correct.
-pub const SPIKE_REJECTION_DEFAULT: u8 = 1;
+pub const SPIKE_REJECTION_DEFAULT: u8 = 0;
 
 /// The range `srej <n>` accepts. The register is four bits.
 pub const SPIKE_REJECTION_MAX: u8 = 15;

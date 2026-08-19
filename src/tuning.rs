@@ -46,6 +46,27 @@ pub const MEASURE_INTERVAL_S: u32 = 60;
 /// never again.
 const DEFENCE_SAVE_S: u32 = 15 * 60;
 
+/// How often to stop defending and simply listen.
+///
+/// **The device cannot detect what it is deaf to, and that is not a figure of
+/// speech.** On 2026-08-19 it sat at 117/127 through the opening of a storm
+/// directly overhead: no strikes, so nothing to hold for, so nothing to stop it
+/// staying exactly where it was. It took three commands typed by a person to
+/// make it hear. Every other rule here reacts to strikes, and none of them can
+/// fire when the setting itself is what prevents one.
+///
+/// So once every ten minutes it spends one window fully open and finds out.
+const DIP_INTERVAL_S: u32 = 10 * 60;
+
+/// Strikes in a dip window before the weather is believed.
+///
+/// **One.** A dip is already the rare case, and a storm that is starting is
+/// exactly when being slow is most expensive -- the opening strikes are the
+/// warning the whole device exists to give. The cost of believing a single
+/// event is a false alarm from something man-made, which lasts until the next
+/// window judges the band and walks the point back.
+const DIP_STRIKES_TO_BELIEVE: u32 = 1;
+
 /// Everything the noise decision needs to remember between windows.
 pub struct Tuning {
     /// Where the chip is set now.
@@ -62,6 +83,10 @@ pub struct Tuning {
     /// window is — which is exactly how a 60 s sweep came to settle deafer than
     /// a 10 s one in the same room. See [`session::QUIET_PER_MIN`].
     quiet_per_min: u32,
+    /// Where to go back to when a dip hears nothing. `Some` while dipping.
+    dip_restore: Option<defence::Point>,
+    /// When the last dip ran, so they are spaced rather than continuous.
+    last_dip_ms: u32,
     events: u32,
     disturbers: u32,
     /// Strikes in the current window, which **veto** a climb. Kept apart from
@@ -97,6 +122,10 @@ impl Tuning {
             last_save_s: now_ms / 1000,
             sweep: None,
             quiet_per_min,
+            dip_restore: None,
+            // Starts now, so a board that reboots mid-storm does not dip
+            // immediately on top of the weather it just came up in.
+            last_dip_ms: now_ms,
             events: 0,
             disturbers: 0,
             strikes: 0,
@@ -173,9 +202,16 @@ impl Tuning {
             self.probe(sensor, i2c, totals, quiet, now_ms);
         }
 
+        // A dip spent this window wide open on purpose, so the window's evidence
+        // is about the weather rather than about the tuning point -- judged
+        // here, and it must pre-empt the ordinary walk for the same reason a
+        // sweep does.
+        let dipping = self.dip_restore.is_some();
+
         let moved = match () {
             // The search owns this window; it has already moved the point.
             _ if sweeping => None,
+            _ if dipping => self.judge_dip(sensor, i2c),
             _ if self.strikes > 0 && !quiet => {
                 self.hold(totals);
                 None
@@ -183,6 +219,8 @@ impl Tuning {
             _ if !quiet => self.climb(totals),
             _ => self.relax(),
         };
+
+        let heard_strikes = self.strikes > 0;
 
         self.events = 0;
         self.disturbers = 0;
@@ -192,6 +230,13 @@ impl Tuning {
         // taken every window and changes nothing.
         if let Some(direction) = moved {
             session::tune(sensor, i2c, self.point, direction);
+        }
+
+        // **Only when there is nothing else going on.** A sweep owns the point
+        // outright; a window that already heard strikes needs no dip, because
+        // the device is plainly not deaf and `hold` is doing its job.
+        if !sweeping && !dipping && !heard_strikes && self.dip_due(now_ms) {
+            self.begin_dip(sensor, i2c, now_ms);
         }
 
         self.persist(now_ms);
@@ -333,6 +378,66 @@ impl Tuning {
     /// The asymmetry is now deliberate and one-sided: climb fast, leave slowly.
     /// A storm's first strike should not arrive into a receiver that sprinted
     /// back toward a floor it will have to climb again.
+    /// Whether it is time to stop defending and listen.
+    fn dip_due(&self, now_ms: u32) -> bool {
+        now_ms.saturating_sub(self.last_dip_ms) >= DIP_INTERVAL_S * 1000
+    }
+
+    /// Drop to fully open for one window, remembering where to come back to.
+    ///
+    /// The point is programmed directly rather than walked: this is not a step
+    /// in the search, it is a deliberate departure from it, and a `+-1` walk
+    /// would take a hundred windows to get here and another hundred back.
+    fn begin_dip(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, now_ms: u32) {
+        self.last_dip_ms = now_ms;
+        if self.point == defence::Point::new(0) {
+            return; // already listening; nothing to dip to
+        }
+        self.dip_restore = Some(self.point);
+        self.point = defence::Point::new(0);
+        match session::apply(sensor, i2c, self.point) {
+            Ok(()) => println!(
+                "dip:  listening wide open for one window -- back to {}/{} unless something arrives",
+                self.dip_restore.map(|p| p.raw()).unwrap_or(0),
+                defence::MAX
+            ),
+            Err(e) => println!("dip:  could not program -- {e}"),
+        }
+    }
+
+    /// Decide what a dip window found.
+    ///
+    /// **A strike is believed and kept.** Staying open is what makes the dip
+    /// worth running -- the point of finding a storm is to be listening to it,
+    /// and `hold` then keeps the point here for as long as strikes keep
+    /// arriving, which is the mechanism that was already right.
+    ///
+    /// Hearing nothing restores the point that was defending before, because a
+    /// dip is a question rather than a decision.
+    fn judge_dip(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>) -> Option<&'static str> {
+        let restore = self.dip_restore.take();
+        if self.strikes >= DIP_STRIKES_TO_BELIEVE {
+            println!(
+                "dip:  {} strike(s) while open -- weather, staying at {}/{}",
+                self.strikes,
+                self.point.raw(),
+                defence::MAX
+            );
+            return None;
+        }
+        let Some(restore) = restore else { return None };
+        self.point = restore;
+        match session::apply(sensor, i2c, self.point) {
+            Ok(()) => println!(
+                "dip:  nothing heard -- defending again at {}/{}",
+                self.point.raw(),
+                defence::MAX
+            ),
+            Err(e) => println!("dip:  could not restore -- {e}"),
+        }
+        None
+    }
+
     fn relax(&mut self) -> Option<&'static str> {
         match self.point.relaxed() {
             Some(gentler) => {
@@ -350,6 +455,12 @@ impl Tuning {
     /// nothing — but a settled room stops moving, so in practice this writes
     /// once and then never.
     fn persist(&mut self, now_ms: u32) {
+        // **A dip is a temporary lie about the point**, so it must never reach
+        // NVS -- a power cut mid-dip would otherwise resume fully open and stay
+        // there, which is the opposite of what the stored value is for.
+        if self.dip_restore.is_some() {
+            return;
+        }
         let now_s = now_ms / 1000;
         if self.point == self.stored || now_s.saturating_sub(self.last_save_s) < DEFENCE_SAVE_S {
             return;

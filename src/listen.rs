@@ -47,6 +47,46 @@ pub const BATCH_MS: u32 = 1000;
 /// indistinguishable from outside.
 pub const IRQ_POLL_INTERVAL_S: u32 = 30;
 
+/// How often to read the reason register when the interrupt path is failing.
+///
+/// **Two hundred milliseconds, because thirty seconds is a diagnostic and this
+/// is a rescue.** Measured during the storm of 2026-08-19: one
+/// `poll: found Disturber with no interrupt` at 18:06:04 and then no events at
+/// all, while strikes were arriving every five to ten seconds a few kilometres
+/// away. The interrupt is configured rising-edge, and the AS3935 holds `INT`
+/// asserted until the reason register is read -- so a single missed edge means
+/// there is never another edge, and the device goes permanently deaf while
+/// every other sign of health stays perfect.
+///
+/// The thirty-second poll cannot rescue that: the register reports only the
+/// *latest* reason, so at best one event in thirty seconds survives and the
+/// rest are overwritten. At 200 ms the read is faster than the storm and the
+/// line is released before the next event needs it.
+///
+/// It costs one I2C transaction per interval against a device that already
+/// polls a fuel gauge, and it is the difference between a log full of strikes
+/// and a log full of nothing.
+pub const IRQ_RESCUE_INTERVAL_MS: u32 = 200;
+
+/// How often the tuner re-runs a full sweep without being asked.
+///
+/// **Six hours.** A sweep takes about a quarter of an hour and deliberately
+/// mis-sets the sensor while it searches, so it is roughly 4 % of the device's
+/// time spent deaf -- affordable at this spacing and not at one hour, which was
+/// the first proposal.
+///
+/// What it buys is that the tuning point stops being a thing somebody has to
+/// remember to re-establish. The band this sits in changes: a new appliance
+/// next door moves it, and a point learned last month is answering a question
+/// about a room that no longer exists.
+pub const AUTO_CALIBRATE_INTERVAL_S: u32 = 6 * 3600;
+
+/// Probe length for a sweep nobody asked for.
+///
+/// Sixty seconds, the same as [`MEASURE_INTERVAL_S`] and for the same reason --
+/// it is the span over which "did that window hear anything" is a fair question.
+pub const AUTO_CALIBRATE_WINDOW_S: u32 = 60;
+
 
 /// How long to ignore further button edges after one is accepted.
 ///
@@ -75,6 +115,9 @@ pub fn listen(
     start_point: defence::Point,
 ) {
     let mut last_irq_poll_ms: u32 = now_ms();
+    // Starts now rather than at zero, so a board that reboots during a storm
+    // does not sweep the moment the weather clears.
+    let mut last_calibrate_ms: u32 = now_ms();
     let mut last_button_ms: u32 = 0;
     let mut batch = Batch::default();
     let mut batch_started = now_ms();
@@ -222,7 +265,7 @@ pub fn listen(
         // Plan B: look for events the interrupt line never announced. Before
         // `report`, so anything found is summarised in this batch rather than
         // the next one.
-        if now_ms().saturating_sub(last_irq_poll_ms) >= IRQ_POLL_INTERVAL_S * 1000 {
+        if now_ms().saturating_sub(last_irq_poll_ms) >= IRQ_RESCUE_INTERVAL_MS {
             last_irq_poll_ms = now_ms();
             session::poll(
                 sensor,
@@ -235,6 +278,12 @@ pub fn listen(
             );
         }
 
+        // **A strike earns the screen a short floor**, so the glass is not half
+        // a minute behind the weather. Set before `report` consumes the batch;
+        // cleared by the redraw that shows it.
+        if batch.strikes > 0 {
+            screen.strike_seen = true;
+        }
         report(&batch);
 
         // Keep the rings' idea of "now" current even in a lull, so a chart drawn
@@ -384,6 +433,24 @@ pub fn listen(
             // watching.
             storm_watch.step(sensor, i2c, totals.strikes);
             tuning.step(sensor, i2c, &mut totals, now_ms());
+
+            // **A sweep is the worst thing that can happen during a storm**, so
+            // the clock alone does not get to start one. It mis-sets the sensor
+            // on purpose for a quarter of an hour, which during weather is a
+            // quarter of an hour of lightning nobody recorded.
+            //
+            // The gate is `StormWatch`'s own definition of a storm having
+            // ended, not a second threshold invented here. If the interval
+            // elapses while it is raining, `last_calibrate_ms` is deliberately
+            // left alone so the sweep runs at the first quiet window afterwards
+            // rather than waiting another six hours.
+            if now_ms().saturating_sub(last_calibrate_ms) >= AUTO_CALIBRATE_INTERVAL_S * 1000
+                && storm_watch.weather_quiet()
+            {
+                last_calibrate_ms = now_ms();
+                println!("cal:  {AUTO_CALIBRATE_INTERVAL_S} s elapsed and the weather is quiet -- sweeping");
+                tuning.begin_sweep(sensor, i2c, AUTO_CALIBRATE_WINDOW_S, u32::MAX, now_ms());
+            }
         }
 
         // --- the screen ---------------------------------------------------

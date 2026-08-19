@@ -27,6 +27,19 @@ use crate::as3935::Location;
 /// and this is the floor.
 const REDRAW_MIN_GAP_S: u32 = 30;
 
+/// The floor a strike is allowed to bypass down to.
+///
+/// **Five seconds, and a strike is the one event that earns it.** The 30 s floor
+/// exists to stop the panel being pinned by fields that change on their own --
+/// uptime, battery, the disturber count -- and a strike is not one of those. It
+/// is the thing the device exists to report, and reporting it up to half a
+/// minute late was measured on 2026-08-19 during a storm arriving every five to
+/// ten seconds: the glass was a screen behind the weather the whole time.
+///
+/// Not zero: a refresh blocks for 3.8 s, so back-to-back strikes must not queue
+/// refreshes faster than the panel can retire them.
+const REDRAW_STRIKE_GAP_S: u32 = 5;
+
 /// Redraw even if nothing tracked has changed, at most this often.
 ///
 /// The backstop for everything the change test deliberately ignores — the
@@ -69,6 +82,12 @@ pub struct Screen {
     /// Set by a button press, cleared by the redraw it causes. A deliberate act
     /// bypasses the rate limit; see [`Screen::due`].
     pub user_acted: bool,
+    /// Set when a strike arrives, cleared by the redraw that shows it.
+    ///
+    /// A separate flag from [`Self::user_acted`] because they earn different
+    /// floors: a person pressing the button gets an immediate refresh, a strike
+    /// gets a short one, and everything else waits its turn.
+    pub strike_seen: bool,
     pub period: ui::ChartPeriod,
     /// Scratch for the chart series, sized for the longest ring so one buffer
     /// serves all three periods — the shorter ones use a prefix.
@@ -89,6 +108,7 @@ impl Screen {
             // splash for the first thirty seconds reads as one that hung.
             last_draw_ms: 0,
             user_acted: false,
+            strike_seen: false,
             period: ui::ChartPeriod::Day,
             counts: [0u16; history::LONGEST_LEN],
             scores: [0u32; history::LONGEST_LEN],
@@ -114,7 +134,9 @@ impl Screen {
         let since_draw_s = now_ms.saturating_sub(self.last_draw_ms) / 1000;
         let changed = self.drawn.as_ref() != Some(want);
         let stale = since_draw_s >= REDRAW_BASELINE_S;
-        let allowed = self.user_acted || since_draw_s >= REDRAW_MIN_GAP_S;
+        let allowed = self.user_acted
+            || (self.strike_seen && since_draw_s >= REDRAW_STRIKE_GAP_S)
+            || since_draw_s >= REDRAW_MIN_GAP_S;
 
         if !allowed || !(changed || stale) {
             return None;
@@ -192,6 +214,7 @@ impl Screen {
         self.drawn = Some(want);
         self.last_draw_ms = now_ms;
         self.user_acted = false;
+        self.strike_seen = false;
     }
 
     /// Flatten the ring for the current period into the scratch buffers.

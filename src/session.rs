@@ -304,6 +304,24 @@ pub struct StormWatch {
 /// Quiet windows before the statistics are discarded. One window is a minute.
 pub const STORM_END_QUIET_WINDOWS: u32 = 30;
 
+impl StormWatch {
+    /// Whether the weather has been quiet long enough to disturb the sensor.
+    ///
+    /// Named for the weather rather than `settled`, because `Sweep::settled`
+    /// already means "the point the search finished on" and the two would read
+    /// identically at a call site while meaning nothing alike.
+    ///
+    /// **The same test that decides a storm has ended**, deliberately reused
+    /// rather than given its own threshold. Anything that wants to know "is it
+    /// safe to stop listening properly for a while" is asking the question this
+    /// already answers, and two definitions of "storm over" in one firmware
+    /// would eventually disagree -- which is the defect this codebase keeps
+    /// finding in its own history.
+    pub fn weather_quiet(&self) -> bool {
+        self.quiet_windows >= STORM_END_QUIET_WINDOWS
+    }
+}
+
 /// Consecutive nearest-bin readings before the estimate is suspected of being
 /// stuck rather than correct.
 ///
