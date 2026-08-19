@@ -981,7 +981,16 @@ pub const QUIET_PER_MIN: u32 = 60;
 /// The ceiling is a guard against being told that a continuously jammed band is
 /// quiet: this board measures ~8 events/second when genuinely swamped, which is
 /// 480 a minute.
-pub const QUIET_PER_MIN_MAX: u32 = 240;
+///
+/// **360, raised from 240 on 2026-08-19, because a storm is not a jammed band
+/// and the old ceiling could not tell them apart.** A nearby strike throws
+/// harmonics that arrive as disturbers -- the reason `Tuning::hold` exists -- and
+/// that storm drove the rate to **264/min**, above the ceiling itself. So no
+/// legal threshold tolerated real weather: the operator could only choose a
+/// number that called a storm noisy, which is precisely when the tuner must not
+/// climb. 360 sits above what the weather produced and still well below the 480
+/// a swamped band gives.
+pub const QUIET_PER_MIN_MAX: u32 = 360;
 
 /// Settling time after programming a probe's registers, before its window opens.
 ///
