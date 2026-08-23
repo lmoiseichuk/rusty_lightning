@@ -99,7 +99,38 @@ pub struct Tuning {
     /// and a device that silently came back from a power cut with its noise
     /// rejection disabled would be a trap.
     pub frozen: bool,
+    /// Windows counted into the current stuck-detection span.
+    span_windows: u32,
+    /// Lowest and highest raw point seen this span.
+    span_low: u16,
+    span_high: u16,
+    /// Whether any window this span read *not* quiet.
+    span_noisy: bool,
+    /// When a stuck span last provoked a sweep, so they are an hour apart
+    /// rather than every span.
+    last_kick_ms: u32,
+    /// Whether the current stuck condition has already been announced. Cleared
+    /// when a span comes back unstuck, so a device that recovers and gets stuck
+    /// again says so again.
+    stuck_announced: bool,
 }
+
+/// How many consecutive windows make a span for stuck detection.
+///
+/// **Five minutes.** Far below the length of a storm and far above a transient:
+/// the walk moves one notch a window, so five windows is enough for a healthy
+/// tuner to have gone somewhere, and not enough for a real lull to be mistaken
+/// for a fault.
+pub const STUCK_WINDOWS: u32 = 5;
+
+/// How long between sweeps provoked by a stuck span.
+///
+/// **One hour, which is affordable only because of what a sweep now costs.**
+/// With `WDTH` out of the search a sweep is three probes over a knob that
+/// cannot reject a lightning waveform — so scouting on this cadence risks
+/// nothing, where against the old seven-bit space it would have meant a
+/// quarter of an hour deliberately mis-set every hour.
+pub const STUCK_KICK_INTERVAL_S: u32 = 3600;
 
 impl Tuning {
     pub fn new(start: defence::Point, now_ms: u32) -> Tuning {
@@ -131,6 +162,15 @@ impl Tuning {
             strikes: 0,
             window_started_ms: now_ms,
             frozen: false,
+            span_windows: 0,
+            // Inverted so the first window's min/max both take its value.
+            span_low: u16::MAX,
+            span_high: 0,
+            span_noisy: false,
+            // Starts now, for the same reason as `last_dip_ms`: a board that
+            // reboots into a storm should not sweep on top of it.
+            last_kick_ms: now_ms,
+            stuck_announced: false,
         }
     }
 
@@ -222,6 +262,19 @@ impl Tuning {
 
         let heard_strikes = self.strikes > 0;
 
+        // Stuck detection, counted after the walk has had its turn so the span
+        // sees where the point actually ended up. A sweep or a dip owns the
+        // point outright for its window, so neither is evidence about whether
+        // the *walk* is getting anywhere -- counting them would let a long
+        // sweep look like a stuck tuner.
+        if !sweeping && !dipping {
+            let raw = self.point.raw();
+            self.span_windows += 1;
+            self.span_low = self.span_low.min(raw);
+            self.span_high = self.span_high.max(raw);
+            self.span_noisy |= !quiet;
+        }
+
         self.events = 0;
         self.disturbers = 0;
         self.strikes = 0;
@@ -238,6 +291,10 @@ impl Tuning {
         if !sweeping && !dipping && !heard_strikes && self.dip_due(now_ms) {
             self.begin_dip(sensor, i2c, now_ms);
         }
+
+        // Last, so a sweep it starts is not immediately overwritten by the dip
+        // above and sees a settled point rather than one mid-decision.
+        self.judge_span(sensor, i2c, now_ms);
 
         self.persist(now_ms);
     }
@@ -378,6 +435,147 @@ impl Tuning {
     /// The asymmetry is now deliberate and one-sided: climb fast, leave slowly.
     /// A storm's first strike should not arrive into a receiver that sprinted
     /// back toward a floor it will have to climb again.
+    /// Start a fresh stuck-detection span.
+    fn forget_span(&mut self) {
+        self.span_windows = 0;
+        self.span_low = u16::MAX;
+        self.span_high = 0;
+        self.span_noisy = false;
+    }
+
+    /// **Notice a tuner that is not getting anywhere, and say so.**
+    ///
+    /// The condition is *the point stayed inside a one-notch band for a whole
+    /// span while at least one window read not-quiet*. That is deliberately not
+    /// "unchanged for an hour": a stable point is the healthy state, and a
+    /// detector that fired on stability would fire hardest on the device that
+    /// is working.
+    ///
+    /// It catches both shapes seen here:
+    ///
+    /// * **Exhausted** — pinned at the ceiling and the band still noisy. The
+    ///   noise floor has nothing left to give.
+    /// * **Oscillating** — walking between two adjacent values forever, which
+    ///   the storm of 2026-08-19 produced at `113 <-> 114` every minute, deaf,
+    ///   indefinitely. A naive "has it changed?" test reads that as healthy
+    ///   movement, which is why the test is a band and not an equality.
+    ///
+    /// **A sweep is the action, not a random kick.** Both shapes mean the
+    /// *verdict* is wrong rather than the point — the threshold no longer
+    /// describes the room — and a sweep re-derives the point from measurement
+    /// where a perturbation only guesses. It is rate-limited to
+    /// [`STUCK_KICK_INTERVAL_S`], and it is affordable at all only because the
+    /// search can no longer spend a strike.
+    ///
+    /// **And when a sweep does not help, the message is the point.** If the
+    /// span comes back stuck after one, no amount of further searching will fix
+    /// it; that is a threshold to re-measure or a sensor to move, and a device
+    /// that quietly kept scouting would look like it was adapting.
+    fn judge_span(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, now_ms: u32) {
+        if self.span_windows < STUCK_WINDOWS {
+            return;
+        }
+
+        let band = self.span_high.saturating_sub(self.span_low);
+        let stuck = self.span_noisy && band <= 1;
+        self.forget_span();
+
+        if !stuck {
+            // Recovered, so a later relapse is worth announcing again.
+            self.stuck_announced = false;
+            return;
+        }
+
+        if !self.stuck_announced {
+            self.stuck_announced = true;
+            match self.point.raw() >= defence::MAX {
+                true => {
+                    println!(
+                        "tune: STUCK at the ceiling -- nf {} for {STUCK_WINDOWS} windows and the \
+                         band is still noisy",
+                        self.point.noise_floor()
+                    );
+                    println!(
+                        "tune: the noise floor has nothing left. This is the room, not the \
+                         tuning -- move the sensor, or trade distance with `wdth`"
+                    );
+                }
+                false => println!(
+                    "tune: STUCK -- the point has not left a one-notch band for \
+                     {STUCK_WINDOWS} noisy windows. `calibrate <s> <per-min>` re-measures \
+                     what this room should count as quiet"
+                ),
+            }
+        }
+
+        // The kick. Nothing to search for if the walk is frozen or a sweep is
+        // already running, and nothing gained by sweeping more than hourly.
+        if self.frozen || self.sweep.is_some() {
+            return;
+        }
+        if now_ms.saturating_sub(self.last_kick_ms) < STUCK_KICK_INTERVAL_S * 1000 {
+            return;
+        }
+        self.last_kick_ms = now_ms;
+        println!("tune: sweeping to re-derive the point rather than guessing at it");
+        self.begin_sweep(sensor, i2c, crate::listen::AUTO_CALIBRATE_WINDOW_S, u32::MAX, now_ms);
+    }
+
+    /// **Throw the learned point away, because the gain it was learned at is
+    /// gone.**
+    ///
+    /// Indoor gain is roughly 4x outdoor, so a noise floor that described the
+    /// band under one AFE setting describes nothing under the other. Until
+    /// 0.11.0 the point simply carried across: `mode` and the BOOT button both
+    /// applied the new gain, restarted the distance statistics and persisted the
+    /// location, and left the point exactly where it was.
+    ///
+    /// Measured on 2026-08-23. A point of 0 — correct outdoors, where the band
+    /// really was quiet — followed a switch into indoor and left the chip
+    /// reporting `NoiseTooHigh` continuously through a live storm, with every
+    /// other sign of health perfect.
+    ///
+    /// Back to [`defence::Point::default_start`] rather than to a sweep: the
+    /// walk converges from mid-range in at most four windows, and unlike a sweep
+    /// it is never deliberately mis-set on the way. The stored point is
+    /// overwritten immediately so a reboot cannot resurrect the old one.
+    pub fn gain_changed(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, why: &str) {
+        // **`sensitive on` outranks this.** The override exists for a storm
+        // happening now, and someone who has pinned the chip wide open and then
+        // reaches for the gain is still asking for it wide open. Resetting the
+        // point here would quietly hand back the noise rejection they turned
+        // off, which is the kind of silent state change that costs an evening.
+        if self.frozen {
+            println!("tune: gain changed ({why}) -- point held, `sensitive on` is in force");
+            self.forget_span();
+            return;
+        }
+
+        // A sweep in flight was searching under the old gain, so its probes so
+        // far are answers to a question nobody is asking any more.
+        self.sweep = None;
+        self.dip_restore = None;
+        self.point = defence::Point::default_start();
+
+        match session::apply(sensor, i2c, self.point) {
+            Ok(()) => println!(
+                "tune: gain changed ({why}) -- point reset to {}/{} ({}%), relearning",
+                self.point.raw(),
+                defence::MAX,
+                self.point.percent()
+            ),
+            Err(e) => println!("tune: gain changed ({why}) but the reset did not apply -- {e}"),
+        }
+
+        match settings::store_defence_point(self.point) {
+            Ok(()) => self.stored = self.point,
+            Err(e) => println!("tune: reset point NOT saved -- {e}"),
+        }
+
+        // The old span was measured under the old gain too.
+        self.forget_span();
+    }
+
     /// Whether it is time to stop defending and listen.
     fn dip_due(&self, now_ms: u32) -> bool {
         now_ms.saturating_sub(self.last_dip_ms) >= DIP_INTERVAL_S * 1000

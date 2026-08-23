@@ -226,6 +226,11 @@ pub fn listen(
                 if held && ready {
                     last_button_ms = now_ms();
                     toggle_location(sensor, i2c, location);
+                    // The point was learned at the gain that just went away --
+                    // roughly a 4x change in what the front end sees, so it
+                    // describes nothing now. Both ways of changing the mode do
+                    // this; the console's copy is in `effects`.
+                    tuning.gain_changed(sensor, i2c, "button");
                     // A deliberate press earns an immediate repaint -- see below.
                     screen.user_acted = true;
                 } else if !held {

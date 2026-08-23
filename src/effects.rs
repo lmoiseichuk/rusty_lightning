@@ -223,6 +223,10 @@ pub fn handle(
                     // Same reason as the button's path: a gain change rescales
                     // every energy the distance estimate was built from.
                     session::restart_statistics(hw.sensor, hw.i2c, "gain changed");
+                    // And the defence point, for the same reason one step
+                    // further on: it is a description of a noise floor measured
+                    // through the old gain. The button's copy is in `listen`.
+                    rt.tuning.gain_changed(hw.sensor, hw.i2c, "mode");
                     match settings::store_location(*rt.location) {
                         Ok(()) => println!("mode: {} gain applied (saved)", rt.location.label()),
                         Err(e) => println!(
