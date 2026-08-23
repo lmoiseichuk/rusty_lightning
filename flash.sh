@@ -70,7 +70,16 @@ PY
 )"
 echo
 
-espflash flash --port "$PORT" --non-interactive \
+# `--before usb-reset` is not optional on this board, and it is the whole
+# reason `recover.sh` exists in the shape it does.
+#
+# This chip talks USB-Serial/JTAG. espflash's default, `default-reset`, drives
+# the DTR and RTS control lines -- the sequence for a board with a USB-to-UART
+# bridge, which this is not. It fails with a bare "Failed to connect to the
+# device", which reads as "espflash cannot talk to this chip" and sent a whole
+# evening into working around the wrong tool. `usb-reset` is the sequence for
+# the USB-JTAG-Serial peripheral, and it connects first time.
+espflash flash --port "$PORT" --non-interactive --before usb-reset \
     --bootloader "$DIR/bootloader.bin" \
     --partition-table "$DIR/partition-table.bin" \
     "$DIR/lightning"

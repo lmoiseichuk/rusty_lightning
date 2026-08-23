@@ -150,7 +150,26 @@ pub fn defence_point() -> Option<crate::defence::Point> {
     let packed = nvs.get_u32(KEY_DEFENCE)?;
     // `new` clamps, so a value written by a build with a different layout
     // degrades to something in range rather than being trusted whole.
-    Some(crate::defence::Point::new(packed as u16))
+    let point = crate::defence::Point::new(packed as u16);
+    // **Said out loud, because the clamp is otherwise invisible.** A getter
+    // that prints is not the habit to get into, but this is the one place that
+    // can see both numbers, and the alternative is a boot line reporting a
+    // point nobody chose with nothing to explain it.
+    //
+    // 0.11.0 is exactly when this matters: the layout went from seven bits to
+    // three, so a stored value above 7 is a leftover in which `nf` shared the
+    // word with a watchdog that is no longer in it. Clamping is safe -- `nf`
+    // cannot reject a lightning waveform, and the +/-1 walk relaxes it back
+    // down on the first quiet window -- but it is not the value that was saved.
+    if packed as u16 > crate::defence::MAX {
+        println!(
+            "as:   stored defence point {packed} is above this build's max {} -- \
+             clamped to {}, from an older layout",
+            crate::defence::MAX,
+            point.raw()
+        );
+    }
+    Some(point)
 }
 
 /// Persist the learned point.

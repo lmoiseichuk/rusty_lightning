@@ -20,26 +20,36 @@
 # any single attempt is a coin toss. Hence retrying — but a bounded number of
 # times, so a real problem surfaces instead of scrolling past.
 #
-# ## Use esptool to get in, espflash to write
+# ⚠ TRY `./flash.sh` FIRST. THIS SCRIPT ERASES YOUR DATA.
 #
-# **This is the whole lesson of a long evening.** `espflash` 4.5.0 could not
-# connect to this board at all — dozens of attempts across every combination of
-# `--before`, with and without the stub, hanging or failing instantly. A bare
+# `esptool erase-flash` erases the **whole chip**, which includes the `storage`
+# partition holding the strike log and the `nvs` holding the clock epoch, the
+# defence point, the quiet threshold and the mode. Thousands of records go with
+# it. `espflash flash` writes only the bootloader, the partition table and the
+# app, and leaves both of those alone.
 #
-#     esptool erase-flash
+# ## The diagnosis this script was built on was wrong
 #
-# with no arguments connected first time and erased the chip in 1.8 seconds.
+# It said espflash 4.5.0 "could not connect to this board at all — dozens of
+# attempts across every combination of `--before`", and concluded that esptool
+# was the only tool that could get in.
 #
-# The difference is the reset sequence. This chip talks USB-Serial/JTAG, and
-# entering the downloader over it means driving the host's CDC control lines in
-# a particular order; esptool implements that correctly and espflash evidently
-# does not, on this chip and this version. Every `--before` variation here was
-# working around the wrong tool.
+# The reset sequence was the right thing to suspect and the wrong conclusion to
+# draw. espflash has a `--before usb-reset`, which is the sequence for the
+# USB-JTAG-Serial peripheral this chip actually talks; the default,
+# `default-reset`, drives DTR/RTS, which is for a USB-to-UART bridge. With
+# `--before usb-reset` espflash connects first time and flashes in four seconds
+# — confirmed 2026-08-23, on the same board, with the strike log intact
+# afterwards. `flash.sh` now passes it.
 #
-# So: **esptool erases, and the erase is what makes the board reachable** — an
-# erased flash has no app, so the ROM falls back to the downloader and stays
-# there, with no button and no timing. espflash then writes, because it is what
-# turns our ELF into a flashable image without a separate conversion step.
+# So this script is for a board that is genuinely unreachable — a half-written
+# flash, or a light-sleep build with no console — and not for "espflash said it
+# could not connect". Check `--before` before erasing anything.
+#
+# When it *is* needed: an erased flash has no app, so the ROM falls back to the
+# downloader and stays there, with no button and no timing. espflash then
+# writes, because it is what turns our ELF into a flashable image without a
+# separate conversion step.
 set -uo pipefail
 
 PORT="${1:-/dev/ttyACM0}"
