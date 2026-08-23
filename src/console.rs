@@ -82,6 +82,11 @@ pub enum Command {
     Defence(Option<u16>),
     /// `srej` shows spike rejection; `srej <0-15>` sets it and stores it.
     Srej(Option<u8>),
+    /// `wdth` shows the watchdog threshold; `wdth <0-15>` sets it and stores
+    /// it. A setting rather than part of the tuning point — see
+    /// [`crate::defence::WATCHDOG_DEFAULT`] for what it cost to have the tuner
+    /// able to spend it.
+    Wdth(Option<u8>),
     /// `clearstats` — discard the sensor's accumulated distance statistics.
     ClearStats,
     /// `merge` shows the strike-merge window; `merge <ms>` sets it (§4.3).
@@ -264,6 +269,16 @@ fn parse(line: &str) -> Command {
                 _ => Command::Unknown,
             },
         },
+        // Refused rather than defaulted, for a sharper reason than `srej`: this
+        // one decides how far away a strike can be and still be reported, and a
+        // typo that quietly raised it would present as a quiet night.
+        "wdth" | "watchdog" => match arg {
+            None => Command::Wdth(None),
+            Some(value) => match value.parse::<u8>() {
+                Ok(level) if level <= crate::defence::WATCHDOG_MAX => Command::Wdth(Some(level)),
+                _ => Command::Unknown,
+            },
+        },
         "clearstats" | "cs" => Command::ClearStats,
         "merge" => match arg {
             None => Command::Merge(None),
@@ -346,6 +361,7 @@ pub fn print_help() {
     println!("  merge [ms]            strike-merge window; 0 logs every return stroke");
     println!("  clearstats            discard the accumulated distance estimate");
     println!("  srej [0-15]           spike rejection; 0 lets man-made impulses through");
+    println!("  wdth [0-15]           watchdog threshold; higher drops distant strikes first");
     println!(
         "                        s    seconds per probe ({}-{}, default {}); ~13 probes",
         crate::session::CALIBRATE_PROBE_MIN_S,

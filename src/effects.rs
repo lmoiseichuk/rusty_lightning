@@ -251,6 +251,27 @@ pub fn handle(
                 Err(e) => println!("srej: could not apply -- {e}"),
             }
         }
+        if effects.show_watchdog {
+            let level = crate::settings::watchdog().unwrap_or(crate::defence::WATCHDOG_DEFAULT);
+            match level {
+                0 => println!("wdth: 0 -- no amplitude gate; expect man-made impulses"),
+                n => println!("wdth: {n} (`regs` reads it back off the chip)"),
+            }
+        }
+        if let Some(level) = effects.set_watchdog {
+            // Applied straight to the chip and stored, exactly as `srej` is. It
+            // does not go through `session::apply`, which reads the stored value
+            // -- so storing first and applying second would work too, but this
+            // order is the one every other setting uses: tell the sensor, and
+            // only persist what the sensor accepted.
+            match hw.sensor.set_watchdog_threshold(hw.i2c, level) {
+                Ok(()) => match crate::settings::store_watchdog(level) {
+                    Ok(()) => println!("wdth: {level} (saved)"),
+                    Err(e) => println!("wdth: {level} applied but NOT saved -- {e}"),
+                },
+                Err(e) => println!("wdth: could not apply -- {e}"),
+            }
+        }
         if effects.clear_statistics {
             // The one way to say "re-estimate from here" without perturbing the
             // receiver. Every other reset is a side effect of changing the gain,
@@ -332,14 +353,16 @@ pub fn handle(
             };
             match outcome {
                 Ok(()) if on => println!(
-                    // **Says nothing about SREJ, because it no longer touches
-                    // it.** Since 0.10.0 the override opens the two volume
-                    // knobs and leaves spike rejection where the operator set
-                    // it -- which is the point: max sensitivity to weak distant
-                    // strikes without re-admitting man-made impulses. The old
-                    // wording claimed `srej 0` while the chip held 2.
-                    "sens: MAX -- nf 0, wdth 0, min strikes 1; auto-tune frozen \
-(spike rejection unchanged -- `srej`)"
+                    // **Names only what it actually sets.** The override now
+                    // opens the one knob left in the point and leaves both
+                    // settings where the operator put them -- which is the
+                    // point: maximum sensitivity to weak distant strikes
+                    // without re-admitting man-made impulses. Earlier wordings
+                    // claimed `srej 0`, then `wdth 0`, while the chip held
+                    // neither; a status line that overstates what it changed is
+                    // how an operator ends up debugging the wrong register.
+                    "sens: MAX -- nf 0, min strikes 1; auto-tune frozen \
+(watchdog and spike rejection unchanged -- `wdth`, `srej`)"
                 ),
                 Ok(()) => println!("sens: normal -- defence back to 0"),
                 Err(e) => println!("sens: could not apply -- {e}"),

@@ -1,45 +1,61 @@
-//! How hard the sensor is trying to reject noise (§4.2), as **one 13-bit
+//! How hard the sensor is trying to reject noise (§4.2), as **one 3-bit
 //! number**.
 //!
-//! The four registers the AS3935 exposes for this are bit fields living in two
-//! bytes, so the whole tunable state is 13 bits — and treating it as a single
-//! integer 0..=8191 replaces the state machine that used to walk them.
+//! ## What the tuner is allowed to spend
 //!
-//! ## The layout, most valuable bits first
-//!
-//! ```text
-//!   bit  10  9  8 | 7  6  5  4 | 3  2  1  0
-//!         NF_LEV   |    WDTH    |    SREJ
-//!        (3 bits)  |  (4 bits)  |  (4 bits)
-//!
-//! `MIN_NUM_LIGH` is deliberately absent -- it is pinned to "report every
-//! strike" and is not representable. See [`MIN_STRIKES_COUNT`].
-//! ```
-//!
-//! **The order is the whole design, and it works because binary search resolves
-//! the high bits first.** A bisection over 0..=8191 probes 4096 first, which is
-//! a decision about `NF_LEV` alone; the last probes decide the bottom two bits.
-//! So the cheap knob is settled coarsely up front and the destructive one only
-//! ever moves as a final fine adjustment:
+//! The AS3935 exposes four knobs for this. Only one of them is free, and the
+//! search space is now that one knob and nothing else:
 //!
 //! * **`NF_LEV`** is a *noise-floor* gate. It decides when the chip complains
 //!   the band is noisy, and **cannot reject a lightning waveform** — the only
-//!   free knob on the part, which is why it takes the top bits.
+//!   free knob on the part, and now the whole of the tuning point.
 //! * **`WDTH`** is the watchdog *amplitude* gate. Raising it discards weaker
-//!   arrivals, distant strikes first.
+//!   arrivals, **distant strikes first**. A *setting* — see
+//!   [`WATCHDOG_DEFAULT`].
 //! * **`SREJ`** compares the signal against the chip's lightning *waveform
-//!   template*. Raising it discards anything imperfectly shaped.
-//! * **`MIN_NUM_LIGH`** makes the chip wait for a *pattern* — 1, 5, 9 or 16
-//!   strikes — before reporting anything. The most destructive of the four: at
-//!   16, the first fifteen strikes of a storm are silent. Bottom two bits, so a
-//!   search reaches it last and moves it least.
+//!   template*. Raising it discards anything imperfectly shaped. A setting —
+//!   see [`SPIKE_REJECTION_DEFAULT`].
+//! * **`MIN_NUM_LIGH`** makes the chip wait for a *pattern* before reporting
+//!   anything. Pinned — see [`MIN_STRIKES_COUNT`].
 //!
-//! **[`FIELDS`] is the layout**, one row of mask-and-shift per register. Trying
-//! the opposite ordering — less valuable bits high — is reordering the `shift`
-//! column and nothing else; `tests/host/defence.rs` checks that whatever order
-//! is in the table still tiles the 13 bits with no gap and no overlap.
+//! ## Why the space kept shrinking
 //!
-//! Every one of the 8192 values is a distinct, legal combination — no field is
+//! It began as one 13-bit integer over all four, ordered so bisection settled
+//! the cheap knob first and the destructive one last. That ordering was the
+//! right instinct about a wrong premise: **a search that can reach a knob will
+//! eventually spend it**, and three of these four are paid for in strikes.
+//!
+//! Each eviction was forced by a measurement, and each has its own note:
+//! `MIN_NUM_LIGH` first, because it suppresses strikes outright; then `SREJ`,
+//! because the tuner reliably walked it to zero and zero admits an electric
+//! hammer as lightning; and now `WDTH`.
+//!
+//! **`WDTH` left because of what this device is for.** It is an early-warning
+//! device: the strikes worth having are the distant ones, arriving before the
+//! thunder does, and those are the weakest returns on the board — exactly what
+//! the watchdog discards first. A tuner minimising noise reports and a person
+//! wanting to see a storm approach are optimising against each other, and the
+//! tuner was winning. The weights recorded the conflict before anyone acted on
+//! it: `wd` carried 80 % of the harm against `nf`'s 20 %.
+//!
+//! Two things follow, and both are wanted:
+//!
+//! * **A sweep costs nothing that matters.** Three probes rather than seven,
+//!   over a knob that cannot reject lightning — so the deaf-time budget that
+//!   forced sweeps six hours apart no longer applies, and a perturbation to
+//!   escape a stuck point is affordable rather than dangerous.
+//! * **A noisy band is no longer a problem to be solved.** Hundreds of
+//!   disturbers a minute cost nothing if every strike still arrives, and this
+//!   site produces them. What the tuner still owes is a chip that is not
+//!   sitting in permanent `NoiseTooHigh`, which is precisely and only `NF_LEV`.
+//!
+//! **[`FIELDS`] is the layout**, one row of mask-and-shift per register.
+//! `tests/host/defence.rs` checks that whatever is in the table tiles
+//! [`BITS`] with no gap and no overlap — which is still worth checking with one
+//! row, because it is what would catch a second field being added back without
+//! [`BITS`] following it.
+//!
+//! Every one of the values is a distinct, legal combination — no field is
 //! capped below its width, because a cap would fold several raw values onto one
 //! point and strand the ±1 tuner in a short cycle. See the note by `MAX`.
 //!
@@ -122,7 +138,27 @@ impl Field {
 
 /// Index into [`FIELDS`], named so the accessors below read as English.
 pub const NOISE_FLOOR: usize = 0;
-pub const WATCHDOG: usize = 1;
+
+/// What `WDTH` is programmed to unless the operator says otherwise.
+///
+/// **Two, from `deep_demo.py` — the record of what actually worked at this
+/// site.** `setWatchdogThreshold(2)` beside `setSpikeRejection(0)`; the storm of
+/// 2026-08-19 established that pairing, with the note that the watchdog is the
+/// filter which earns its keep on this board.
+///
+/// **A setting rather than a field, for the reason in the module header.** The
+/// watchdog is an amplitude gate: raising it discards weaker arrivals, and the
+/// weakest arrivals are the distant strikes this device exists to see before
+/// the thunder. Leaving it in the search meant every quiet spell bought silence
+/// with exactly the returns that were the point.
+///
+/// It is still adjustable, because a site with a different noise floor may
+/// genuinely need more of it — but by a person who has decided to trade
+/// distance for quiet, and not by a loop optimising for quiet alone.
+pub const WATCHDOG_DEFAULT: u8 = 2;
+
+/// The range `wdth <n>` accepts. The register is four bits.
+pub const WATCHDOG_MAX: u8 = 15;
 
 /// What `SREJ` is programmed to unless the operator says otherwise.
 ///
@@ -181,21 +217,23 @@ pub const MIN_STRIKES_COUNT: u8 = 1;
 
 /// **The layout.** Most valuable first — reorder the `shift` column to try the
 /// opposite arrangement.
-pub const FIELDS: [Field; 2] = [
-    Field { name: "nf", shift: 4, width: 3, weight: 20 },
-    Field { name: "wd", shift: 0, width: 4, weight: 80 },
+pub const FIELDS: [Field; 1] = [
+    Field { name: "nf", shift: 0, width: 3, weight: 100 },
 ];
 
 /// Total width of the packed point.
-pub const BITS: u32 = 7;
+pub const BITS: u32 = 3;
 
-/// One value per bit pattern: 128 of them, 0..=127.
+/// One value per bit pattern: eight of them, 0..=7.
 ///
-/// **Seven bits, down from eleven.** `MIN_NUM_LIGH` left first because it
-/// suppresses strikes outright; `SREJ` followed because the tuner reliably
-/// walked it to zero and zero admits man-made impulses as lightning. What is
-/// left is the two knobs that are genuinely volume controls, and a sweep over
-/// them is seven probes rather than eleven.
+/// **Three bits, down from seven, down from eleven.** Each step removed a knob
+/// that was paid for in strikes: `MIN_NUM_LIGH` because it suppresses them
+/// outright, `SREJ` because the tuner reliably walked it to zero and zero
+/// admits man-made impulses as lightning, `WDTH` because it discards the
+/// distant arrivals this device exists to report.
+///
+/// What is left is the one knob that cannot cost a strike, which is why a sweep
+/// is now three probes and why perturbing the point is safe.
 pub const MAX: u16 = (1u16 << BITS) - 1;
 
 // **`SREJ` is deliberately NOT capped**, though an earlier design capped it at
@@ -231,27 +269,26 @@ impl Point {
 
     /// **Where a device starts when it has never calibrated.**
     ///
-    /// Each field at the middle of its range — *except* spike rejection and min
-    /// strikes, which start at their most sensitive. That split is the whole
-    /// point of the default:
+    /// `NF_LEV` at the middle of its range.
     ///
-    /// * `NF_LEV` and `WDTH` only decide how loud a signal has to be. Starting
-    ///   them mid-range costs some distant strikes and buys a device that is not
-    ///   drowning on its first window. Booting fully open was measured here at
-    ///   7–9 noise events per batch, continuously, which is a receiver with
-    ///   nothing left to say about anything.
-    /// `SREJ` and `MIN_NUM_LIGH` are no longer here to be started at anything.
-    /// Both decide whether a strike is *reported at all* rather than how loud
-    /// the receiver is, and both left the space for that reason — see
-    /// [`SPIKE_REJECTION_DEFAULT`] and [`MIN_STRIKES_COUNT`].
+    /// **Mid-range rather than open, and this is the one measurement that says
+    /// so.** Booting fully open was measured here at 7–9 noise events per batch,
+    /// continuously — a receiver with nothing left to say about anything. The
+    /// same figure turned up again on 2026-08-23 at indoor gain with `nf 0`
+    /// pinned: 5–8 noise per batch and not one strike through a live storm.
     ///
-    /// Computed from [`FIELDS`] rather than written as a literal, so reordering
-    /// the layout moves this with it.
+    /// Starting mid-range costs nothing that matters, because `NF_LEV` cannot
+    /// reject a lightning waveform. That is the difference from the knobs that
+    /// used to start here beside it: `WDTH`, `SREJ` and `MIN_NUM_LIGH` all
+    /// decide whether a strike is reported at all rather than how loud the room
+    /// is, and all three left the space for that reason — see
+    /// [`WATCHDOG_DEFAULT`], [`SPIKE_REJECTION_DEFAULT`] and
+    /// [`MIN_STRIKES_COUNT`].
+    ///
+    /// Computed from [`FIELDS`] rather than written as a literal, so widening
+    /// the field moves this with it.
     pub fn default_start() -> Point {
-        Point::pack(
-            FIELDS[NOISE_FLOOR].ceiling() / 2,
-            FIELDS[WATCHDOG].ceiling() / 2,
-        )
+        Point::pack(FIELDS[NOISE_FLOOR].ceiling() / 2)
     }
 
     /// Build from a raw packed value, clamping to the representable range.
@@ -276,10 +313,12 @@ impl Point {
         self.field(NOISE_FLOOR)
     }
 
-    pub fn watchdog(self) -> u8 {
-        self.field(WATCHDOG)
-    }
-
+    /// **Deliberately absent: there is no `watchdog()`.** `WDTH` is no longer
+    /// part of the point, so a point cannot answer what the watchdog is — the
+    /// setting can, and callers read it from `settings::watchdog()`. A method
+    /// here returning [`WATCHDOG_DEFAULT`] would be the same lie the old field
+    /// told, that this is something the tuner decides.
+    ///
     /// Always [`MIN_STRIKES_COUNT`]. Kept as a method so callers that report
     /// the chip's configuration do not have to know it is fixed.
     pub fn min_strikes_count(self) -> u8 {
@@ -293,10 +332,9 @@ impl Point {
     /// produce, and a packing with no way to write it a field at a time is a
     /// packing nobody can check.
     #[allow(dead_code)]
-    pub fn pack(noise_floor: u8, watchdog: u8) -> Point {
+    pub fn pack(noise_floor: u8) -> Point {
         let mut raw = 0u16;
         raw = FIELDS[NOISE_FLOOR].set(raw, noise_floor);
-        raw = FIELDS[WATCHDOG].set(raw, watchdog);
         Point(raw)
     }
 

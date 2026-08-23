@@ -790,7 +790,16 @@ pub fn describe(point: defence::Point) -> String {
     for (index, field) in defence::FIELDS.iter().enumerate() {
         out.push_str(&format!("{} {} ", field.name, point.field(index)));
     }
-    out.push_str(&format!("(wait {} strike(s))", point.min_strikes_count()));
+    // The two settings are printed beside the point deliberately. They are no
+    // longer part of it, but they are still what the chip is holding -- and a
+    // line that showed only the tunable third of the configuration would be the
+    // "two different things to read at 3am" this function exists to prevent.
+    let watchdog = settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
+    let spike = settings::spike_rejection().unwrap_or(defence::SPIKE_REJECTION_DEFAULT);
+    out.push_str(&format!(
+        "[wd {watchdog} sr {spike} fixed] (wait {} strike(s))",
+        point.min_strikes_count()
+    ));
     out
 }
 
@@ -891,7 +900,16 @@ pub fn apply(
     point: defence::Point,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
     sensor.set_noise_floor(i2c, point.noise_floor())?;
-    sensor.set_watchdog_threshold(i2c, point.watchdog())?;
+    // The watchdog comes from the *setting*, not the point -- see
+    // `defence::WATCHDOG_DEFAULT`. Written here on every apply rather than once
+    // at boot for the same reason as the strike count below: this is the one
+    // path that touches the rejection registers, so it is the one place that
+    // can guarantee what they hold.
+    //
+    // Reading NVS per apply is affordable: the tuner applies once a minute, and
+    // a sweep once a probe.
+    let watchdog = settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
+    sensor.set_watchdog_threshold(i2c, watchdog)?;
     // Takes a strike *count*, not the field, and reports what it actually
     // programmed -- the chip quantises to 1/5/9/16 and the return value is how
     // that is confirmed.

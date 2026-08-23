@@ -73,6 +73,10 @@ pub struct Effects {
     pub set_spike_rejection: Option<u8>,
     /// Set by a bare `srej`, which only wants to be told.
     pub show_spike_rejection: bool,
+    /// `Some(level)` when `wdth` was used; the caller owns the bus.
+    pub set_watchdog: Option<u8>,
+    /// Set by a bare `wdth`, which only wants to be told.
+    pub show_watchdog: bool,
     /// Set by `clearstats`; the caller owns the bus, same as `regs`.
     pub clear_statistics: bool,
     /// Set by `regs`; the caller owns the bus. Same reason as `sensitivity`.
@@ -306,6 +310,8 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         // goes to the caller like `regs` does -- `Ctx` has no bus by design.
         Command::Srej(None) => effects.show_spike_rejection = true,
         Command::Srej(Some(level)) => effects.set_spike_rejection = Some(level),
+        Command::Wdth(None) => effects.show_watchdog = true,
+        Command::Wdth(Some(level)) => effects.set_watchdog = Some(level),
         Command::ClearStats => effects.clear_statistics = true,
         Command::Merge(None) => {
             let window_ms = ctx.totals.merger.window_ms();

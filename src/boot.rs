@@ -136,6 +136,14 @@ pub fn configure(
         Ok(()) => println!("as:   spike rejection {spike}"),
         Err(e) => println!("as:   could not set spike rejection -- {e}"),
     }
+    // The watchdog is written by `session::apply` above, on every apply -- but
+    // it is reported here, because a setting the tuner can no longer reach is
+    // one a person has to be able to see without asking for it. It left the
+    // search space for a sharper reason than spike rejection did: it gates on
+    // amplitude, so the tuner spending it cost the distant strikes this device
+    // exists to report before the thunder arrives.
+    let watchdog = crate::settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
+    println!("as:   watchdog threshold {watchdog}");
     // `reset` issues PRESET_DEFAULT, which restores registers -- the datasheet
     // treats discarding the statistics as a separate operation, so until this
     // line no power cycle in the device's life had ever cleared them.
