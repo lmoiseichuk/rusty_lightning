@@ -2,9 +2,9 @@
 name = "lightning"
 version = "0.11.0"
 authors = ["LM"]
-edition = "2021"
+edition = "2024"
 resolver = "2"
-rust-version = "1.77"
+rust-version = "1.85"
 
 [[bin]]
 name = "lightning"
