@@ -34,8 +34,48 @@ const PATH: &str = "/lfs/strikes.csv";
 /// (§4.3). One flash is normally three to four of them, so without this column a
 /// merged record is indistinguishable from a single strike — the same ambiguity
 /// `simulated` was added to remove, and `energy_raw` is a *sum* across them.
-const HEADER: &str = "timestamp,iso_local,distance_km,energy_raw,\
+/// `kind` is what the chip said this event was: `lightning`, `disturber` or
+/// `noise`.
+///
+/// **Only lightning was ever logged, and that is why the central question about
+/// this device cannot be answered.** On 2026-08-13 a visible overhead cell
+/// produced 103,000 disturbers and 27 records. The repo's own prose says "the
+/// 103,000 disturbers were the storm" — that real flashes were arriving and
+/// failing the chip's waveform validation — but nobody could ever check it,
+/// because the file held no disturber timestamps to line up against the flashes.
+/// One column makes a two-week-old argument into a measurement.
+///
+/// `millis` is the sub-second part of the arrival, and it settles a separate
+/// anomaly. Of 1040 real records in `storm-2026-08-12.csv`, **not one shares a
+/// second with another**; under the observed rate ~46 same-second pairs were
+/// expected, so the odds of that happening by chance are about 1e-20. Nothing in
+/// the code implements a one-second floor — `append` does no deduplication and
+/// the reader had no rate limit — so either the servicing path has a dead time
+/// that costs events when a storm is heaviest, or the epoch column is simply
+/// coarse. Sub-second arrival times tell those two apart in one storm.
+const HEADER: &str = "timestamp,millis,kind,iso_local,distance_km,energy_raw,\
                       intensity_milli,score_milli,simulated,strokes";
+
+/// What the chip classified an event as.
+///
+/// A column rather than three files: the whole point is to compare arrival times
+/// across kinds, and that is a sort, not a join.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Lightning,
+    Disturber,
+    Noise,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Lightning => "lightning",
+            Kind::Disturber => "disturber",
+            Kind::Noise => "noise",
+        }
+    }
+}
 
 /// How often buffered lines are flushed and synced.
 pub const SYNC_INTERVAL_MS: u32 = 60_000;
@@ -162,7 +202,23 @@ impl Log {
     }
 
     /// Record a strike. Buffered; see [`Log::sync`].
-    pub fn append(&mut self, epoch: u64, strike: &Strike, simulated: bool, strokes: u32) {
+    /// Record an event the chip did not call lightning.
+    ///
+    /// **Deliberately cheap and deliberately not a `Strike`.** A disturber
+    /// carries no distance and no energy — the chip rejected the waveform before
+    /// measuring it — so every reading column is empty. What it carries is the
+    /// only thing being asked of it: *when*.
+    pub fn append_event(&mut self, epoch: u64, millis: u32, kind: Kind) {
+        let mut line = String::with_capacity(64);
+        let iso = match epoch {
+            0 => String::new(),
+            epoch => crate::clock::format_local(epoch).to_string(),
+        };
+        let _ = write!(line, "{epoch},{millis},{},{iso},,,,,0,0", kind.as_str());
+        self.pending.push(line);
+    }
+
+    pub fn append(&mut self, epoch: u64, millis: u32, strike: &Strike, simulated: bool, strokes: u32) {
         let mut line = String::with_capacity(96);
 
         // Words rather than numbers for the two sentinels. "Overhead" and "out
@@ -191,8 +247,10 @@ impl Log {
 
         let _ = write!(
             line,
-            "{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{}",
             epoch,
+            millis,
+            Kind::Lightning.as_str(),
             iso,
             distance,
             strike.energy_raw,

@@ -258,6 +258,12 @@ fn read_and_handle(
             // Disturbers count toward the rate as well as noise -- see
             // `Totals::noise_per_min` for why the screen must not separate them.
             totals.probe_noise += 1;
+            // **And into the log, which is the point of this whole change.**
+            // The device's central unanswered question is whether real flashes
+            // are arriving here rather than as lightning. Counted, they say
+            // nothing; timestamped, they can be laid against an independent
+            // record of when flashes actually happened.
+            log_event(strike_log.as_deref_mut(), log::Kind::Disturber);
         }
         Interrupt::NoiseTooHigh => {
             batch.noise += 1;
@@ -265,6 +271,7 @@ fn read_and_handle(
             // events nobody asked for, which is harmless: it is zeroed at the
             // start of the next one.
             totals.probe_noise += 1;
+            log_event(strike_log.as_deref_mut(), log::Kind::Noise);
         }
         Interrupt::Unknown(_) => batch.unknown += 1,
     }
@@ -615,6 +622,18 @@ impl Accumulator {
 /// and the simulated paths already come through this function, and §4.3's whole
 /// point is that they behave identically. A merge applied to only one of them
 /// would make the simulator stop exercising the path it exists to exercise.
+/// Log one non-lightning event, with the time it arrived.
+///
+/// **Volume is the objection, and it is real.** On 2026-08-13 this would have
+/// written 103,000 rows in one storm. That is the cost of answering the
+/// question, and it is bounded by the same retention the strike log already
+/// has — where a strike log that cannot be cross-referenced is a file nobody
+/// can draw a conclusion from at all.
+fn log_event(strike_log: Option<&mut log::Log>, kind: log::Kind) {
+    let Some(log) = strike_log else { return };
+    log.append_event(clock::now().unwrap_or(0), crate::now_ms(), kind);
+}
+
 pub fn record_strike(
     totals: &mut Totals,
     history: &mut history::History,
@@ -698,8 +717,15 @@ pub fn commit_merged(
     // An unset clock still logs the strike, with 0 for the time. It happened;
     // what is unknown is when.
     if let Some(log) = strike_log {
+        // **The free-running millisecond counter, not a subdivision of the
+        // epoch.** The epoch has one-second resolution and the anomaly being
+        // measured is *inside* a second — deriving the sub-second part from a
+        // second-resolution clock would produce exactly the flat zero that
+        // hides it. This counter is monotonic since boot and independent of
+        // whether the wall clock is set at all.
         log.append(
             merged.epoch.unwrap_or(0),
+            crate::now_ms(),
             strike,
             merged.simulated,
             merged.strokes,
