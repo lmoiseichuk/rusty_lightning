@@ -21,6 +21,7 @@ use esp_idf_hal::i2c::I2cDriver;
 
 use crate::as3935::As3935;
 use crate::session::{Batch, Totals};
+use crate::verdict::Window;
 use crate::{defence, session, settings};
 
 /// The one measurement window (§4.2).
@@ -87,12 +88,9 @@ pub struct Tuning {
     dip_restore: Option<defence::Point>,
     /// When the last dip ran, so they are spaced rather than continuous.
     last_dip_ms: u32,
-    events: u32,
-    disturbers: u32,
-    /// Strikes in the current window, which **veto** a climb. Kept apart from
-    /// `events` because that is the interference rate and has to stay a
-    /// measurement of the band, not of the weather.
-    strikes: u32,
+    /// What this window has seen. See [`crate::verdict::Window`], which holds
+    /// the one distinction this decision turns on.
+    window: Window,
     window_started_ms: u32,
     /// Set by `sensitive on`; see `session::force_max_sensitivity`. Deliberately
     /// not persisted — it is a diagnostic override for a storm happening now,
@@ -157,9 +155,7 @@ impl Tuning {
             // Starts now, so a board that reboots mid-storm does not dip
             // immediately on top of the weather it just came up in.
             last_dip_ms: now_ms,
-            events: 0,
-            disturbers: 0,
-            strikes: 0,
+            window: Window::default(),
             window_started_ms: now_ms,
             frozen: false,
             span_windows: 0,
@@ -175,10 +171,36 @@ impl Tuning {
     }
 
     /// Fold one batch into the window now being judged.
+    ///
+    /// **Only `noise` reaches the quiet verdict, because `NF_LEV` is the only
+    /// knob this decision has and it cannot touch a disturber.** Watched live
+    /// through the storm of 2026-08-26:
+    ///
+    /// ```text
+    /// nf 2:  11 noise, 0 disturbers
+    /// nf 3:   0 noise, 5-8 disturbers    <- one notch, and the band opened
+    /// nf 4:   still climbing
+    /// ```
+    ///
+    /// The first step was the system working: `NF_LEV` gates the noise floor and
+    /// the chip was drowning in its own. The steps after it were work that could
+    /// not succeed — disturbers are *validated* waveforms the chip rejected, and
+    /// raising the noise floor does nothing to them. The tuner would climb to 7,
+    /// stay "noisy", burn the ladder's whole range, and hand over to the stuck
+    /// detector.
+    ///
+    /// Harmless for detection, since `NF_LEV` cannot reject a lightning waveform
+    /// either — but it spends the tuning space on a question it is not holding
+    /// the answer to.
+    ///
+    /// `hold` already refuses to climb on a window that saw strikes, for this
+    /// same reason: a near strike throws harmonics that arrive as disturbers.
+    /// It does not fire here, because the window that matters saw *none*.
+    ///
+    /// Disturbers are still counted, and still reported. They are simply not
+    /// evidence about the noise floor.
     pub fn observe(&mut self, batch: &Batch) {
-        self.events += batch.noise + batch.disturbers;
-        self.disturbers += batch.disturbers;
-        self.strikes += batch.strikes;
+        self.window.fold(batch.noise, batch.disturbers, batch.strikes);
     }
 
     /// How long this window runs. A sweep sets its own, so `calibrate 60` means
@@ -199,9 +221,7 @@ impl Tuning {
     /// Used whenever something outside the tuner changes the point, so the next
     /// verdict is judged on the new setting rather than on the old one's tail.
     pub fn restart(&mut self, now_ms: u32) {
-        self.events = 0;
-        self.disturbers = 0;
-        self.strikes = 0;
+        self.window.clear();
         self.window_started_ms = now_ms;
     }
 
@@ -225,14 +245,13 @@ impl Tuning {
         // both report a per-minute rate rather than a raw count. Multiply before
         // dividing, so a window that is not a whole divisor of 60 still scales
         // correctly instead of collapsing to 1.
-        let per_min = |count: u32| count * 60 / window_s.max(1);
-        totals.noise_per_min = per_min(self.events);
-        totals.disturbers_per_min = per_min(self.disturbers);
+        totals.noise_per_min = self.window.noise_per_min(window_s);
+        totals.disturbers_per_min = self.window.disturbers_per_min(window_s);
 
         // **The one place "quiet" is decided.** A rate, not a count, so the
         // verdict means the same thing whatever the window length — see
         // `session::QUIET_PER_MIN` for what testing `== 0` cost.
-        let quiet = totals.noise_per_min <= self.quiet_per_min;
+        let quiet = self.window.quiet(self.quiet_per_min, window_s);
 
         // Captured before the branch: a sweep that finishes inside it clears
         // itself, and the ±1 walk must still be skipped for this window rather
@@ -252,7 +271,7 @@ impl Tuning {
             // The search owns this window; it has already moved the point.
             _ if sweeping => None,
             _ if dipping => self.judge_dip(sensor, i2c),
-            _ if self.strikes > 0 && !quiet => {
+            _ if self.window.strikes > 0 && !quiet => {
                 self.hold(totals);
                 None
             }
@@ -260,7 +279,7 @@ impl Tuning {
             _ => self.relax(),
         };
 
-        let heard_strikes = self.strikes > 0;
+        let heard_strikes = self.window.strikes > 0;
 
         // Stuck detection, counted after the walk has had its turn so the span
         // sees where the point actually ended up. A sweep or a dip owns the
@@ -275,9 +294,7 @@ impl Tuning {
             self.span_noisy |= !quiet;
         }
 
-        self.events = 0;
-        self.disturbers = 0;
-        self.strikes = 0;
+        self.window.clear();
 
         // Programmed only when it actually moved. At either end the decision is
         // taken every window and changes nothing.
@@ -309,7 +326,7 @@ impl Tuning {
         now_ms: u32,
     ) {
         let tested = self.point;
-        let events = self.events;
+        let events = self.window.noise;
         // Each probe is a different receiver, so the previous probe's figures
         // cannot describe this one.
         session::restart_statistics(sensor, i2c, "next probe");
@@ -384,7 +401,7 @@ impl Tuning {
             self.point.raw(),
             defence::MAX,
             self.point.percent(),
-            self.strikes,
+            self.window.strikes,
             totals.noise_per_min
         );
     }
@@ -614,10 +631,10 @@ impl Tuning {
     /// dip is a question rather than a decision.
     fn judge_dip(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>) -> Option<&'static str> {
         let restore = self.dip_restore.take();
-        if self.strikes >= DIP_STRIKES_TO_BELIEVE {
+        if self.window.strikes >= DIP_STRIKES_TO_BELIEVE {
             println!(
                 "dip:  {} strike(s) while open -- weather, staying at {}/{}",
-                self.strikes,
+                self.window.strikes,
                 self.point.raw(),
                 defence::MAX
             );

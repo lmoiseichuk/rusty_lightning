@@ -25,6 +25,7 @@ mod strike;
 mod system;
 mod tuning;
 mod ui;
+mod verdict;
 
 use std::num::NonZeroU32;
 
