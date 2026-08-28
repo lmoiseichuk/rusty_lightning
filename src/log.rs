@@ -53,7 +53,7 @@ const PATH: &str = "/lfs/strikes.csv";
 /// the reader had no rate limit — so either the servicing path has a dead time
 /// that costs events when a storm is heaviest, or the epoch column is simply
 /// coarse. Sub-second arrival times tell those two apart in one storm.
-const HEADER: &str = "timestamp,millis,kind,iso_local,distance_km,energy_raw,\
+const HEADER: &str = "timestamp,millis,kind,nf,iso_local,distance_km,energy_raw,\
                       intensity_milli,score_milli,simulated,strokes";
 
 /// What the chip classified an event as.
@@ -237,7 +237,7 @@ impl Log {
         self.event_budget
     }
 
-    pub fn append_event(&mut self, epoch: u64, millis: u32, kind: Kind) {
+    pub fn append_event(&mut self, epoch: u64, millis: u32, nf: u8, kind: Kind) {
         match self.event_budget {
             0 => return,
             1 => {
@@ -254,11 +254,11 @@ impl Log {
             0 => String::new(),
             epoch => crate::clock::format_local(epoch).to_string(),
         };
-        let _ = write!(line, "{epoch},{millis},{},{iso},,,,,0,0", kind.as_str());
+        let _ = write!(line, "{epoch},{millis},{},{nf},{iso},,,,,0,0", kind.as_str());
         self.pending.push(line);
     }
 
-    pub fn append(&mut self, epoch: u64, millis: u32, strike: &Strike, simulated: bool, strokes: u32) {
+    pub fn append(&mut self, epoch: u64, millis: u32, nf: u8, strike: &Strike, simulated: bool, strokes: u32) {
         let mut line = String::with_capacity(96);
 
         // Words rather than numbers for the two sentinels. "Overhead" and "out
@@ -287,10 +287,11 @@ impl Log {
 
         let _ = write!(
             line,
-            "{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{}",
             epoch,
             millis,
             Kind::Lightning.as_str(),
+            nf,
             iso,
             distance,
             strike.energy_raw,

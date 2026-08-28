@@ -67,6 +67,13 @@ pub struct Totals {
     /// bin still gets one attempt — which is precisely the case that produced
     /// 917 consecutive `Overhead` readings and no way to tell why.
     pub overhead_reset_done: bool,
+    /// When the last reset ran, in seconds since boot. Zero means never.
+    pub overhead_reset_at_s: u32,
+    /// Resets attempted since the last real distance reading.
+    pub overhead_attempts: u32,
+    /// Whether this device has stopped claiming a distance -- see
+    /// [`OVERHEAD_ATTEMPTS_BEFORE_GIVING_UP`].
+    pub overhead_gave_up: bool,
     /// **Interference** per minute — noise *and* disturbers — from the last
     /// probe. The number the screen shows.
     ///
@@ -631,7 +638,12 @@ impl Accumulator {
 /// can draw a conclusion from at all.
 fn log_event(strike_log: Option<&mut log::Log>, kind: log::Kind) {
     let Some(log) = strike_log else { return };
-    log.append_event(clock::now().unwrap_or(0), crate::now_ms(), kind);
+    log.append_event(
+        clock::now().unwrap_or(0),
+        crate::now_ms(),
+        CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
+        kind,
+    );
 }
 
 pub fn record_strike(
@@ -699,8 +711,13 @@ pub fn commit_merged(
     match strike.distance {
         Distance::Overhead => totals.overhead_run += 1,
         Distance::Km(_) | Distance::OutOfRange => {
+            // A real answer about distance: the estimator is demonstrably not
+            // stuck, so every part of the stuck state goes, not just the latch.
             totals.overhead_run = 0;
             totals.overhead_reset_done = false;
+            totals.overhead_attempts = 0;
+            totals.overhead_reset_at_s = 0;
+            totals.overhead_gave_up = false;
         }
     }
     totals.last_strike = Some((strike.distance, strike.intensity_milli(), merged.epoch));
@@ -726,6 +743,7 @@ pub fn commit_merged(
         log.append(
             merged.epoch.unwrap_or(0),
             crate::now_ms(),
+            CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
             strike,
             merged.simulated,
             merged.strokes,
@@ -895,14 +913,54 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
 /// across a storm that approached, sat overhead and departed — a field that had
 /// become a constant, which is the one thing a measurement must never be.
 ///
-/// **Fires once per run, then waits for a kilometre reading to re-arm it.** A
-/// plain counter would clear every third strike of a genuinely overhead cell,
-/// so the estimator would never accumulate anything; worse, a freshly cleared
-/// estimator has no data, and if its first readings fall back to the nearest
-/// bin then clearing causes the condition that triggers clearing. One attempt,
-/// then quiet, is the shape that cannot run away.
+/// **Rate-limited, not latched — and that distinction was costing every retry.**
+///
+/// The fear this guard was built around is real: a plain counter would clear
+/// every third strike of a genuinely overhead cell, the estimator would never
+/// accumulate anything, and a freshly cleared estimator whose first readings
+/// fall back to the nearest bin causes the very condition that triggers
+/// clearing. That argument is sound. The implementation of it was not.
+///
+/// `overhead_reset_done` was cleared in exactly one place — the `Km |
+/// OutOfRange` arm of the match above — so re-arming required a kilometre
+/// reading. On a device whose complaint *is* that no kilometre reading ever
+/// comes, that made this a **one-shot per boot**. Confirmed in
+/// `storm-2026-08-13.csv`: it fired at 16:11:30, no kilometre reading followed,
+/// and it never fired again across the remaining 21 strikes of that storm.
+///
+/// A minimum interval answers the runaway fear directly and without that
+/// dependency: five minutes is far longer than the estimator needs to
+/// accumulate, and far shorter than a storm. The kilometre reading still
+/// re-arms immediately, because a working estimator should not be made to wait.
+const OVERHEAD_RESET_MIN_INTERVAL_S: u32 = 300;
+
+/// How many attempts one storm gets before the device stops claiming a distance.
+///
+/// **Four tries and then an honest "unknown".** A confidently wrong "overhead"
+/// about a cell twenty kilometres away is worse than no distance at all, and
+/// the log cannot tell the two apart afterwards.
+const OVERHEAD_ATTEMPTS_BEFORE_GIVING_UP: u32 = 4;
+
 pub fn reset_if_stuck_overhead(sensor: &As3935, i2c: &mut I2cDriver<'_>, totals: &mut Totals) {
-    if totals.overhead_run < OVERHEAD_RUN_BEFORE_RESET || totals.overhead_reset_done {
+    if totals.overhead_run < OVERHEAD_RUN_BEFORE_RESET {
+        return;
+    }
+    let now_s = crate::now_ms() / 1000;
+    let since = now_s.saturating_sub(totals.overhead_reset_at_s);
+    if totals.overhead_reset_at_s != 0 && since < OVERHEAD_RESET_MIN_INTERVAL_S {
+        return;
+    }
+    totals.overhead_reset_at_s = now_s.max(1);
+    totals.overhead_attempts = totals.overhead_attempts.saturating_add(1);
+    if totals.overhead_attempts > OVERHEAD_ATTEMPTS_BEFORE_GIVING_UP {
+        if !totals.overhead_gave_up {
+            totals.overhead_gave_up = true;
+            println!(
+                "as:   {} resets and still nothing but the nearest bin -- reporting distance as UNKNOWN",
+                OVERHEAD_ATTEMPTS_BEFORE_GIVING_UP
+            );
+            println!("as:   a confident \"overhead\" about a distant cell is worse than no distance");
+        }
         return;
     }
     totals.overhead_reset_done = true;
@@ -920,12 +978,27 @@ pub fn restart_statistics(sensor: &As3935, i2c: &mut I2cDriver<'_>, why: &str) {
     }
 }
 
+/// The noise floor the chip is holding right now.
+///
+/// **Written here because this is the only path that touches the register**, so
+/// it cannot disagree with the hardware. Read by the log, which stamps every
+/// event with the rung that was in force when it arrived.
+///
+/// That column is the whole point of the exercise: the rung is currently a
+/// deterministic function of the noise, and the noise correlates with the
+/// weather, so "strikes per storm-minute by rung" measures a confound rather
+/// than the knob. Recording the rung with each event is what makes the curves
+/// -- noise, disturbers and lost edges against NF_LEV -- computable at all.
+/// Nobody has ever had them.
+pub static CURRENT_NF: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
 pub fn apply(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     point: defence::Point,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
     sensor.set_noise_floor(i2c, point.noise_floor())?;
+    CURRENT_NF.store(point.noise_floor(), core::sync::atomic::Ordering::Relaxed);
     // The watchdog comes from the *setting*, not the point -- see
     // `defence::WATCHDOG_DEFAULT`. Written here on every apply rather than once
     // at boot for the same reason as the strike count below: this is the one
