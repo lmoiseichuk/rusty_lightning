@@ -51,6 +51,12 @@ pub enum Command {
     /// `status` — what the sensor is doing, i.e. the second line.
     Status,
     /// `dump` — the strike log as CSV.
+    /// Arm logging of disturbers and noise for a bounded number of rows.
+    ///
+    /// The measurement the whole deafness question rests on: are real flashes
+    /// arriving as disturbers? Counted they say nothing; timestamped they can be
+    /// laid against an independent record of when flashes happened.
+    Events(u32),
     Dump,
     /// `clear` — erase the strike log.
     Clear,
@@ -314,6 +320,18 @@ fn parse(line: &str) -> Command {
         "regs" => Command::Regs,
         "health" => Command::Health,
         "status" => Command::Status,
+        // **A row budget rather than on/off.** There is no rotation in the log
+        // and no size bound; at the rate seen indoors this writes ~31,000 rows
+        // an hour and free flash is about an hour of that. A budget makes it
+        // safe to leave armed through a storm nobody is watching.
+        "events" => match arg {
+            None => Command::Events(20_000),
+            Some("off") => Command::Events(0),
+            Some(n) => match n.parse::<u32>() {
+                Ok(rows) => Command::Events(rows),
+                Err(_) => Command::Unknown,
+            },
+        },
         "dump" => Command::Dump,
         "clear" => Command::Clear,
 

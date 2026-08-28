@@ -299,6 +299,23 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             println!("status: charts showing the last {}", ctx.chart_period.label());
         }
 
+        Command::Events(rows) => match ctx.strike_log.as_deref_mut() {
+            None => println!("events: no log on this device"),
+            Some(log) => {
+                let set = log.arm_events(rows);
+                match set {
+                    0 => println!("events: off -- only lightning is logged"),
+                    rows => {
+                        println!("events: logging disturbers and noise for the next {rows} row(s)");
+                        // The rate is what makes the budget necessary, so it is
+                        // quoted where the decision is made rather than left in
+                        // a doc comment nobody reads at the console.
+                        println!("        ~8 events/s indoors, so that is roughly {} minute(s)", rows / 480);
+                        println!("        the log does not rotate; `dump` reads it, `clear` empties it");
+                    }
+                }
+            }
+        },
         Command::Dump => match ctx.strike_log.as_deref() {
             Some(log) => log::dump_csv(log),
             None => println!("dump: no log -- the storage partition is missing"),

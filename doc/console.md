@@ -131,6 +131,7 @@ works: `time`→`date`, `chart`→`scope`, `point`→`defence`, `cal`→`calibra
 | `status` | sensor state — mode, defence level, session counts, last hour, antenna. The screen's second line. |
 | `date` | the current time, in local time |
 | `dump` | the whole strike log as CSV, including records not yet synced to flash |
+| `events [rows]` | also log disturbers and noise, for that many rows (default 20000); `events off` stops |
 
 ### Setting things
 
@@ -166,6 +167,44 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `strike [km] [intensity]` | inject a synthetic strike |
 
 ---
+
+## Answering the question this device cannot answer
+
+Every recorded storm shows the same shape: a handful of strikes against a flood
+of disturbers. On 2026-08-13 a visible overhead cell produced 103,000 disturbers
+and 27 records. The standing explanation is that **the disturbers were the
+storm** — that real flashes arrive, fail the chip's waveform validation, and are
+reported as interference. Nobody has been able to check it, because the log held
+only lightning: there were no disturber timestamps to lay against the flashes.
+
+`events` fixes that. It adds `kind` (`lightning` / `disturber` / `noise`) and a
+sub-second `millis` column, so arrivals can be compared against an independent
+record of when flashes actually happened — a phone recording with a clock in
+shot is enough; a Blitzortung screenshot is better.
+
+```sh
+echo "events 20000" > /dev/ttyACM0    # arm it before the storm
+# ... let the storm run ...
+echo "dump"         > /dev/ttyACM0 > storm.csv
+```
+
+**It is a budget, not a switch, and that is deliberate.** This log does not
+rotate and has no size bound: it grows until the filesystem is full and then
+writes fail. Indoors the device sees about eight events a second, so logging
+everything writes ~31,000 rows an hour against roughly an hour of free flash.
+The budget stops it before that and says so, which makes it safe to leave armed
+through a storm nobody is watching — which is when the measurement is wanted.
+
+Not persisted, like `sensitive on`: a device that came back from a power cut
+silently filling its flash would be the same kind of trap.
+
+The `millis` column answers a second question at no extra cost. Of 1040 records
+in `storm-2026-08-12.csv`, **not one shares a second with another**, where about
+46 same-second pairs were expected — odds against of roughly 1e-20. Nothing in
+the code implements that floor. Either the servicing path has a dead time that
+loses events exactly when a storm is heaviest, or the epoch column is merely
+coarse; sub-second arrivals tell those apart in one storm.
+
 
 ## Why some of these exist
 

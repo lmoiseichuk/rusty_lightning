@@ -84,6 +84,22 @@ pub struct Log {
     /// Records written, counted at open from the file itself.
     records: u32,
     bytes: u32,
+    /// How many more non-lightning events may be logged. Zero means off.
+    ///
+    /// **Event logging is a bounded measurement, not a mode.** At the rate this
+    /// device sees indoors — 4.4 noise and 4.2 disturbers a second, measured —
+    /// logging every event writes about 31,000 rows an hour, and there is no
+    /// rotation and no size bound in this file: the log grows until the
+    /// filesystem is full and then writes fail. 1844 KB of free flash is about
+    /// an hour at that rate.
+    ///
+    /// So arming it costs a budget, and when the budget runs out it stops and
+    /// says so. That makes it safe to leave running through a storm nobody is
+    /// watching, which is exactly when the measurement is wanted.
+    ///
+    /// **Not persisted**, matching `sensitive on`: a device that came back from
+    /// a power cut silently filling its flash would be the same kind of trap.
+    event_budget: u32,
     /// Lines appended since the last sync. Kept in memory so a storm does not
     /// become one flash write per strike.
     pending: Vec<String>,
@@ -120,6 +136,7 @@ impl Log {
         let mut log = Log {
             records: 0,
             bytes: 0,
+            event_budget: 0,
             pending: Vec::new(),
         };
         log.ensure_header();
@@ -208,7 +225,30 @@ impl Log {
     /// carries no distance and no energy — the chip rejected the waveform before
     /// measuring it — so every reading column is empty. What it carries is the
     /// only thing being asked of it: *when*.
+    /// Arm event logging for `rows` more non-lightning events.
+    ///
+    /// Returns the budget actually set. Zero turns it off.
+    pub fn arm_events(&mut self, rows: u32) -> u32 {
+        self.event_budget = rows;
+        rows
+    }
+
+    pub fn event_budget(&self) -> u32 {
+        self.event_budget
+    }
+
     pub fn append_event(&mut self, epoch: u64, millis: u32, kind: Kind) {
+        match self.event_budget {
+            0 => return,
+            1 => {
+                self.event_budget = 0;
+                println!("log:  event budget spent -- disturbers and noise are no longer logged");
+                println!("log:  `events <rows>` arms another window; `dump` to read what was caught");
+                return;
+            }
+            budget => self.event_budget = budget - 1,
+        }
+
         let mut line = String::with_capacity(64);
         let iso = match epoch {
             0 => String::new(),
