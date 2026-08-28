@@ -6,6 +6,10 @@ as it has esp32c3 inside with an excellent Rust support
 
 All details collected [in specification](doc/specs.md)
 
+How the device actually scans — what the three interrupt kinds each license, why
+the tuning space is one register, and the failure mode the whole design turns on
+(*deafness reads as quiet*) — is [in the scanning guide](doc/scanning.md).
+
 The device has a serial console over its USB-C port — how to connect to it, the
 command list, and how to keep the port alive while debugging (light sleep takes
 it away) are [in the console guide](doc/console.md).

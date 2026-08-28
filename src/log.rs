@@ -385,38 +385,33 @@ where
     let Ok(file) = File::open(PATH) else {
         return;
     };
-    for line in BufReader::new(file).lines().map_while(Result::ok).skip(1) {
-        let mut fields = line.split(',');
-        let (Some(epoch), Some(_iso), Some(distance), Some(energy)) =
-            (fields.next(), fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
+    let mut lines = BufReader::new(file).lines().map_while(Result::ok);
 
-        let Ok(epoch) = epoch.trim().parse::<u64>() else {
-            continue;
-        };
-        if epoch == 0 {
-            continue;
+    // **The layout comes from the file's own header, not from this build's.**
+    // See `crate::csv` — a file written before event logging has eight columns
+    // and no `kind`, and reading it positionally against the current eleven
+    // would have silently dropped every record.
+    let Some(header) = lines.next() else { return };
+    let Some(columns) = crate::csv::Columns::from_header(&header) else {
+        println!("log:  ⚠ header has no columns this build understands -- not replaying");
+        println!("log:    on disk: {header}");
+        return;
+    };
+
+    for line in lines {
+        match crate::csv::parse_row(&line, &columns) {
+            crate::csv::Row::Strike { epoch, energy_raw, distance } => visit(
+                epoch,
+                Strike {
+                    distance: match distance {
+                        crate::csv::Distance::Overhead => Distance::Overhead,
+                        crate::csv::Distance::OutOfRange => Distance::OutOfRange,
+                        crate::csv::Distance::Km(km) => Distance::Km(km),
+                    },
+                    energy_raw,
+                },
+            ),
+            crate::csv::Row::Event | crate::csv::Row::Skip => continue,
         }
-        let Ok(energy_raw) = energy.trim().parse::<u32>() else {
-            continue;
-        };
-        let distance = match distance.trim() {
-            "overhead" => Distance::Overhead,
-            "far" => Distance::OutOfRange,
-            km => match km.parse::<u8>() {
-                Ok(km) => Distance::Km(km),
-                Err(_) => continue,
-            },
-        };
-
-        visit(
-            epoch,
-            Strike {
-                distance,
-                energy_raw,
-            },
-        );
     }
 }

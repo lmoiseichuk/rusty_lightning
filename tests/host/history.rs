@@ -52,9 +52,21 @@ fn main() {
     let s = strike(Distance::Km(6), 7000);
     check("6 km at intensity 7 scores ~1.16", (1140..=1180).contains(&score_milli(&s).unwrap()));
 
-    check("overhead scores 10x a 1 km strike",
+    // **This assertion used to say `== 10 *`, and it was wrong.**
+    //
+    // It encoded the constant rather than the intent: `Overhead => 1` deci-km
+    // against `Km(1) => 10` made an overhead strike score ten times a genuine
+    // 1 km one. The chip cannot report anything nearer than its nearest bin, so
+    // that tenfold was invention -- the same error the `OutOfRange` arm refuses
+    // to make at the other end. Changed 2026-08-28 with the owner's agreement,
+    // because it rewrites every historical chart: `log::for_each` re-scores
+    // each record from distance and energy on replay.
+    check("overhead scores the same as 1 km, the nearest the chip can express",
         score_milli(&strike(Distance::Overhead, 3000)).unwrap()
-            == 10 * score_milli(&strike(Distance::Km(1), 3000)).unwrap());
+            == score_milli(&strike(Distance::Km(1), 3000)).unwrap());
+    check("and never more, since nearer cannot be expressed",
+        score_milli(&strike(Distance::Overhead, 3000)).unwrap()
+            <= score_milli(&strike(Distance::Km(1), 3000)).unwrap());
     check("out of range has no score", score_milli(&strike(Distance::OutOfRange, 3000)).is_none());
 
     // --- bucketing ---------------------------------------------------------

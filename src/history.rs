@@ -138,7 +138,26 @@ impl Bucket {
 pub fn score_milli(strike: &Strike) -> Option<u32> {
     let deci_km = match strike.distance {
         Distance::Km(km) => (km as u32).max(1) * 10,
-        Distance::Overhead => 1,
+        // **The nearest bin is "1 km or closer", not "a tenth of a kilometre".**
+        //
+        // This was 1 deci-km, which scored an overhead strike **ten times** a
+        // genuine 1 km one -- and since the chip cannot report anything nearer
+        // than its nearest bin, that tenfold was pure invention. In
+        // `storm-2026-08-13.csv` the overhead rows score 171,210-304,990 against
+        // the three 5 km rows' 810-3,118: a factor of fifty to a hundred,
+        // driven by a constant nobody chose deliberately.
+        //
+        // It is the same error the `OutOfRange` arm below already refuses to
+        // make, at the other end: substituting a distance the chip did not
+        // measure. There the answer is `None`; here the honest floor is the
+        // nearest distance the chip *can* express, which is 1 km.
+        //
+        // **This changes every historical chart**, because `log::for_each`
+        // re-scores each record from its distance and energy on replay rather
+        // than reading the stored column. That is the point -- all 1040 rows of
+        // the 08-12 storm carried the inflation -- and it is why the change was
+        // put to the owner rather than made quietly.
+        Distance::Overhead => 10,
         Distance::OutOfRange => return None,
     };
     Some(strike.intensity_milli() * 10 / deci_km)
