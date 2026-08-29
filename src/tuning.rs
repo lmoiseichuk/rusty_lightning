@@ -340,15 +340,24 @@ impl Tuning {
         // where the proportional climb then took nine notches at once and
         // saturated at fully deaf. The measurement was already in hand; it was
         // simply not kept. One rung of memory ends that cycle.
-        let events_per_min = totals.noise_per_min + totals.disturbers_per_min;
-        if crate::golden::is_swamped(events_per_min, self.quiet_per_min) {
+        // **Noise only, not noise plus disturbers.** Drowning is the front end
+        // reporting `NoiseTooHigh` continuously -- measured at 300-480/min and
+        // 595/min at the bottom rungs. Disturbers are the opposite signal: the
+        // working rung on this device sits at 0 noise and 5-8 disturbers a
+        // second, roughly 360/min, which summed with noise clears a 5x-of-60
+        // threshold on its own. Counting them would have graded the *working*
+        // rung as swamped and ratcheted the floor up under it, one rung at a
+        // time, until the device was deaf by accumulation -- which is the
+        // failure this threshold exists to prevent, arrived at by the exact
+        // route the comment warns about.
+        if crate::golden::is_swamped(totals.noise_per_min, self.quiet_per_min) {
             let before = self.floor.lowest();
             self.floor = self.floor.swamped(self.point.raw() as u8);
             if self.floor.lowest() != before {
                 println!(
-                    "tune: nf {} drowned at {}/min -- will not relax below nf {} again",
+                    "tune: nf {} drowned at {} noise/min -- will not relax below nf {} again",
                     self.point.raw(),
-                    events_per_min,
+                    totals.noise_per_min,
                     self.floor.lowest()
                 );
             }

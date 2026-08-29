@@ -246,7 +246,16 @@ pub const MAX_NF: u8 = 7;
 /// ten times, where an ordinary noisy window sits at one or two times.
 pub const SWAMPED_MULTIPLE: u32 = 5;
 
-/// Whether a window's event rate means the front end is drowning.
-pub fn is_swamped(events_per_min: u32, quiet_per_min: u32) -> bool {
-    events_per_min >= quiet_per_min.max(1).saturating_mul(SWAMPED_MULTIPLE)
+/// Whether a window's **noise** rate means the front end is drowning.
+///
+/// **Noise, not noise plus disturbers, and the difference is the whole test.**
+/// Drowning is the chip reporting `NoiseTooHigh` continuously; a disturber is
+/// the chip having looked at something and rejected it, which is a receiver
+/// doing its job. On this device the working rung sits at 0 noise and 5-8
+/// disturbers a second -- around 360/min -- so a test that summed them would
+/// grade the working rung as swamped and ratchet the floor up under it until
+/// the device was deaf. The two signals point in opposite directions and must
+/// not be added.
+pub fn is_swamped(noise_per_min: u32, quiet_per_min: u32) -> bool {
+    noise_per_min >= quiet_per_min.max(1).saturating_mul(SWAMPED_MULTIPLE)
 }

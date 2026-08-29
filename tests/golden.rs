@@ -189,6 +189,12 @@ fn main() {
     check("nor does exactly twice the threshold", !is_swamped(120, 60));
     check("five times does", is_swamped(300, 60));
     check("a zero threshold does not divide by zero", is_swamped(5, 0));
+    // **The regression this test exists for.** The working rung on this device
+    // measures 0 noise and 5-8 disturbers a second. A swamp test fed the sum
+    // would grade it as drowning and ratchet the floor up under it, one rung a
+    // window, until the device was deaf -- so the argument is noise alone.
+    check("the working rung is not drowning", !is_swamped(0, 60));
+    check("...however many disturbers accompany it", !is_swamped(0, 60));
 
     let passed = PASS.load(Ordering::Relaxed);
     let failed = FAIL.load(Ordering::Relaxed);
