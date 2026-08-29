@@ -118,19 +118,48 @@ impl Log {
         };
         // The flags are a bindgen bitfield rather than plain bools, so they are
         // set through generated accessors rather than in the initialiser.
-        //
-        // Format on a failed mount, so a virgin device — or one whose
-        // filesystem did not survive something — comes up working rather than
-        // dead. The cost of a spurious format is the log, and in that situation
-        // the log is already unreadable.
-        config.set_format_if_mount_failed(1);
         config.set_read_only(0);
         config.set_dont_mount(0);
 
+        // **Try WITHOUT formatting first, and say so if that fails.**
+        //
+        // This used to be one call with `format_if_mount_failed` set, and
+        // nothing reported when it fired — so a mount failure silently erased
+        // every strike this device had ever recorded and came back looking like
+        // a device that had simply never seen a storm. The owner reported
+        // exactly that: "reboot cleans them".
+        //
+        // The old comment argued the cost was nothing, because "in that
+        // situation the log is already unreadable". That is an assumption, and
+        // it is the wrong way round for littlefs specifically: it is designed to
+        // survive a power cut, so a mount failure after one is more often
+        // transient than terminal. This board has been browning out — the
+        // e-paper refresh on USB power alone — which is precisely the way to
+        // reach an unclean mount without any real corruption.
+        //
+        // So the format still happens, because a device that cannot log at all
+        // is worse. But it happens as a *decision*, with a line saying what it
+        // cost, instead of as a side effect nobody could see.
+        config.set_format_if_mount_failed(0);
         // SAFETY: a plain IDF call; both CStrings outlive it.
-        let err = unsafe { sys::littlefs::esp_vfs_littlefs_register(&config) };
-        if err != sys::ESP_OK {
-            return None;
+        let first = unsafe { sys::littlefs::esp_vfs_littlefs_register(&config) };
+
+        if first != sys::ESP_OK {
+            println!("log:  ⚠ the log filesystem would not mount ({first})");
+            let had = crate::settings::logged_records().unwrap_or(0);
+            match had {
+                0 => println!("log:    nothing was recorded on it, so nothing is lost"),
+                n => println!("log:    {n} record(s) were on it and are about to be ERASED"),
+            }
+            println!("log:    formatting, because a device that cannot log is worse");
+            config.set_format_if_mount_failed(1);
+            // SAFETY: as above. The failed registration left nothing mounted.
+            let second = unsafe { sys::littlefs::esp_vfs_littlefs_register(&config) };
+            if second != sys::ESP_OK {
+                println!("log:  ⚠ and the format failed too ({second}) -- no log this boot");
+                return None;
+            }
+            let _ = crate::settings::store_logged_records(0);
         }
 
         let mut log = Log {
@@ -141,6 +170,31 @@ impl Log {
         };
         log.ensure_header();
         log.recount();
+
+        // **The second way a log goes missing, and the one the first check
+        // cannot see.** If the filesystem was formatted by something other than
+        // the branch above -- a previous boot's format, an erase during
+        // flashing, a partition change -- then the mount SUCCEEDS and the file
+        // is simply empty. Nothing is wrong from here; the records are just
+        // gone.
+        //
+        // NVS is a different partition and survives all of that, so comparing
+        // the two is what turns a silent disappearance into a reported one. The
+        // owner's complaint was precisely this shape: "reboot cleans them".
+        let remembered = crate::settings::logged_records().unwrap_or(0);
+        if remembered > log.records {
+            println!(
+                "log:  ⚠ {} record(s) were remembered, {} are on disk -- {} LOST",
+                remembered,
+                log.records,
+                remembered - log.records
+            );
+            println!("log:    the log filesystem was reformatted or replaced since the last sync");
+            // Re-anchor, or every subsequent boot repeats a loss that has
+            // already been reported and cannot be undone.
+            let _ = crate::settings::store_logged_records(log.records);
+        }
+
         Some(log)
     }
 
@@ -323,6 +377,12 @@ impl Log {
         // The call that makes the difference: without it the data sits in the
         // filesystem's cache and a power cut takes it.
         file.sync_all()?;
+        // **The count goes to NVS, a different partition.** So if the log's
+        // filesystem is ever lost, the device can say how many records went with
+        // it rather than coming back looking like it had never seen a storm.
+        // Written on the sync rather than the append, so it costs one NVS write
+        // a minute at most, matching what is already on disk.
+        let _ = crate::settings::store_logged_records(self.records);
         Ok(written)
     }
 
@@ -333,6 +393,10 @@ impl Log {
         std::fs::remove_file(PATH)?;
         self.ensure_header();
         self.recount();
+        // A deliberate erase is not a loss, so the remembered count follows it
+        // down. Otherwise the next boot would report records that somebody
+        // asked to be gone.
+        let _ = crate::settings::store_logged_records(self.records);
         Ok(())
     }
 }

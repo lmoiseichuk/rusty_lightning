@@ -26,6 +26,12 @@ const KEY_DRAIN_SECONDS: &[u8] = b"bat_cnt\0";
 /// costs minutes; honouring the old bytes would cost a storm.
 const KEY_DEFENCE: &[u8] = b"defence3\0";
 const KEY_QUIET: &[u8] = b"quiet\0";
+/// How many records the log held at the last sync.
+///
+/// **In NVS, which is a different partition from the log.** That is the whole
+/// point: it survives a littlefs format, so after one the device can say how
+/// much was lost instead of coming back looking like it had never seen a storm.
+const KEY_LOGGED: &[u8] = b"log_recs\0";
 const KEY_MERGE: &[u8] = b"merge_ms\0";
 const KEY_SREJ: &[u8] = b"srej\0";
 const KEY_WDTH: &[u8] = b"wdth\0";
@@ -42,6 +48,18 @@ const STORED_OUTDOOR: u8 = 2;
 /// difference between "never configured" and "configured, and it happens to be
 /// indoor", which matters the first time someone wonders whether their button
 /// press actually stuck.
+/// How many records the log held when it was last synced.
+pub fn logged_records() -> Option<u32> {
+    Namespace::open(NAMESPACE).ok()?.get_u32(KEY_LOGGED)
+}
+
+/// Remember the count, so a lost filesystem can be reported rather than guessed.
+pub fn store_logged_records(records: u32) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_LOGGED, records)?;
+    nvs.commit()
+}
+
 pub fn location() -> Option<Location> {
     let nvs = Namespace::open(NAMESPACE).ok()?;
     match nvs.get_u8(KEY_LOCATION)? {
