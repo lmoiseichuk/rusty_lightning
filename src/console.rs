@@ -425,7 +425,7 @@ pub fn print_help() {
     println!("commands:");
     println!("  help                  this");
     println!("  date [unix-epoch]     show the clock, or set it");
-    println!("  tz <hours>            local offset, e.g. tz -4 for US Eastern");
+    println!("  tz <hours>            local offset in hours, e.g. tz -4 or tz 2");
     println!("  scope day|week|month  which span the charts cover");
     println!("  health                device vitals -- the screen's top line");
     println!("  status                sensor state -- the screen's second line");

@@ -364,7 +364,7 @@ impl Log {
         // and saying so is recoverable where inventing it is not.
         // **Local time in the ISO column, UTC in the epoch column.** The epoch
         // is the machine-readable, unambiguous one; the ISO string is for a
-        // person reading the file, and a person in Florida wants Florida time.
+        // person reading the file, and a person reading it wants local time.
         // Keeping both means neither reader has to know about the other.
         let iso = if epoch == 0 {
             String::new()

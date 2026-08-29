@@ -21,6 +21,6 @@ target
 #.idea/
 
 # Dumped strike logs. Pulled off the device with `dump` whenever a storm is
-# worth looking at -- and in Florida that is weekly, so they are working files
-# rather than anything to version.
+# worth looking at -- which in a storm season is weekly, so they are working
+# files rather than anything to version.
 storm-*.csv

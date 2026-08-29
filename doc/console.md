@@ -138,7 +138,7 @@ works: `time`→`date`, `chart`→`scope`, `point`→`defence`, `cal`→`calibra
 | Command | What it does |
 |---|---|
 | `date <unix-epoch>` | set the clock. There is no RTC and no network yet, so this is how the device learns the time. |
-| `tz <hours>` | local offset, e.g. `tz -4` for US Eastern. Whole hours here; the firmware stores minutes, so half-hour zones need no format change later. |
+| `tz <hours>` | local offset in hours, negative west of UTC — e.g. `tz -4`, `tz 2`. Whole hours here; the firmware stores minutes, so half-hour zones need no format change later. |
 | `scope day\|week\|month` | which span the charts cover |
 | `mode indoor\|outdoor` | AFE gain — the same switch as holding the BOOT button |
 | `clear` | erase the strike log. No confirmation. |

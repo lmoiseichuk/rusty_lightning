@@ -38,6 +38,7 @@ Every one of those is written down where the decision it forced lives, because a
 number in a commit message is a number nobody reads again.
 
 ![Inside the panel](doc/internals.jpg)
+![The panel's internals in detail](doc/internals_detailed.jpg)
 
 ## Getting one running
 
@@ -153,8 +154,7 @@ biggest open question is stated in [§8 of the scanning
 guide](doc/scanning.md) — whether the disturbers *are* the storm — and it needs
 one armed `events` window during a real one to answer.
 
-![The panel's internals in detail](doc/internals_detailed.jpg)
 
 ---
 
-Built for a wall in Florida, where there is another storm along in a few days.
+Built for a wall in areas where there is another storm along in a few days.
