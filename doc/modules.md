@@ -116,7 +116,7 @@ this table is generated from it.
 |---|---|---|---|
 | `display` | The 7.5" panel — hardware only (§6). | -- | 335 |
 | `screen` | When the panel is redrawn, and what goes on it. | -- | 270 |
-| `ui` | Screen layout (§6). | -- | 1421 |
+| `ui` | Screen layout (§6). | -- | 1452 |
 
 ### Talking to a person
 

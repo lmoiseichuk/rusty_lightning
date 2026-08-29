@@ -792,7 +792,29 @@ fn strike_table(frame: &mut Display7in5, s: &Status<'_>) {
     .into_styled(PrimitiveStyle::with_stroke(INK, 1))
     .draw(frame);
 
-    for (row, entry) in s.recent.iter().take(17).enumerate() {
+    // **The table shows the same window the chart does.**
+    //
+    // The two sit side by side and are read as one picture, so a strike that
+    // has scrolled off the left of the chart must not still be listed on the
+    // right — it says "this is what is happening" about a time the chart has
+    // already stopped covering, and the older the entry the more confidently it
+    // lies. Filtering here rather than in `history::RecentLog` on purpose: the
+    // ring keeps everything it was given, and *this screen* decides what this
+    // screen shows. Change the period and the table follows, with no state to
+    // keep in step.
+    //
+    // An entry with no timestamp is kept. The clock being unset is not the
+    // strike's fault, and dropping a real detection because the device did not
+    // know the time is a worse error than showing one a little too long.
+    let horizon = s.now.map(|now| {
+        now.saturating_sub(s.chart_period.window_minutes() as u64 * 60)
+    });
+    let visible = s.recent.iter().filter(|entry| match (horizon, entry.epoch) {
+        (Some(horizon), Some(epoch)) => epoch >= horizon,
+        _ => true,
+    });
+
+    for (row, entry) in visible.take(17).enumerate() {
         let y = TOP + 18 + row as i32 * PITCH;
 
         let mut time = Text16::new();
@@ -988,6 +1010,15 @@ impl ChartPeriod {
             ChartPeriod::Week => crate::history::MEDIUM_MINUTES,
             ChartPeriod::Month => crate::history::COARSE_MINUTES,
         }
+    }
+
+    /// How far back the chart actually reaches, in minutes.
+    ///
+    /// `CHART_BARS` buckets of [`ChartPeriod::bucket_minutes`] — the span the
+    /// drawn bars cover, not the span the ring holds. The ring is longer: the
+    /// day ring is 288 buckets and only 80 are drawn.
+    fn window_minutes(self) -> u32 {
+        CHART_BARS as u32 * self.bucket_minutes()
     }
 
     /// How far apart the time gridlines go, in minutes, and how to name one.
