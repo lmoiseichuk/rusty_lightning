@@ -93,9 +93,9 @@ this table is generated from it.
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 543 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 436 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1056 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1071 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/history.rs`, `tests/merger.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 947 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 984 |
 | `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 70 |
 
 ### Keeping it
@@ -123,12 +123,12 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `commands` | What the console commands actually do (§5). | -- | 452 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 456 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 484 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 399 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 141 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 192 |
 | `webui` | The page the access point serves. | -- | 245 |
 
 ### The board underneath
@@ -161,7 +161,7 @@ program' is not information.
 | `boot` | `as3935` `defence` `golden` `session` `settings` |
 | `clock` | `civil` `storage` |
 | `commands` | `as3935` `battery` `clock` `console` `credentials` `golden` `history` `log` `power` `session` `settings` `strike` `system` `ui` |
-| `console` | `defence` `session` |
+| `console` | `defence` `query` `session` |
 | `credentials` | `storage` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
 | `history` | `strike` |

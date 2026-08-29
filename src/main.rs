@@ -363,6 +363,7 @@ fn main() {
         press::LONG_MS / 1000,
     );
     println!("as:   running {}", location.label());
+    console::verify_web_commands();
 
     // --- the panel --------------------------------------------------------
     let mut panel = match display::Panel::new(display::Pins {

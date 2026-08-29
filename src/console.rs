@@ -454,3 +454,31 @@ pub fn print_help() {
     println!("`freq 160` holds it open indefinitely; `freq auto` gives it back.");
     println!("Full guide: doc/console.md");
 }
+
+
+/// Check that every command the web UI can send is one this console knows.
+///
+/// **Because the first version of that list was wrong and nothing noticed.**
+/// Five of its entries named words the parser does not have; each composed a
+/// line, parsed to `Unknown`, and the page did nothing at all -- no error, no
+/// log, a button that looks like it worked. The design note says the single
+/// command table is what stops the two interfaces drifting, and it does not,
+/// on its own: one of them is a list of strings and the other is a `match`,
+/// and nothing in the compiler relates them.
+///
+/// So they are related here, at boot, for the cost of a dozen string compares.
+/// Reported rather than fatal: a device that refuses to start because a web
+/// button is broken is worse than one that says so and goes on watching for
+/// lightning.
+pub fn verify_web_commands() {
+    let mut bad = 0;
+    for line in crate::query::samples() {
+        if matches!(parse(&line), Command::Unknown) {
+            println!("web:  ⚠ the page can send `{line}`, which this console does not know");
+            bad += 1;
+        }
+    }
+    if bad > 0 {
+        println!("web:  {bad} web command(s) would do nothing -- see `query::COMMANDS`");
+    }
+}

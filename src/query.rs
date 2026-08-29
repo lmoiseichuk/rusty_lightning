@@ -18,6 +18,50 @@
 //! point is up for sixty seconds after a five-second press. There is no
 //! authentication because the network's password is the authentication.
 
+/// Every command the page may send, and how many arguments it takes.
+///
+/// **This is the drift hazard, so it is one list.** The first version was
+/// written from memory rather than from `console`'s command table and five of
+/// its seven action buttons named words the console does not know -- `indoor`,
+/// `outdoor`, `reboot`, `sync`, `quiet`. Each composed a line, the console
+/// parsed it to `Unknown`, and the page silently did nothing. The comment above
+/// this module claimed the single command table prevents exactly that.
+///
+/// It cannot be derived from `console::parse`, which is a `match` over string
+/// literals with no list to read. So it is checked instead: `verify` runs every
+/// entry through the real parser at boot and reports any the console rejects.
+pub const COMMANDS: &[(&str, Arity)] = &[
+    ("mode indoor", Arity::None),
+    ("mode outdoor", Arity::None),
+    ("calibrate", Arity::None),
+    ("clearstats", Arity::None),
+    ("dump", Arity::None),
+    ("golden", Arity::None),
+    ("status", Arity::None),
+    ("health", Arity::None),
+    ("regs", Arity::None),
+    ("defence", Arity::One),
+    ("srej", Arity::One),
+    ("wdth", Arity::One),
+    ("merge", Arity::One),
+    ("tz", Arity::One),
+    ("events", Arity::One),
+    ("strike", Arity::One),
+    ("scope", Arity::One),
+    ("sensitive", Arity::OnOff),
+];
+
+/// How many arguments a command takes, and of what shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arity {
+    /// Takes none; an argument in the query is ignored rather than appended.
+    None,
+    /// Takes exactly one, which `console` range-checks.
+    One,
+    /// Takes literally `on` or `off`.
+    OnOff,
+}
+
 /// Turn `/do?cmd=...` into a console line.
 ///
 /// Returns `None` for anything not recognised, which the caller logs and
@@ -40,16 +84,11 @@ pub fn command_from_query(query: &str) -> Option<String> {
     let value = value.unwrap_or_default();
     let value = value.trim();
 
-    // The allow-list. Each arm names how many arguments the command takes,
-    // because "reject an argument the command does not want" is cheaper here
-    // than explaining a surprise later.
-    match command.as_str() {
-        // No argument.
-        "indoor" | "outdoor" | "calibrate" | "clearstats" | "reboot" | "sync" => {
-            Some(command)
-        }
-        // One argument, which the console's own parser range-checks.
-        "defence" | "srej" | "wdth" | "quiet" | "merge" | "tz" | "events" | "strike" => {
+    let (name, arity) = COMMANDS.iter().find(|(name, _)| *name == command)?;
+
+    match arity {
+        Arity::None => Some((*name).to_string()),
+        Arity::One => {
             if value.is_empty() {
                 return None;
             }
@@ -58,15 +97,26 @@ pub fn command_from_query(query: &str) -> Option<String> {
             if value.contains(char::is_whitespace) {
                 return None;
             }
-            Some(format!("{command} {value}"))
+            Some(format!("{name} {value}"))
         }
-        // On or off.
-        "sensitive" => match value {
-            "on" | "off" => Some(format!("sensitive {value}")),
+        Arity::OnOff => match value {
+            "on" | "off" => Some(format!("{name} {value}")),
             _ => None,
         },
-        _ => None,
     }
+}
+
+/// A representative line for each entry, for the boot check.
+///
+/// Arguments are chosen to be in range for every command that takes one, since
+/// the point is to test that the console *knows the word*, not that it accepts
+/// a particular value.
+pub fn samples() -> impl Iterator<Item = String> {
+    COMMANDS.iter().map(|(name, arity)| match arity {
+        Arity::None => (*name).to_string(),
+        Arity::One => format!("{name} 1"),
+        Arity::OnOff => format!("{name} off"),
+    })
 }
 
 /// Decode `%20` and `+`.
@@ -139,3 +189,4 @@ pub fn duration(seconds: u32) -> String {
         _ => format!("{days}d {hours}h {minutes:02}m"),
     }
 }
+

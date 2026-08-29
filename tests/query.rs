@@ -33,7 +33,19 @@ fn main() {
     println!("== query ==");
 
     println!("\n  the commands the page can send");
-    check("a bare command passes", command_from_query("cmd=indoor").as_deref() == Some("indoor"));
+    check(
+        "a bare command passes",
+        command_from_query("cmd=calibrate").as_deref() == Some("calibrate"),
+    );
+    // **The words are the console's, not invented here.** `indoor` reads like a
+    // command and is not one -- the console's word is `mode indoor`, and an
+    // allow-list written from memory named five words the parser does not know.
+    check(
+        "a two-word command passes whole",
+        command_from_query("cmd=mode+indoor").as_deref() == Some("mode indoor"),
+    );
+    check("`indoor` alone is not a command", command_from_query("cmd=indoor").is_none());
+    check("nor is `reboot`", command_from_query("cmd=reboot").is_none());
     check(
         "a command with an argument is composed",
         command_from_query("cmd=defence&v=5").as_deref() == Some("defence 5"),
@@ -58,7 +70,17 @@ fn main() {
     );
     check(
         "an argument to a command that takes none is ignored, not appended",
-        command_from_query("cmd=indoor&v=nonsense").as_deref() == Some("indoor"),
+        command_from_query("cmd=calibrate&v=nonsense").as_deref() == Some("calibrate"),
+    );
+    // Every entry must survive its own sample line, which is what the boot
+    // check feeds to the real parser.
+    check(
+        "every listed command produces a sample",
+        samples().count() == COMMANDS.len(),
+    );
+    check(
+        "and no sample is empty",
+        samples().all(|line| !line.trim().is_empty()),
     );
     check(
         "sensitive refuses anything but on and off",

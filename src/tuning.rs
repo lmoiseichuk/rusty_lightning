@@ -246,6 +246,13 @@ impl Tuning {
     fn rescue(&self, now_ms: u32) -> Option<crate::golden::Combo> {
         // A frozen tuner is under explicit operator control, and a sweep owns
         // the point for its duration. Neither should be overruled.
+        //
+        // **This is a real gap and it is deliberate.** `due` is false while
+        // frozen, so `step` never runs, so neither the ten-minute dip nor this
+        // rescue can fire — a pinned device has no autonomous recovery at all.
+        // That is correct while somebody is standing at the console, and wrong
+        // the moment they walk away, which is why `sensitive on` now says so
+        // out loud rather than leaving it to be discovered during a storm.
         if self.frozen || self.sweep.is_some() || self.dip_restore.is_some() {
             return None;
         }
@@ -922,12 +929,42 @@ impl Tuning {
         self.restart(now_ms);
     }
 
-    /// Back to fully receptive — what `sensitive off` returns to.
+    /// What `sensitive off` returns to.
     ///
     /// Not to wherever the point happened to be: the walk was frozen, so it is
     /// stale by however long the override was on.
+    ///
+    /// **And not to `OPEN` either, which is what this used to do.** `nf 0` is
+    /// the swamped end of the ladder, not the sensitive end — measured on this
+    /// device at indoor gain in a live storm: 300–480 noise/min of continuous
+    /// `NoiseTooHigh`, zero strikes. So "lift the override" used to hand the
+    /// device back to its autonomous walk starting from the deafest rung it
+    /// has, and the walk then needed several quiet windows to climb out.
+    ///
+    /// The order of preference is evidence first: a combination this room has
+    /// been measured to hear lightning at, then the mid-range default that
+    /// `boot` already prefers over `OPEN` for the same reason, and `OPEN` never.
     pub fn open(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, now_ms: u32) -> Result<(), esp_idf_hal::sys::EspError> {
-        self.point = defence::Point::OPEN;
+        let here_outdoor = matches!(
+            crate::settings::location(),
+            Some(crate::as3935::Location::Outdoor)
+        );
+        self.point = match crate::settings::golden().filter(|record| {
+            record.strikes >= crate::golden::TRUSTED_STRIKES
+                && record.combo.outdoor == here_outdoor
+        }) {
+            Some(record) => {
+                println!(
+                    "sens: returning to nf {} -- {} strike(s) have been heard here at it",
+                    record.combo.nf, record.strikes
+                );
+                defence::Point::new(record.combo.nf as u16)
+            }
+            None => {
+                println!("sens: returning to the mid-range default (nf 0 is the swamped end)");
+                defence::Point::default_start()
+            }
+        };
         self.restart(now_ms);
         session::restart_statistics(sensor, i2c, "sensitivity override lifted");
         session::apply(sensor, i2c, self.point)

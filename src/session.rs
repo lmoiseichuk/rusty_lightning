@@ -845,11 +845,26 @@ pub fn apply(
 /// chance of hearing a strike the auto-tune was filtering out, and the caller
 /// must freeze the tuner while it is on or the first disturber will immediately
 /// climb back off it.
+/// **`nf 0` is not the sensitive end of the ladder — it is the swamped end.**
+///
+/// This reads as "maximum sensitivity" and is the obvious thing to reach for
+/// when the device seems deaf, which is exactly why it is worth a warning.
+/// Measured on this device at indoor gain during a live storm on 2026-08-23,
+/// with `nf 0` pinned: **300–480 noise/min of continuous `NoiseTooHigh`, zero
+/// disturbers, zero strikes.** The front end is drowning, and a drowning
+/// receiver reports nothing at all.
+///
+/// The same session at `nf 2` heard events, and at `nf 3` "the band opened".
+/// So the useful override is `sensitive on` *followed immediately by*
+/// `defence 3` — the freeze without the floor.
 pub fn force_max_sensitivity(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
 ) -> Result<(), esp_idf_hal::sys::EspError> {
     restart_statistics(sensor, i2c, "sensitivity override");
+    println!("sens: ⚠ nf 0 is the SWAMPED end of the ladder, not the sensitive one.");
+    println!("sens:   measured here, indoor, live storm: 300-480 noise/min, 0 strikes.");
+    println!("sens:   follow this with `defence 3` unless you mean to sit at 0.");
     apply(sensor, i2c, defence::Point::OPEN)
 }
 
