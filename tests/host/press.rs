@@ -39,7 +39,12 @@ fn main() {
     check("the floor itself is a gain press", classify(ACCEPT_MS) == Gesture::Gain);
     check("2 s is a gain press", classify(2_000) == Gesture::Gain);
     check("1.5 s no longer is -- the floor moved to 2 s", classify(1_500) == Gesture::TooShort);
+    check("3 s is comfortably a gain press", classify(3_000) == Gesture::Gain);
+    check("4.999 s is the last gain millisecond", classify(4_999) == Gesture::Gain);
+    check("5 s is the portal", classify(5_000) == Gesture::Portal);
+    check("7 s is still the portal", classify(7_000) == Gesture::Portal);
     check("one tick under the long band is still gain", classify(LONG_MS - 1) == Gesture::Gain);
+    check("the gain band is 3 s wide", LONG_MS - ACCEPT_MS == 3_000);
     check("ten seconds is the portal", classify(LONG_MS) == Gesture::Portal);
     check("one tick under the ceiling is still the portal", classify(STUCK_MS - 1) == Gesture::Portal);
 

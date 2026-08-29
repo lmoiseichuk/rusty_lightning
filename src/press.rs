@@ -46,7 +46,19 @@
 pub const ACCEPT_MS: u32 = 2_000;
 
 /// At or past this, the gesture is the long one.
-pub const LONG_MS: u32 = 10_000;
+///
+/// **Five seconds, which trades a wider accident window for a gesture somebody
+/// will actually complete.** Ten was the first choice and it is a long time to
+/// stand holding a button wondering whether the device noticed; five is still
+/// unmistakably deliberate.
+///
+/// What it costs is stated rather than hidden: a host that asserts DTR and holds
+/// it for between five and thirty seconds now reads as a request for the access
+/// point, where before it needed ten. A brief serial session lands in that
+/// window. The consequences are bounded — the window closes itself after sixty
+/// seconds, and in the field there is no cable — but the sensor is deaf for
+/// those sixty seconds, so it is not free. See [`STUCK_MS`] for the other end.
+pub const LONG_MS: u32 = 5_000;
 
 /// Past this, nothing human is happening: a host is holding DTR.
 ///
