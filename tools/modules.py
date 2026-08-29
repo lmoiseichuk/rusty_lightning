@@ -21,6 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 TESTS = ROOT / "tests"
 DOC = ROOT / "doc" / "modules.md"
+README = ROOT / "README.md"
 
 # The five roles a module plays. Assigned by hand because it is an editorial
 # judgement about *purpose*, not a fact derivable from the imports -- and it is
@@ -305,10 +306,22 @@ def build():
     lines.append("where a change is cheapest: " + ", ".join(f"`{n}`" for n in leaves) + ".")
     generated_deps = lines
 
+    # The README states the same two counts. **Generated there too**, because a
+    # README that preaches "counts are counted, not asserted" while asserting
+    # two of them is the drift it is warning about, one screen earlier.
+    covered_all = not (set(pure) - set(covered))
+    readme = [
+        "**%d of the %d modules are ESP-IDF-free%s.**"
+        % (len(pure), len(info),
+           ", and every one of them is covered" if covered_all
+           else ", of which %d are covered" % len(covered))
+    ]
+
     return {
         "map": generated_map,
         "roles": generated_roles,
         "deps": generated_deps,
+        "counts": readme,
     }
 
 
@@ -440,18 +453,29 @@ def render(path, regions):
 def main():
     check = "--check" in sys.argv
     regions = build()
-    rendered = render(DOC, regions)
+    targets = [
+        (DOC, {k: v for k, v in regions.items() if k != "counts"}),
+        (README, {"counts": regions["counts"]}),
+    ]
+
+    stale = 0
+    for path, wanted in targets:
+        rendered = render(path, wanted)
+        if check:
+            current = path.read_text() if path.exists() else ""
+            if current != rendered:
+                print(f"{path.relative_to(ROOT)} is out of date -- run tools/modules.py",
+                      file=sys.stderr)
+                stale += 1
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered)
+        print(f"wrote {path.relative_to(ROOT)}")
+
     if check:
-        current = DOC.read_text() if DOC.exists() else ""
-        if current != rendered:
-            print(f"{DOC.relative_to(ROOT)} is out of date -- run tools/modules.py",
-                  file=sys.stderr)
+        if stale:
             return 1
-        print(f"{DOC.relative_to(ROOT)} is up to date")
-        return 0
-    DOC.parent.mkdir(parents=True, exist_ok=True)
-    DOC.write_text(rendered)
-    print(f"wrote {DOC.relative_to(ROOT)}")
+        print("doc/modules.md and README.md are up to date")
     return 0
 
 

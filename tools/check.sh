@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run the host checks in tests/, then the release build.
+# Run the host checks in tests/, check the generated docs, then the release build.
 #
 #     ./tools/check.sh
 #
@@ -75,7 +75,7 @@ fi
 # module is added. Checked rather than regenerated: a build step that quietly
 # rewrites a tracked file makes `git status` lie about what the run did.
 echo
-echo "== module map =="
+echo "== generated docs =="
 if ! python3 "$HERE/tools/modules.py" --check; then
     echo "run tools/modules.py and commit doc/modules.md" >&2
     exit 1
