@@ -9,7 +9,7 @@
 //! So the clock is set once over the console (`time <unix-epoch>`), written to
 //! NVS, and re-loaded on every boot. Between boots the system clock runs from
 //! there. It drifts, and the drift does not matter at the resolution this
-//! device works in: strikes are bucketed at fifteen minutes, and the RC
+//! device works in: strikes are bucketed at five minutes, and the RC
 //! oscillator is good to a few seconds a day.
 //!
 //! ## Why it is saved periodically rather than only when set
@@ -118,47 +118,26 @@ pub fn save(epoch: u64) -> Result<(), EspError> {
 
 /// `YYYY-MM-DD HH:MM:SS` for a Unix timestamp, UTC.
 ///
-/// Written out rather than pulled from a date library: `chrono` and friends are
-/// large, and this needs one format with no locale, no zones and no parsing.
-/// The civil-from-days conversion is Howard Hinnant's, which is exact for every
-/// date this device will ever see.
+/// The calendar arithmetic is in [`crate::civil`], which is free of ESP-IDF and
+/// of every crate so it can be host-tested; all that is left here is the
+/// formatting.
+///
+/// `heapless::String` implements `core::fmt::Write`, so `write!` works on it
+/// exactly as it does on a `std::string::String` — the only difference is that
+/// it returns `Err` when the fixed capacity is reached instead of growing.
+/// Nineteen characters into a 20-byte buffer never will, hence the discarded
+/// result.
 pub fn format(epoch: u64) -> heapless::String<20> {
-    let days = (epoch / 86_400) as i64;
-    let time_of_day = epoch % 86_400;
-
-    // Shift the epoch to 0000-03-01 so leap days land at the end of the cycle.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-
-    let day = (day_of_year - (153 * month_prime + 2) / 5 + 1) as u32;
-    let month = if month_prime < 10 {
-        month_prime + 3
-    } else {
-        month_prime - 9
-    } as u32;
-    let year = (year_of_era + era * 400 + if month <= 2 { 1 } else { 0 }) as u32;
-
-    // `heapless::String` implements `core::fmt::Write`, so `write!` works on it
-    // exactly as it does on a `std::string::String` — the only difference is
-    // that it returns `Err` when the fixed capacity is reached instead of
-    // growing. Nineteen characters into a 20-byte buffer never will, hence the
-    // discarded result. This replaced a hand-rolled digit loop; `{:02}` is the
-    // same zero padding, written once.
+    let at = crate::civil::civil(epoch);
     let mut out = heapless::String::new();
     let _ = write!(
         out,
-        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}",
-        time_of_day / 3600,
-        (time_of_day % 3600) / 60,
-        time_of_day % 60
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        at.year, at.month, at.day, at.hour, at.minute, at.second
     );
     out
 }
+
 
 
 

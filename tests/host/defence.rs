@@ -17,7 +17,7 @@
 //! assertion here still said 1 for four days. Run it after touching `defence`:
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2021 -A dead_code -o /tmp/defence defence.rs && /tmp/defence
+//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/defence defence.rs && /tmp/defence
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};

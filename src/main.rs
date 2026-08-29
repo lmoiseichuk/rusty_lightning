@@ -6,6 +6,7 @@
 mod as3935;
 mod boot;
 mod battery;
+mod civil;
 mod clock;
 mod commands;
 mod console;

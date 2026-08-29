@@ -6,13 +6,13 @@
 //! ## Three resolutions, not one
 //!
 //! A single ring fine enough for a storm and long enough for a month would be
-//! 2880 fifteen-minute buckets — 20 KB to answer questions that mostly want a
+//! 8640 five-minute buckets — 60 KB to answer questions that mostly want a
 //! summary. Three rings cost a tenth of that and each is the right shape for
 //! its chart:
 //!
 //! | Ring | Bucket | Span | Answers |
 //! |---|---|---|---|
-//! | Fine | 15 min | 24 h | what is happening now, and the last hour |
+//! | Fine | 5 min | 24 h | what is happening now, and the last hour |
 //! | Medium | 1 h | 7 days | this week's storms |
 //! | Coarse | 6 h | 30 days | the season |
 //!
@@ -305,10 +305,10 @@ impl<const N: usize> Ring<N> {
 
     /// How many buckets hold real data.
     ///
-    /// **Not always `N`.** A ring that has been running for two hours has eight
-    /// fifteen-minute buckets, not ninety-six — and drawing the other
-    /// eighty-eight as empty columns to the *left* of them reads as "a day of
-    /// silence, then this", which is a different and wrong story. Knowing the
+    /// **Not always `N`.** A ring that has been running for two hours has
+    /// twenty-four five-minute buckets, not 288 — and drawing the other 264 as
+    /// empty columns to the *left* of them reads as "a day of silence, then
+    /// this", which is a different and wrong story. Knowing the
     /// live length lets a chart fill from the left and only scroll once it is
     /// genuinely full.
     pub fn live_len(&self) -> usize {
@@ -399,7 +399,12 @@ impl History {
         self.month.tick(minute);
     }
 
-    /// The last hour, from the fine ring: four fifteen-minute buckets.
+    /// The last hour, from the fine ring: twelve five-minute buckets.
+    ///
+    /// Derived from [`FINE_MINUTES`] rather than written as 12, so that
+    /// changing the bucket size cannot leave this reading a different span
+    /// than its name claims — which is what happened when the ring went from
+    /// fifteen-minute buckets to five.
     pub fn last_hour(&self) -> Bucket {
         self.day.recent(60 / FINE_MINUTES as usize)
     }

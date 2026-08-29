@@ -92,10 +92,16 @@ pub struct Screen {
     /// Scratch for the chart series, sized for the longest ring so one buffer
     /// serves all three periods — the shorter ones use a prefix.
     ///
-    /// Held across iterations rather than built per redraw: the day ring alone
-    /// is 96 buckets, and a redraw already costs 3.8 s of panel time without
+    /// Held across iterations rather than built per redraw: the fine ring alone
+    /// is 288 buckets, and a redraw already costs 3.8 s of panel time without
     /// allocating on the way in.
-    counts: [u16; history::LONGEST_LEN],
+    ///
+    /// **Scores only.** There was a matching `counts` buffer while the foot of
+    /// the screen carried two stacked charts; the count chart became the strike
+    /// table, and the buffer went on being filled and copied every redraw with
+    /// nothing reading it. `series_of` still reports counts — the host checks
+    /// cover them and a future chart may want them — but they are not carried
+    /// across redraws any more.
     scores: [u32; history::LONGEST_LEN],
 }
 
@@ -110,7 +116,6 @@ impl Screen {
             user_acted: false,
             strike_seen: false,
             period: ui::ChartPeriod::Day,
-            counts: [0u16; history::LONGEST_LEN],
             scores: [0u32; history::LONGEST_LEN],
         }
     }
@@ -229,21 +234,21 @@ impl Screen {
         // bug.
         fn flatten<const N: usize>(
             ring: &history::Ring<N>,
-            counts: &mut [u16],
             scores: &mut [u32],
         ) -> (usize, usize) {
+            // `series_of` wants both arrays; the counts are discarded with the
+            // stack frame rather than copied into a buffer nothing reads.
             let mut c = [0u16; N];
             let mut s = [0u32; N];
             let live = history::series_of(ring, &mut c, &mut s);
-            counts[..N].copy_from_slice(&c);
             scores[..N].copy_from_slice(&s);
             (live, N)
         }
 
         match self.period {
-            ui::ChartPeriod::Day => flatten(&history.day, &mut self.counts, &mut self.scores),
-            ui::ChartPeriod::Week => flatten(&history.week, &mut self.counts, &mut self.scores),
-            ui::ChartPeriod::Month => flatten(&history.month, &mut self.counts, &mut self.scores),
+            ui::ChartPeriod::Day => flatten(&history.day, &mut self.scores),
+            ui::ChartPeriod::Week => flatten(&history.week, &mut self.scores),
+            ui::ChartPeriod::Month => flatten(&history.month, &mut self.scores),
         }
     }
 }

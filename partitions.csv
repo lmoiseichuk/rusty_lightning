@@ -1,7 +1,10 @@
 # 4 MB flash on the XIAO ESP32-C3.
 #
-# `storage` holds the strike CSV (§5). Sized at ~1.9 MB, which at ~30 bytes a
-# record is roughly 65 000 strikes -- the spec's "effectively unbounded" figure.
+# `storage` holds the strike CSV (§5). Sized at 0x1f0000 = 2 031 616 B, which at
+# ~74 bytes for a strike row -- the 11-column format in `log.rs`, measured, not
+# estimated -- is roughly 27 000 strikes. The shorter noise and disturber rows
+# are ~57 B, so a mixed file holds more. Earlier revisions of this comment said
+# 30 B and 65 000, sized on a format with four fewer columns.
 #
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x6000,

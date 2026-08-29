@@ -156,10 +156,12 @@ pub fn store_battery_drain(drain: crate::battery::Drain) -> Result<(), EspError>
 /// reset. Restoring lands it near the answer in one step instead of climbing
 /// there a window at a time.
 ///
-/// One key rather than four: the registers are only meaningful together, and a
+/// One key rather than four: the registers were only meaningful together, and a
 /// power cut between two of four writes would leave a point that was never
-/// actually in force. Since the point became a single 13-bit number that is no
-/// longer a design decision so much as a description of the value.
+/// actually in force. Since the point shrank to a single 3-bit field that is no
+/// longer a design decision so much as a description of the value — but the key
+/// stays one key, because the argument comes back the moment anything rejoins
+/// the space.
 ///
 /// `None` on a device that has never tuned, where the caller starts from full
 /// sensitivity.

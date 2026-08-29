@@ -157,9 +157,10 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `battery` | force a fresh gauge read — voltage, charge, and the `%/hr` rate |
 | `clearstats` | discard the sensor's accumulated distance estimate and rebuild from the next strikes |
 | `srej [0-15]` | spike rejection. **`0` reports man-made impulses as lightning** — see below |
+| `wdth [0-15]` | watchdog threshold, aliased `watchdog`. Raising it discards the slow-rising distant arrivals this device exists to report |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
-| `defence` | the current tuning point: raw value, percent, and the four register fields |
-| `defence <raw>` | set the tuning point by hand, 0–127. `0` is fully receptive |
+| `defence` | the current tuning point: raw value, percent, and the `NF_LEV` field it holds |
+| `defence <raw>` | set the tuning point by hand, 0–7. `0` is fully receptive |
 | `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
 | `sensitive on\|off` | every rejection knob wide open, with the auto-tune frozen |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
@@ -221,24 +222,27 @@ saturate the front end, fail the chip's waveform validation, and be reported as
 a disturber — so when a near storm produces disturbers and no strikes, *less*
 gain is the thing to try.
 
-**`calibrate` is the one worth understanding.** The two noise-rejection registers
-still in the search are bit fields in one byte, so the whole tunable state is one
-7-bit number, 0–127 — and the bisection over it is **7 probes**, not hundreds.
-`NF_LEV` holds the top bits, so binary search decides the knob that cannot reject
-a strike first, and the watchdog last.
+**`calibrate` is the one worth understanding.** One register is left in the
+search, `NF_LEV`, so the whole tunable state is a **3-bit number, 0–7** — and a
+sweep of it is **three probes**, not hundreds.
 
-**Two registers are deliberately not in that number**, and for opposite reasons.
-`MIN_NUM_LIGH` suppresses strikes until N have arrived, hiding the events the
-device exists to report; it is pinned at 1. `SREJ` rejects short man-made
-impulses and is the only knob that does — while it was in the space the walk
-refunded it first on every quiet spell, and at zero the sensor reported an
-electric hammer next door as lightning, 503 times in one morning. It is a
-setting now: see `srej`.
+**Everything else is deliberately outside that number**, each removed because it
+could buy quiet at the price of a strike. `MIN_NUM_LIGH` suppresses strikes until
+N have arrived, hiding the events the device exists to report; it is pinned at 1.
+`WDTH` discards slow-rising distant arrivals, which are exactly the ones worth
+reporting. `SREJ` rejects short man-made impulses and is the only knob that does
+— while it was in the space the walk refunded it first on every quiet spell, and
+at zero the sensor reported an electric hammer next door as lightning, 503 times
+in one morning. `WDTH` and `SREJ` are settings now: see `wdth` and `srej`.
+
+What is left is the one knob that cannot cost a strike. Raising `NF_LEV` can only
+make the device miss a weak signal; it can never turn a strike into a disturber.
+That is what makes an automatic search over it safe to run unattended.
 
 Two arguments, both optional and positional:
 
-* **`s`** — seconds per probe, 5–60, default 60. A whole sweep is about
-  7 probes, so 60 s costs roughly seven minutes, once.
+* **`s`** — seconds per probe, 5–60, default 60. A whole sweep is three probes,
+  so 60 s costs about three minutes, once.
 * **`/min`** — events per minute at or below which a window counts as **quiet**,
   0–240, default 60. **Stored in NVS**; omit it to keep the current one.
 

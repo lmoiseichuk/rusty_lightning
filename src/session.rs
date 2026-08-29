@@ -815,7 +815,13 @@ pub fn apply(
     Ok(())
 }
 
-/// Every rejection knob at zero — the most receptive the part can be.
+/// The noise floor at zero — the most receptive the *tuner's* space can be.
+///
+/// **Not every rejection knob**, which is what this said while the point held
+/// four registers. `Point::OPEN` is `NF_LEV = 0` and nothing else; `WDTH`,
+/// `SREJ` and `MIN_NUM_LIGH` left the packed point and are settings now, so
+/// they keep whatever `srej`, `wdth` and NVS last put there. To open those too,
+/// set them individually.
 ///
 /// Expect disturbers. That is the point — this trades noise rejection for the
 /// chance of hearing a strike the auto-tune was filtering out, and the caller
@@ -839,10 +845,13 @@ pub fn force_max_sensitivity(
 /// reads as silence in a five-second window, and the search then settles on a
 /// setting that is quiet only because it did not listen long enough.
 ///
-/// **Sixty seconds**, which is affordable for one reason: bisecting a 13-bit
-/// number is **13 probes**, where the state machine this replaced took hundreds.
-/// A full sweep is thirteen minutes, once, and the point then goes to NVS — so
-/// the cost is paid at most once per room rather than continuously.
+/// **Sixty seconds**, which is affordable for one reason: the space is three
+/// bits, so a sweep is **three probes**, where the state machine this replaced
+/// took hundreds. A full sweep is three minutes, once, and the point then goes
+/// to NVS — so the cost is paid at most once per room rather than continuously.
+/// (This read "13 probes, thirteen minutes" while the point was 13 bits over
+/// four registers; the argument is unchanged and the arithmetic is eight times
+/// cheaper.)
 ///
 /// Measured on this board at 10 s, the sweep settled on `wd 7` after seeing 4
 /// events at `wd 6`; a count that small is exactly where a short window is

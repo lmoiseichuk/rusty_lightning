@@ -293,8 +293,12 @@ impl Point {
 
     /// Build from a raw packed value, clamping to the representable range.
     ///
-    /// The only clamp: every one of the 8192 values maps to a distinct, legal
-    /// register combination, so nothing else needs adjusting on the way in.
+    /// The only clamp: every one of the eight values maps to a distinct, legal
+    /// `NF_LEV` setting, so nothing else needs adjusting on the way in. That was
+    /// the property the packed layout was built for when the space held four
+    /// registers and 8192 values; with one three-bit field left it is close to
+    /// trivially true, which is the point — the invariant survived the space
+    /// shrinking around it.
     pub fn new(raw: u16) -> Point {
         Point(raw.min(MAX))
     }

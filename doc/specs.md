@@ -311,9 +311,42 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 ### 4.1 Indoor/outdoor
 Set the AFE gain at startup (`0x24` indoor / `0x1C` outdoor). Selectable via config.
 
-### 4.2 Noise-floor auto-tune — one packed 7-bit point
+### 4.2 Noise-floor auto-tune — one 3-bit point
 Asymmetric, per the reference: **any** disturber/noise IRQ in the ~1 s processing batch → **+1
 immediately**; **60 s with no events** → **−1**. Quick to defend, slow to relax.
+
+> #### ⚠⚠⚠⚠ AS BUILT: three bits, and only `NF_LEV` in them
+>
+> **This supersedes the 7-bit callout below, which supersedes the ladder below that.** The direction
+> across all three revisions is the same and worth naming: every rewrite made the tuning space
+> *smaller*, and each one was forced by the same discovery — that a knob the tuner was free to move
+> could buy quiet by making the device deaf.
+>
+> `FIELDS` now holds one entry, `nf`, three bits wide, so the point is `NF_LEV` and nothing else:
+> eight values, 0..=7. `WDTH`, `SREJ` and `MIN_NUM_LIGH` sit at their power-on defaults and the
+> tuner cannot reach them.
+>
+> Each was removed for a cost paid in strikes, not in code:
+>
+> | knob | why it left |
+> |---|---|
+> | `MIN_NUM_LIGH` | it suppresses strikes outright — the chip reports nothing until N arrive |
+> | `SREJ` | the tuner reliably walked it to zero, and zero admits man-made impulses as lightning |
+> | `WDTH` | it discards the slow-rising distant arrivals this device exists to report |
+>
+> What is left is **the one knob that cannot cost a strike.** `NF_LEV` sets how loud a signal must be
+> before the front end looks at it at all; raising it can only make the device miss a *weak* strike,
+> never misclassify a strong one, and the ladder in `defence.rs` is monotonic in it.
+>
+> Two consequences fall out. A full sweep is **three probes**, not seven and not hundreds, which is
+> what makes a 60 s probe window affordable end to end. And perturbing the point at random is safe,
+> because there is no setting in the space that trades a strike for silence — which is the property
+> the randomised assignment relies on. See `doc/scanning.md` for how the sweep, the perturbation and
+> the alive check fit together.
+>
+> The arguments in the two callouts below are kept because they are still the arguments — what each
+> register costs, and why the order they move in was the whole design. What is no longer true is the
+> arithmetic: read "0..=127" as 0..=7 and "7 probes" as 3 throughout.
 
 > #### ⚠⚠⚠ AS BUILT: the ladder is gone — the two volume knobs are one 7-bit number
 >
@@ -642,16 +675,34 @@ Refine later from the logged database once enough storms are recorded.
 > #### ⚠ AS BUILT: `/lfs/strikes.csv`, and **LittleFS specifically**
 >
 > ```text
-> timestamp,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated,strokes
-> 1785727634,2026-08-02 23:27:14,6,50331,3000,500,0,1
+> timestamp,millis,kind,nf,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated,strokes
+> 1785727634,41337250,strike,2,2026-08-02 23:27:14,6,50331,3000,500,0,1
+> 1785727702,41405118,noise,2,2026-08-02 23:28:22,,,,,0,0
 > ```
 >
-> Two columns were added after the fact, both to remove an ambiguity the file could not otherwise
+> Five columns were added after the fact, each to remove an ambiguity the file could not otherwise
 > answer about itself. **`simulated`** distinguishes a `strike`-injected record from a detected one,
 > because four records of unknown provenance once made "has this device ever seen real lightning?"
 > unanswerable. **`strokes`** (0.7.0) says how many return strokes §4.3's merge window folded into
 > the row — without it a merged record is indistinguishable from a single strike, and `energy_raw`
-> is a *sum* across them.
+> is a *sum* across them. **`kind`** (0.12.0) names what the chip classified the interrupt as, which
+> is what turned the file from a strike log into a record of everything the receiver heard — a run of
+> `noise` rows is the evidence that the device was deaf rather than that the sky was quiet, and that
+> distinction is not recoverable from a file holding strikes alone. **`nf`** carries the noise-floor
+> rung in force at the moment of the row, so a strike can be attributed to the setting that caught it
+> and the tuner's decisions can be replayed against what it actually heard. **`millis`** is the
+> uptime in milliseconds, which unlike `timestamp` is monotonic and present before the clock is set:
+> it is what orders rows within a boot that has no wall clock, and what measures the interval between
+> two events without trusting the epoch.
+>
+> A noise or disturber row leaves `distance_km`, `energy_raw`, `intensity_milli` and `score_milli`
+> **empty**, not zero: the chip reports no such quantity for those interrupts, and an empty cell says
+> "not measured" where a zero would be read as a measurement. `simulated` and `strokes` do carry 0,
+> which is the true value — an event is never injected and folds no strokes.
+>
+> `distance_km` also holds the words `overhead` and `far` rather than numbers, for the same reason in
+> reverse: those are the chip's two sentinels, not distances, and a consumer averaging the column must
+> not take them for 1 km and 63 km.
 >
 > **A format change never reaches an existing log.** The header is written only to an empty file, so
 > a device upgraded in place keeps the header it was created with while new rows carry the new
@@ -678,8 +729,9 @@ Refine later from the logged database once enough storms are recorded.
 >
 > `timestamp` is UTC; `iso_local` applies the offset set by `tz`. The epoch is for machines, the ISO
 > string is for whoever opens the file.
-- **Capacity / retention:** ~2 MB filesystem. At ~30 bytes/record that's **~70 000 records** —
-  effectively unbounded for this use. Track the record count (from a maintained counter or
+- **Capacity / retention:** 2 031 616 B filesystem. A strike row in the current 11-column format
+  measures ~74 bytes, so that is **~27 000 strikes** — the shorter noise and disturber rows are
+  ~57 B, so a mixed file holds more. Still effectively unbounded for this use. Track the record count (from a maintained counter or
   `file_size − header`), and estimate remaining capacity as `free_bytes / record_bytes`. When near
   full, rotate (rename/archive) or overwrite oldest — policy TBD.
 - **On boot**, reload recent records to rebuild the score chart and storm trend; the CSV is the
@@ -756,8 +808,9 @@ Refine later from the logged database once enough storms are recorded.
 2. **Situation zone** — the storm state (calm / coming in / moving out / stronger / weaker /
    aggravating / fading) with a mood **icon** (🙂 / 🙁 / ⚡). Reserve space for later stats
    (nearest & strongest strike; counts per day / week / month).
-3. **Score chart** — **last 12 h**, bucketed every **15 min** → **48 buckets** across the 800 px
-   width (~16 px each). Auto-scale the y-axis (score spikes as distance → 0).
+3. **Score chart** — *as built:* **80 bars** across the width, at whichever of the three ring
+   resolutions has data (5 min / 1 h / 6 h), so the same chart shows the last ~6.7 h during a storm
+   and the last 20 days after one. The design figure was 48 fifteen-minute buckets over 12 h. Auto-scale the y-axis (score spikes as distance → 0).
 
 > #### ⚠ AS BUILT: two charts, three selectable spans, filling left to right
 >
@@ -782,7 +835,7 @@ Refine later from the logged database once enough storms are recorded.
 > same count and wildly different scores, and the reverse is true of the mean.
 >
 > **Three spans, not one 12 h window**: `scope day|week|month` selects a 24 h / 7 d / 30 d ring
-> (15 min / 1 h / 6 h buckets). Rings are indexed from the **Unix epoch**, not from power-on, which
+> (5 min / 1 h / 6 h buckets). Rings are indexed from the **Unix epoch**, not from power-on, which
 > is what lets them be **rebuilt from the CSV at boot** — otherwise every reboot shows a device that
 > has never seen a storm.
 >
@@ -1003,8 +1056,8 @@ than applied unconditionally: an always-frugal build is an unflashable one.
    experiment guaranteed to degrade the sensor. Note also that `esp-idf-svc` is currently absent on
    purpose — adding it links the WiFi and BLE stacks, roughly doubling the binary.
 5. **DB retention policy** at capacity — *deferred, deliberately.* The log **stops when full** rather
-   than wrapping: that is the only choice that cannot lose data already recorded, and at ~40 000
-   records the question is years away. Note the charts self-clean (24 h / 7 d / 30 d windows) while
+   than wrapping: that is the only choice that cannot lose data already recorded, and at ~27 000
+   strikes the question is years away. Note the charts self-clean (24 h / 7 d / 30 d windows) while
    the file does not.
 6. **A real strike** — ***reopened on 2026-08-14, and the count is unknown.*** This item was marked
    answered on the strength of 909 records in three and a half hours. It should not have been.
@@ -1105,9 +1158,9 @@ than applied unconditionally: an always-frugal build is an unflashable one.
 2. ✅ I2C on GPIO6/7 → scan → confirm AS3935 @ 0x03; port the register driver.
 3. ✅ Wire IRQ — on **GPIO21 (D6)**, not GPIO20; ISR-notifies pattern; decode reason → distance and
    intensity on lightning.
-4. ✅ Storm logic + noise auto-tune (§4.2 — now one packed 7-bit point bisected in 7 probes; it was
-   a 31-rung ladder, then 7, and the state machine in between had the sign inverted). Pure logic,
-   host-tested.
+4. ✅ Storm logic + noise auto-tune (§4.2 — now a 3-bit point, `NF_LEV` alone, swept in 3 probes; it
+   was a 31-rung ladder, then an 11-bit packed point, then 7-bit, and the state machine in between
+   had the sign inverted). Pure logic, host-tested.
 5. ✅ CSV logging on LittleFS; clock over the console rather than SNTP; **rings rebuilt from the file
    on boot**.
 6. ✅ e-paper bring-up → UI, change-gated refresh, day/week/month charts.
@@ -1120,7 +1173,9 @@ suggested 0.44/0.49. Two API drifts caught immediately: `esp_idf_hal::prelude` n
 
 **Testing:** `cargo test` cannot run in this crate — it only builds for `riscv32imc-esp-espidf` and
 every dependency pulls in ESP-IDF. Pure logic is exercised on the host instead; see
-`tests/host/README.md`. 83 checks across the packed defence point and the history rings.
+`tests/host/README.md`, which lists what each file covers. The count is deliberately not written
+here: `tools/check.sh` prints it, and a number kept by hand in a second file is a number that goes
+stale silently — this one said 83 while naming two of the eight files.
 
 ---
 

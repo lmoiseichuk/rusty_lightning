@@ -1,7 +1,5 @@
 //! Host checks for the strike history rings.
 //!
-//! A copy of `src/history.rs`'s logic — see README.md.
-//!
 //! Worth testing because a ring's failures are all quiet ones. A gap that is
 //! not cleared shows last week's storm as today's; an off-by-one in `series`
 //! draws the chart reversed; a wrong score formula produces plausible numbers
@@ -13,6 +11,10 @@
 //! binary's root for the path to resolve. (The `strike()` helper below is a
 //! function, and functions and modules live in different namespaces, so the two
 //! names coexist.)
+//!
+//! ```sh
+//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/history history.rs && /tmp/history
+//! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

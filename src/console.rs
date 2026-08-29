@@ -381,7 +381,7 @@ pub fn print_help() {
     println!("  srej [0-15]           spike rejection; 0 lets man-made impulses through");
     println!("  wdth [0-15]           watchdog threshold; higher drops distant strikes first");
     println!(
-        "                        s    seconds per probe ({}-{}, default {}); ~13 probes",
+        "                        s    seconds per probe ({}-{}, default {}); 3 probes",
         crate::session::CALIBRATE_PROBE_MIN_S,
         crate::session::CALIBRATE_PROBE_MAX_S,
         crate::session::CALIBRATE_PROBE_S

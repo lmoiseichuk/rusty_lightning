@@ -463,11 +463,11 @@ impl Tuning {
     ///
     /// Briefly this accelerated -- each consecutive quiet window relaxing by one
     /// more than the last -- to balance a climb that is proportional. In the
-    /// 13-bit space that was reasonable arithmetic. In the 11-bit space it is
-    /// not: with `MIN_NUM_LIGH` gone there are 2048 points rather than 8192, and
-    /// each notch of the three that remain is correspondingly more valuable.
-    /// An accelerating descent overshoots a boundary the device spent minutes
-    /// finding.
+    /// 13-bit space that was reasonable arithmetic; over 8192 points a notch is
+    /// nearly nothing. It stopped being reasonable as the space shrank, and the
+    /// space has since shrunk twice more: **eight points, not 8192**, so a notch
+    /// is an eighth of everything the tuner can express. An accelerating descent
+    /// overshoots a boundary the device spent minutes finding.
     ///
     /// The asymmetry is now deliberate and one-sided: climb fast, leave slowly.
     /// A storm's first strike should not arrive into a receiver that sprinted

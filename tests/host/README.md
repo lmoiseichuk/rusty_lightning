@@ -4,15 +4,33 @@
 `riscv32imc-esp-espidf`, and every dependency pulls in ESP-IDF. So the logic
 worth testing is exercised here instead, on the host, with `rustc` directly.
 
+`tools/check.sh` runs them all and refuses to build if any fails. It reads the
+edition out of `Cargo.toml` rather than naming one, because these compile
+modules straight out of `src/` and so must use the edition the crate ships
+under; a hard-coded edition here is a thing that goes stale silently.
+
 ```sh
-cd tests/host
-for t in *.rs; do rustc --edition 2021 -A dead_code -o /tmp/${t%.rs} "$t" && /tmp/${t%.rs}; done
+tools/check.sh          # all of them, then the release build
+```
+
+One at a time, while working on it. **The edition in these lines is written out
+and so can go stale** — `check.sh` is the authority, and it reads the edition
+from `Cargo.toml` rather than naming one:
+
+```sh
+cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civil
 ```
 
 | File | Covers |
 |---|---|
+| `civil.rs` | the calendar: leap years, the century rules, month lengths, and that the time of day never leaks into the date |
+| `csv.rs` | reading the log back: the header decides the columns, so a new column cannot silently shift the old ones |
 | `defence.rs` | §4.2's noise-rejection ladder: rung boundaries, monotonicity, saturation |
 | `history.rs` | §4.3's strike rings: the score formula against the spec's observed figures, bucketing, gap clearing, and that "overhead"/"out of range" are counted but not averaged |
+| `merger.rs` | folding the strokes of one flash into a single strike, and what a merged flash reports |
+| `press.rs` | the button gesture boundaries: too short, gain flip, portal, stuck |
+| `uptime.rs` | interval arithmetic across the 49.7-day millisecond wrap |
+| `verdict.rs` | the noise verdict: what counts as quiet, and that only noise feeds it |
 
 ## These compile the real modules, not copies of them
 

@@ -195,7 +195,6 @@ pub struct Status<'a> {
     pub battery_drain: crate::battery::Drain,
     /// Which period the charts show.
     pub chart_period: ChartPeriod,
-    /// Strikes per bucket, oldest first — the count chart.
     /// The strike log the table draws, newest first.
     pub recent: &'a crate::history::RecentLog,
     /// Mean score per bucket in thousandths, oldest first, `0` for an empty
@@ -1098,13 +1097,16 @@ fn time_axis(
     }
 }
 
-/// Two stacked charts across the foot of the screen: how many, and how severe.
+/// The score chart across the foot of the screen: how severe, not how many.
 ///
-/// **Both, because neither answers the other's question.** A count says how
-/// busy the sky was; a mean score says how dangerous. One violent overhead
-/// strike and a hundred distant ones give the same count and wildly different
-/// scores, and the reverse is true of the mean — so §4.3 keeps both and this
-/// draws both, one above the other on a shared time axis.
+/// **One chart, and this is the one.** There were two — a count above a score —
+/// on the argument that neither answers the other's question: a count says how
+/// busy the sky was, a score how dangerous. That is still true, and the count
+/// did not stop being worth showing; it stopped being worth *a chart*. The
+/// strike table beside it names individual strikes with their distance and
+/// time, which answers "how busy" better than a bar ever did and answers
+/// questions a bar cannot. Score keeps its chart because severity over time has
+/// a shape, and a shape is what a chart is for.
 /// How many bars the chart actually draws.
 ///
 /// **Named because something outside this module needs the same number.** The
