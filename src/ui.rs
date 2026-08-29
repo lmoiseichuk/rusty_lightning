@@ -142,6 +142,8 @@ type Text32 = heapless::String<32>;
 /// the margins.
 type TextLine = heapless::String<128>;
 type Text64 = heapless::String<64>;
+/// Sized for `password ` plus the 63-character maximum, with margin.
+type Text96 = heapless::String<96>;
 
 /// Top of the status line's text.
 ///
@@ -1348,25 +1350,34 @@ pub fn join(frame: &mut Display7in5, j: &Join) {
     // focus, a cracked lens, a code drawn too small -- all of them end with
     // somebody typing, and a screen that only carries the QR leaves them
     // nothing to type.
-    let mut line = Text64::new();
-    let _ = line.push_str("network  ");
-    let _ = line.push_str(&j.ssid);
-    let _ = line.push_str("    password  ");
-    let _ = line.push_str(&j.password);
-    let _ = Text::with_alignment(
-        &line,
-        Point::new(WIDTH as i32 / 2, top + BOX as i32 + 54),
-        body,
-        Alignment::Center,
-    )
-    .draw(frame);
+    // **One line each, and the buffer is sized for the worst case.** Measured
+    // rather than guessed: an SSID may be 31 characters and a password 63, so
+    // both on one line is 117 characters -- 1053 px in this 9-px font on an
+    // 800-px panel, and silently cut to 64 by a `Text64` whose `push_str` error
+    // is discarded. Split, the longest is `password` plus 63 at 657 px, which
+    // fits with room. `Text96` exists for that measurement and nothing else.
+    for (offset, label, value) in [
+        (54, "network  ", &j.ssid),
+        (76, "password  ", &j.password),
+    ] {
+        let mut line = Text96::new();
+        let _ = line.push_str(label);
+        let _ = line.push_str(value);
+        let _ = Text::with_alignment(
+            &line,
+            Point::new(WIDTH as i32 / 2, top + BOX as i32 + offset),
+            body,
+            Alignment::Center,
+        )
+        .draw(frame);
+    }
 
     let mut second = Text64::new();
-    let _ = second.push_str("then  ");
+    let _ = second.push_str("then open  ");
     let _ = second.push_str(&j.url);
     let _ = Text::with_alignment(
         &second,
-        Point::new(WIDTH as i32 / 2, top + BOX as i32 + 76),
+        Point::new(WIDTH as i32 / 2, top + BOX as i32 + 100),
         body,
         Alignment::Center,
     )

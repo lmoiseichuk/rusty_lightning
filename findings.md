@@ -97,7 +97,7 @@ rule: new IDs, folded here, not re-raised elsewhere.
 | ID | What | Where | Effort |
 |---|---|---|---|
 | L-P1 | **[FIXED — reproduced first] `power.rs:161` misses the wrap the L-B1 sweep fixed everywhere else — a device nobody uses wedges permanently Awake after 49.7 days.** `Some(seen) if uptime_s.saturating_sub(seen) < CONSOLE_AWAKE_S => Policy::Awake`. After the u32-seconds wrap, `uptime_s` is small and `seen` (pre-wrap) is near 2³², so the subtraction saturates to 0 forever → Policy::Awake for the rest of the wrap cycle: 160 MHz, no light sleep, ~0.170 W vs ~0.013 W (`power.rs:7-9`). The *opposite* symptom of the L-B1 freeze, at a site the sweep missed. Fix: `uptime::since`-style wrapping subtraction.** | `src/power.rs:161` | S |
-| L-P2 | **[OPEN] `press.rs` is a whole host-tested subsystem with zero firmware callers — the documented stuck-DTR protection is not shipped.** `Press::sample`/`classify`/`Gesture` run only in `tests/host/press.rs`; the runtime button path is `listen.rs:266-305` + `boot.rs:256-266`, implementing only a 1.5 s floor vs a 2 s ceiling. The module's own doc ("anything past the ceiling is a cable… refused and reported") is not true in the firmware.** Decide deliberately: wire it into the listen button path, or delete it and correct the claim.** | `src/press.rs`, `src/listen.rs:266`, `src/boot.rs:256` | L |
+| L-P2 | **[FIXED] `press.rs` is a whole host-tested subsystem with zero firmware callers — the documented stuck-DTR protection is not shipped.** `Press::sample`/`classify`/`Gesture` run only in `tests/host/press.rs`; the runtime button path is `listen.rs:266-305` + `boot.rs:256-266`, implementing only a 1.5 s floor vs a 2 s ceiling. The module's own doc ("anything past the ceiling is a cable… refused and reported") is not true in the firmware.** Decide deliberately: wire it into the listen button path, or delete it and correct the claim.** | `src/press.rs`, `src/listen.rs:266`, `src/boot.rs:256` | L |
 | L-P3 | **[FIXED] `csv.rs` does not parse the `strokes` column it writes.** `Columns` (`csv.rs:28`) has no strokes member; `parse_row` (`csv.rs:76`) returns only epoch/energy/distance; the boot replay hardcodes `strokes: 1` (`listen.rs:161-167`) with a comment saying it's "not recoverable from the columns" — but the header and writer carry `strokes` as the 11th column (`log.rs:57,355`). Replayed storms undercount stroke counts on the per-strike table (`ui.rs:831-844`), and the comment misleads a future reader.** | `src/csv.rs:28,76`, `src/listen.rs:161`, `src/log.rs:57` | M |
 | L-P4 | **[FIXED] `log.rs` `events 1` budgets are effectively N−1: the event that spends the last row is reduced to 0 and returned without appending.** `src/log.rs:294-304` — the off-by-one understates every armed "how many did I catch" total by one at its tail.** | `src/log.rs:294-304` | S |
 | L-P5 | **[FIXED] `commands.rs:154` `strike` intensity overflows u32.** `energy_raw: intensity_milli * 16777 / 1000` overflows above ~255,934 (`console.rs:348-351` accepts any u32, default 4000). Debug: panic inside the wake loop — a hard reboot, violating `listen.rs`'s "nothing here may panic". Release: silently wraps and feeds garbage into the rings/score/CSV. Real ceiling ~62,500 (2²⁰−1 energy). Fix: u64 intermediate or clamp.** | `src/commands.rs:154` | S |
@@ -341,3 +341,37 @@ board udev has not named.
 
 The same bypass existed in `flash.sh` and `release/flash.sh` — both advertised
 `./flash.sh /dev/ttyACM1` in their own usage — and is closed the same way.
+
+## The access point, 2026-08-29
+
+L-P2 is closed by wiring `press` into the listen loop, which was the prerequisite
+for the long-press gesture the access point needs. The loop now samples the pin
+every 50 ms while it is down; it previously measured no duration at all.
+
+Two defects found while bringing it up, both by checking rather than by running:
+
+* **`httpd_config_t.task_caps` was zero.** Filling the struct by hand defaults
+  every unnamed field to zero, and this one is the capability mask the server
+  task's stack is allocated with. `httpd_start` returned `ESP_ERR_HTTPD_TASK`,
+  which reads as "out of memory" -- the heap print added to diagnose it showed
+  **166 080 B free**. The IDF's own `HTTPD_DEFAULT_CONFIG` uses
+  `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT`.
+* **The join screen's credentials line would have been silently truncated.**
+  An SSID may be 31 characters and a password 63; both on one line is 117, which
+  is 1053 px in a 9-px font on an 800-px panel *and* cut to 64 by a
+  `heapless::String<64>` whose `push_str` error is discarded. Split onto two
+  lines and measured: the longest is 657 px. Found by following the project's
+  own rule about measuring a layout before flashing it -- which had already been
+  broken once by flashing this screen without a preview.
+
+QR geometry was checked the same way rather than by eye: the real `WIFI:`
+payload is version 4, 33 modules, drawn at 5 px per module; the URL is version 2
+at 7 px; the worst case a 31-character SSID and 63-character password can
+produce is version 7 at 4 px. All three fit the 240 px box at an integer scale
+with a four-module quiet zone.
+
+**Not verified: the page itself over HTTP.** Fetching it would mean joining this
+host to the device's access point, and `CLAUDE.md` forbids touching the host's
+WiFi configuration. What is confirmed is that the server task starts, the
+credentials are generated and shown, the join screen renders, and the window
+closes on time. The query parser has 29 host checks. The rendered page has none.

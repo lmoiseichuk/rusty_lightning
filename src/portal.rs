@@ -186,7 +186,19 @@ impl Portal {
             // policy for the life of the portal.
             check(sys::esp_wifi_set_ps(sys::wifi_ps_type_t_WIFI_PS_NONE))?;
 
-            let server = start_server()?;
+            // The radio is up but the server is not; report the heap either
+            // way, because `ESP_ERR_HTTPD_TASK` means "could not create the
+            // task" and the only cause worth checking is memory.
+            let free_before = sys::esp_get_free_heap_size();
+            let server = match start_server() {
+                Ok(server) => server,
+                Err(e) => {
+                    println!("ap:   httpd would not start -- {free_before} B heap free after WiFi");
+                    sys::esp_wifi_stop();
+                    return Err(e);
+                }
+            };
+            println!("ap:   {free_before} B heap free after WiFi, server up");
 
             Ok(Portal { server, armed_ms: now_ms, credentials })
         }
@@ -357,7 +369,9 @@ fn default_httpd_config() -> sys::httpd_config_t {
     sys::httpd_config_t {
         task_priority: 5,
         stack_size: 4096,
-        core_id: 0,
+        // `tskNO_AFFINITY`. The C3 has one core, so this only matters for being
+        // the same value the IDF's own default uses.
+        core_id: i32::MAX,
         server_port: 80,
         ctrl_port: 32768,
         max_open_sockets: 7,
@@ -380,7 +394,13 @@ fn default_httpd_config() -> sys::httpd_config_t {
         open_fn: None,
         close_fn: None,
         uri_match_fn: None,
-        task_caps: 0,
+        // **Not zero, which is what a hand-filled struct defaults to and what
+        // cost an evening here.** This is the capability mask the server's task
+        // stack is allocated with, and asking the allocator for memory with no
+        // capabilities fails however much is free -- `httpd_start` then returns
+        // `ESP_ERR_HTTPD_TASK`, which reads as "out of memory" and is not.
+        // Measured at the failure: 166 KB free.
+        task_caps: sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT,
     }
 }
 
