@@ -1096,6 +1096,16 @@ fn time_axis(
 /// strike and a hundred distant ones give the same count and wildly different
 /// scores, and the reverse is true of the mean — so §4.3 keeps both and this
 /// draws both, one above the other on a shared time axis.
+/// How many bars the chart actually draws.
+///
+/// **Named because something outside this module needs the same number.** The
+/// chart shows only the newest buckets that fit, which on the 5-minute ring is
+/// 6h40m — so "is there anything to see" is a question about *this window*, not
+/// about the ring. Boot asks it to choose a period that has data; asking it with
+/// a different number would answer a different question. See
+/// `history::period_with_data`.
+pub const CHART_BARS: usize = 80;
+
 fn charts(frame: &mut Display7in5, s: &Status<'_>) {
     // 180 rather than 176, which puts the title's baseline at 172 and lines it
     // up with the table header opposite instead of sitting 4 px proud of it.
@@ -1115,7 +1125,8 @@ fn charts(frame: &mut Display7in5, s: &Status<'_>) {
     // so the chart can run to 416 and leave a 21 px gutter. 80 bars rather than
     // 75 -- 6h40m instead of 6h15m, for free.
     const CHART_W: i32 = 400;
-    let fits = (CHART_W / BAR) as usize;
+    let fits = CHART_BARS;
+    debug_assert_eq!(fits, (CHART_W / BAR) as usize);
     let series = s.chart_scores;
     let window = &series[series.len().saturating_sub(fits)..];
 

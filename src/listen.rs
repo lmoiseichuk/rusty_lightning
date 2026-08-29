@@ -154,6 +154,32 @@ pub fn listen(
     }
     let mut screen = screen::Screen::new();
 
+    // **Show what there is, rather than an empty six hours.**
+    //
+    // The replay above works and always has, but the chart draws only the newest
+    // buckets that fit -- 80 bars, which on the 5-minute ring is 6h40m. A device
+    // rebooted a fortnight after its last storm came up with every ring full and
+    // the visible window empty, which reads exactly like a device that had
+    // forgotten everything. It was a display default, not lost data.
+    //
+    // `ui::CHART_BARS` is what `charts` actually draws, so this asks the same
+    // question the screen does rather than a similar one.
+    if let Some(scope) = history::period_with_data(&history, crate::ui::CHART_BARS) {
+        let period = match scope {
+            1 => crate::ui::ChartPeriod::Week,
+            2 => crate::ui::ChartPeriod::Month,
+            _ => crate::ui::ChartPeriod::Day,
+        };
+        if period != screen.period {
+            println!(
+                "log:  nothing in the last {} -- charting the {} instead",
+                screen.period.label(),
+                period.label()
+            );
+            screen.period = period;
+        }
+    }
+
     let mut fuel = battery::Fuel::new(gauge, i2c, now_ms());
     // §7's clock policy. Starts on the USB assumption -- the device is usually
     // plugged in, and being wrong that way costs power rather than a console.

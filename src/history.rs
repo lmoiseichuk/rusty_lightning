@@ -163,6 +163,43 @@ pub fn score_milli(strike: &Strike) -> Option<u32> {
     Some(strike.intensity_milli() * 10 / deci_km)
 }
 
+/// The shortest chart period whose visible window actually contains something.
+///
+/// **Because "no history after a reboot" was a display problem, not a data
+/// one.** The replay works: 2090 records were read back from the log and folded
+/// into the rings. They were invisible because the chart draws only the newest
+/// buckets that fit — 80 bars — which on the 5-minute ring is **6h40m**, and the
+/// records were a fortnight old. The device came up showing an empty six hours
+/// and looked like it had forgotten everything.
+///
+/// So after a replay the period is chosen to match the data rather than left at
+/// its default. A device that has something to show should show it.
+///
+/// Returns `None` when there is genuinely nothing in any ring, which is a
+/// different thing from "nothing recently" and should leave the default alone.
+/// Returns the console's own scope numbering — `0` day, `1` week, `2` month —
+/// rather than `ui::ChartPeriod`. **This module must not reach into `ui`**: it
+/// is compiled by `tests/host/history.rs` on a workstation, where no such module
+/// exists, and a `use` added here breaks that silently until somebody runs the
+/// checks. It was added here once and the host build caught it immediately,
+/// which is the arrangement working.
+pub fn period_with_data(history: &History, bars: usize) -> Option<u8> {
+    // Shortest first: the finest resolution that has anything is the most
+    // informative, and falling back to a coarser one loses detail.
+    // `recent(bars)` sums exactly the window the chart draws, so this asks the
+    // same question the screen does rather than a similar one.
+    if history.day.recent(bars).strikes > 0 {
+        return Some(0);
+    }
+    if history.week.recent(bars).strikes > 0 {
+        return Some(1);
+    }
+    if history.month.recent(bars).strikes > 0 {
+        return Some(2);
+    }
+    None
+}
+
 /// A fixed-size ring of buckets over a fixed bucket width.
 pub struct Ring<const N: usize> {
     buckets: [Bucket; N],
