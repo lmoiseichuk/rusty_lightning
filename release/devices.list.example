@@ -1,0 +1,18 @@
+# The boards on this bench: one `name  MAC` pair per line.
+#
+# Copy to `devices.list` (gitignored) and put your own in. Every script that can
+# write to a device looks the board up here first, because the numbering in
+# /dev/ttyACM<n> shuffles between plug-ins and this repository has already come
+# within one guard of erasing a different board's flash.
+#
+# The MAC is on the by-id path the board enumerates as:
+#
+#     ls /dev/serial/by-id/
+#     usb-Espressif_USB_JTAG_serial_debug_unit_AA:BB:CC:DD:EE:FF-if00
+#                                              ^^^^^^^^^^^^^^^^^
+#
+# The first entry is the default. Name others to keep them straight -- and to
+# make it obvious when a port resolves to one of them by mistake.
+
+lightning   AA:BB:CC:DD:EE:FF
+# panel     11:22:33:44:55:66
