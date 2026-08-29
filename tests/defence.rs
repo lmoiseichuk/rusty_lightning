@@ -74,11 +74,18 @@ fn main() {
     // The three that left, each now a constant or a setting. Getting any of
     // these wrong reintroduces the failure that evicted it.
     check("min strikes is pinned to report every strike", MIN_STRIKES_COUNT == 1);
-    // Left because the tuner refunds the least valuable field first, so every
-    // quiet spell walked it to zero -- and at zero the chip reported an electric
-    // hammer as lightning, 503 times in three and a half hours.
-    check("spike rejection defaults to the reference driver's 0",
-        SPIKE_REJECTION_DEFAULT == 0);
+    // **This check used to assert 0, and asserting it is what kept it.** The
+    // default was set to 1 deliberately, reverted to 0 by an unrelated commit,
+    // and this line -- written when 0 was current -- turned the accident into a
+    // rule the suite enforced. A test that pins a value without pinning the
+    // reasoning will defend a regression as loyally as it defends a decision.
+    //
+    // The reasoning: SREJ is the only knob that rejects short man-made
+    // impulses, and at zero the chip validated an electric hammer as lightning
+    // 503 times in three and a half hours. One is the least rejection that is
+    // not none.
+    check("spike rejection defaults to one, not none",
+        SPIKE_REJECTION_DEFAULT == 1);
     check("...and is settable across the register's range",
         SPIKE_REJECTION_MAX == 15);
     // Left because it gates on amplitude: raising it discards weaker arrivals,
@@ -236,6 +243,31 @@ fn main() {
         walk = next;
     }
     check("the gauge never goes backwards as the walk tightens", monotonic);
+    println!("\n  the device may not choose zero spike rejection");
+    // A person may set 0 -- it is a legitimate experiment. The device choosing
+    // it for itself is how 503 false strikes got logged in three and a half
+    // hours, so every automatic path goes through this.
+    check(
+        "nothing stored: the device picks the floor, not zero",
+        spike_rejection_for_autorun(None) >= SPIKE_REJECTION_AUTO_MIN,
+    );
+    check(
+        "and that is the documented default",
+        spike_rejection_for_autorun(None) == SPIKE_REJECTION_DEFAULT,
+    );
+    check(
+        "a deliberate zero is honoured, because a person set it",
+        spike_rejection_for_autorun(Some(0)) == 0,
+    );
+    check(
+        "a deliberate value is passed through unchanged",
+        spike_rejection_for_autorun(Some(8)) == 8,
+    );
+    check(
+        "the default is not none, which is the whole decision",
+        SPIKE_REJECTION_DEFAULT >= 1,
+    );
+
 
     println!(
         "\n{} passed, {} failed",

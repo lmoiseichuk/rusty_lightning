@@ -241,14 +241,22 @@ pub fn handle(
             }
         }
         if effects.show_spike_rejection {
-            let level = crate::settings::spike_rejection()
-                .unwrap_or(crate::defence::SPIKE_REJECTION_DEFAULT);
+            let level =
+                crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection());
             match level {
                 0 => println!("srej: 0 -- man-made impulses will be reported as strikes"),
                 n => println!("srej: {n} (`regs` reads it back off the chip)"),
             }
         }
         if let Some(level) = effects.set_spike_rejection {
+            // Allowed, and said out loud. Zero is a legitimate experiment and
+            // an illegitimate resting state; the difference is whether somebody
+            // knows it is set.
+            if level < crate::defence::SPIKE_REJECTION_AUTO_MIN {
+                println!("srej: ⚠ 0 is the configuration that logged 503 false strikes in 3.5 h");
+                println!("srej:   from an electric hammer, every one graded `overhead`.");
+                println!("srej:   the device will not choose this for itself -- you have.");
+            }
             match hw.sensor.set_spike_rejection(hw.i2c, level) {
                 Ok(()) => match crate::settings::store_spike_rejection(level) {
                     Ok(()) => println!("srej: {level} (saved)"),

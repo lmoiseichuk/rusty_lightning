@@ -332,9 +332,20 @@ the datasheet's 2 — stored in NVS and written at boot. Raise it if the log fil
 failing appliance, anything impulsive — and remember that every notch also costs
 real detections, so raise it only as far as it needs to go.
 
+**A person may set 0; the device may not choose it.** That is the rule, and it
+is the same one that took `SREJ` out of the tuning space: what the machine
+cannot write, it cannot spend. `srej 0` from the console is a legitimate
+experiment and says so when you use it. A default, a fallback or a reset
+arriving at 0 on its own is the device quietly re-entering the configuration
+that logged 503 false strikes in three and a half hours — so every automatic
+path clamps to 1, and a stored 0 is announced at every boot rather than
+forgotten between sessions.
+
 ```
 srej          report the current level
-srej 1        the default: least rejection that is not none
+srej 0        allowed, but only from here -- see below
+srej 1        the default: least rejection that is not none, and the lowest
+              the device will ever choose for itself
 srej 2        the datasheet's value
 srej 8        measured here as enough to silence an electric hammer entirely
 ```

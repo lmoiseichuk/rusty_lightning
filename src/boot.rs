@@ -152,8 +152,11 @@ pub fn configure(
     // which is the whole fix: while the tuner could write it, it walked it to
     // zero on every quiet spell and the chip began reporting man-made impulses
     // as lightning.
-    let spike = crate::settings::spike_rejection()
-        .unwrap_or(defence::SPIKE_REJECTION_DEFAULT);
+    let spike = defence::spike_rejection_for_autorun(crate::settings::spike_rejection());
+    if spike < defence::SPIKE_REJECTION_AUTO_MIN {
+        println!("as:   ⚠ spike rejection is 0 -- set by hand, not chosen by the device.");
+        println!("as:     man-made impulses validate as lightning here; `srej 1` to restore.");
+    }
     match sensor.set_spike_rejection(i2c, spike) {
         Ok(()) => println!("as:   spike rejection {spike}"),
         Err(e) => println!("as:   could not set spike rejection -- {e}"),

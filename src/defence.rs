@@ -184,6 +184,15 @@ pub const WATCHDOG_MAX: u8 = 15;
 /// merely limited — and that the interference this room suffers is better
 /// answered by moving the sensor than by deafening it.
 ///
+/// **This constant read `0` for nine days while the paragraph above argued for
+/// `1`.** It was set to 1 deliberately in 45e55184c746, whose whole subject was
+/// this decision, and set back to 0 in aa155a727975, a commit about noticing a
+/// storm that mentions spike rejection nowhere. Nothing failed, because nothing
+/// checks a default against the reasoning printed next to it — the device
+/// simply ran the electric-hammer configuration, and the two "overhead" strikes
+/// it logged on the morning of 2026-08-29, one of them carrying zero energy,
+/// are what that looks like from the outside.
+///
 /// SREJ rejects short man-made impulses, and it is the only knob that does.
 /// While it was in the search space the tuner treated it as the cheapest thing
 /// to give away — relaxation refunds the least valuable field first, and by the
@@ -195,7 +204,36 @@ pub const WATCHDOG_MAX: u8 = 15;
 /// The sweep could not have caught it either. `calibrate` searches for the most
 /// sensitive point that stays *quiet*, and in a quiet room `sr 0` scores
 /// perfectly because there is nothing to reject. Quiet is not correct.
-pub const SPIKE_REJECTION_DEFAULT: u8 = 0;
+pub const SPIKE_REJECTION_DEFAULT: u8 = 1;
+
+/// The lowest spike rejection the device may choose **for itself**.
+///
+/// **A person may set zero; the device may not choose it.** That is the whole
+/// distinction, and it is the same one that took `SREJ` out of the tuning space
+/// in the first place: what the machine cannot write, it cannot spend. An
+/// operator asking for `srej 0` is running an experiment and knows what it
+/// costs. A default, a fallback or a reset arriving at 0 on its own is the
+/// device quietly re-entering the configuration that logged 503 false strikes
+/// in three and a half hours.
+///
+/// So every automatic path clamps to this, and only the console can go below.
+/// A stored 0 is honoured on the next boot, because restoring what somebody
+/// deliberately set is not the device choosing.
+pub const SPIKE_REJECTION_AUTO_MIN: u8 = 1;
+
+/// What the device should use when it is choosing for itself.
+///
+/// `stored` is whatever NVS holds, or `None` on a device that has never been
+/// told. Never returns below [`SPIKE_REJECTION_AUTO_MIN`] unless a person put
+/// the value there.
+pub fn spike_rejection_for_autorun(stored: Option<u8>) -> u8 {
+    match stored {
+        // Somebody set this deliberately, including zero. Honour it.
+        Some(level) => level,
+        // Nothing stored: the device is choosing, so it does not choose zero.
+        None => SPIKE_REJECTION_DEFAULT.max(SPIKE_REJECTION_AUTO_MIN),
+    }
+}
 
 /// The range `srej <n>` accepts. The register is four bits.
 pub const SPIKE_REJECTION_MAX: u8 = 15;
