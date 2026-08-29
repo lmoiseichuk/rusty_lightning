@@ -1,7 +1,7 @@
 # Rusty Lightning
 
 A 7.5" e-paper terminal that watches for lightning, tunes its own receiver, and
-runs for a month on a battery. Written in Rust for an ESP32-C3, with no RTOS
+runs up to a week on a battery. Written in Rust for an ESP32-C3, with no RTOS
 task soup and no framework — just a wake loop, a sensor on I2C, and a lot of
 argument about what silence means.
 

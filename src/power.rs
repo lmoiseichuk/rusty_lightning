@@ -5,8 +5,16 @@
 //! what the device is plugged into.
 //!
 //! Measured at the USB port: **0.170 W awake against 0.0127–0.0152 W frugal**,
-//! or 33.5 mA against 2.5–3.0 mA — 13× on the 2000 mAh cell, ~2.5 days against
-//! ~30.
+//! or 33.5 mA against 2.5–3.0 mA — 13× on the 2000 mAh cell.
+//!
+//! **What that ratio does *not* give you is the runtime.** 2000 mAh at 2.75 mA
+//! is about thirty days, and the observed figure is **up to a week**. The
+//! arithmetic is idle current and nothing else: it charges nothing for the
+//! 3.8 s at full draw that every e-paper refresh costs, nor the five-minute
+//! awake grace after each boot, nor an access-point window, nor the cell's own
+//! self-discharge. So the 13× is the number to reason about when choosing a
+//! policy — it is a ratio between two measured currents — and a week is the
+//! number to quote to somebody asking how long it lasts.
 //!
 //! **See §7 for why**: those measurements in full, the three supply-detection
 //! schemes that were tried and each failed, why the ceiling is 80 MHz and not
