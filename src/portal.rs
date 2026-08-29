@@ -44,7 +44,6 @@ pub const ADDRESS: &str = "192.168.4.1";
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub uptime_s: u32,
-    pub epoch: u64,
     pub time_local: String,
     pub location: &'static str,
     pub defence_raw: u16,
@@ -281,7 +280,7 @@ const WIFI_FEATURE_CAPS: u64 = (1 << 0)   // WPA3-SAE
 /// point only.
 fn default_wifi_init_config() -> sys::wifi_init_config_t {
     sys::wifi_init_config_t {
-        osi_funcs: unsafe { core::ptr::addr_of_mut!(sys::g_wifi_osi_funcs) },
+        osi_funcs: core::ptr::addr_of_mut!(sys::g_wifi_osi_funcs),
         wpa_crypto_funcs: unsafe { sys::g_wifi_default_wpa_crypto_funcs },
         static_rx_buf_num: 10,
         dynamic_rx_buf_num: 32,
@@ -575,7 +574,6 @@ pub fn publish_from(
 
     publish(Snapshot {
         uptime_s,
-        epoch,
         time_local: match epoch {
             0 => String::new(),
             epoch => crate::clock::format_local(epoch).to_string(),

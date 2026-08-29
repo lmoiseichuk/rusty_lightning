@@ -24,28 +24,14 @@ use crate::{as3935, defence, session, settings};
 pub const TUNING_CAPS_PF: u8 = 120;
 
 
-/// How long the button must be held to count as a press.
-///
-/// ⚠ **This is not debounce. It is telling a person from a USB host.**
-///
-/// GPIO9 is the BOOT strap, and the ESP32-C3 maps the host's CDC **DTR** line
-/// onto it. So every time `espflash`, `esptool` or a serial monitor connects, it
-/// asserts DTR, GPIO9 goes low, and the firmware sees a falling edge that is
-/// electrically indistinguishable from a fingertip — because it *is* one. That
-/// is the whole explanation for the "phantom presses": they were our own
-/// tooling, firing every time anyone opened the port.
-///
-/// It also rules out the obvious fixes. Sampling the level harder does not help,
-/// because the pin really is held down. Moving the button to another pin is not
-/// available either — GPIO9 carries the only button on the board.
-///
-/// What does separate them is **duration**. A flashing tool pulses DTR for a few
-/// hundred milliseconds; a person pressing a button holds it far longer without
-/// trying. 1.5 s sits well clear of the first and is unnoticeable in the second.
-pub const BUTTON_HOLD_MS: u32 = 1500;
+// **The DTR argument moved to `press`.** GPIO9 carries the only button on this
+// board and the C3 wires DTR to it, so a flashing tool holding the port open is
+// indistinguishable from a fingertip except by duration -- which is the whole
+// reason `press` classifies by how long a hold lasts. The thresholds and the
+// reasoning now live together there; the 1.5 s floor these two constants
+// encoded is `press::ACCEPT_MS`, since raised to 2 s to leave room for the
+// five-second gesture above it.
 
-/// How often to check during the hold.
-pub const BUTTON_POLL_MS: u32 = 100;
 
 
 /// §3's init sequence, in the order the datasheet and the reference agree on.
