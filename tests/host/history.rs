@@ -69,6 +69,33 @@ fn main() {
             <= score_milli(&strike(Distance::Km(1), 3000)).unwrap());
     check("out of range has no score", score_milli(&strike(Distance::OutOfRange, 3000)).is_none());
 
+    // --- a stale ring, and what a tick to "now" does to it ------------------
+    //
+    // **This is why a rebooted device came up with empty charts.**
+    // `advance_to` clears every bucket it skips, so a ring left sitting at a
+    // fortnight-old replayed record is emptied by the first live tick. Asking
+    // what a ring holds BEFORE that tick reads stale data as recent.
+    {
+        // A 5-minute ring holding 24 h, and a record from 15 days ago.
+        let fortnight_ago = 0u32;
+        let now = 15 * 24 * 60;
+        let mut day: Ring<288> = Ring::new(5);
+        day.record(fortnight_ago, &strike(Distance::Km(6), 3000));
+        check("before the tick, the stale record looks recent",
+            day.recent(80).strikes == 1);
+        day.tick(now);
+        check("after a tick to now, the day ring is empty",
+            day.recent(80).strikes == 0);
+
+        // The month ring is coarse enough to survive it: 15 days is 60 of its
+        // 6-hour buckets, and it holds 120.
+        let mut month: Ring<120> = Ring::new(6 * 60);
+        month.record(fortnight_ago, &strike(Distance::Km(6), 3000));
+        month.tick(now);
+        check("the month ring still holds a fortnight-old storm",
+            month.recent(80).strikes == 1);
+    }
+
     // --- bucketing ---------------------------------------------------------
     let mut ring: Ring<96> = Ring::new(15);
     ring.record(0, &strike(Distance::Km(6), 3000));

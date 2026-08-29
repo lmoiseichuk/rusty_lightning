@@ -154,6 +154,20 @@ pub fn listen(
     }
     let mut screen = screen::Screen::new();
 
+    // **Advance the rings to now BEFORE asking what they hold.**
+    //
+    // `Ring::advance_to` clears every bucket it skips, so a ring left sitting at
+    // a fortnight-old record is emptied by the first live tick that jumps to the
+    // present. Asking before that tick reads the stale data as though it were
+    // recent -- which is exactly what happened: the day ring answered "yes, I
+    // have strikes", the period stayed on Day, and the tick then wiped it. The
+    // charts came up empty and the log looked lost.
+    //
+    // Ticking first makes the question honest. What survives is what a chart
+    // would actually draw: the month ring keeps a fortnight-old storm, because
+    // fifteen days is 60 of its 6-hour buckets and the ring holds 120.
+    history.tick(minute_now());
+
     // **Show what there is, rather than an empty six hours.**
     //
     // The replay above works and always has, but the chart draws only the newest
