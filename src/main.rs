@@ -17,6 +17,7 @@ mod i2c_scan;
 mod listen;
 mod log;
 mod power;
+mod press;
 mod screen;
 mod session;
 mod settings;
