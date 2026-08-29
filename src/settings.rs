@@ -270,7 +270,7 @@ pub fn store_watchdog(level: u8) -> Result<(), EspError> {
 /// Stored like the quiet threshold and for the same reason: it describes the
 /// weather a room sees rather than a debugging session, so it should survive a
 /// power cut. `None` on a device never told, where the caller uses
-/// [`crate::session::MERGE_WINDOW_MS`].
+/// [`crate::merger::MERGE_WINDOW_MS`].
 pub fn merge_window_ms() -> Option<u32> {
     let nvs = Namespace::open(NAMESPACE).ok()?;
     Some(nvs.get_u32(KEY_MERGE)?)

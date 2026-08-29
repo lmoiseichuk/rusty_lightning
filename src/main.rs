@@ -16,6 +16,7 @@ mod history;
 mod i2c_scan;
 mod listen;
 mod log;
+mod merger;
 mod power;
 mod press;
 mod screen;

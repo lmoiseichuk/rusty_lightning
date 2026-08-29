@@ -130,7 +130,7 @@ pub fn listen(
     // reason: it describes the weather a room produces rather than a debugging
     // session, so it should survive a power cut. Nothing can be pending this
     // early, so the flush this returns is always empty.
-    let merge_window_ms = crate::settings::merge_window_ms().unwrap_or(session::MERGE_WINDOW_MS);
+    let merge_window_ms = crate::settings::merge_window_ms().unwrap_or(crate::merger::MERGE_WINDOW_MS);
     let _ = totals.merger.set_window_ms(merge_window_ms);
     match merge_window_ms {
         0 => println!("as:   strike merge off -- every return stroke is its own record"),
