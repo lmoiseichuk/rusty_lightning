@@ -344,24 +344,27 @@ impl Point {
 
     /// One notch deafer, or `None` when every field is at its ceiling.
     ///
-    /// **Not `raw + 1`, and the reason is the mirror of [`Point::relaxed`].**
-    /// Incrementing the packed number moves the *bottom* bits, which are
-    /// `MIN_NUM_LIGH` — so the first answer to a noisy minute would be "wait
-    /// five strikes", and a room that stays noisy grinds up through all of
-    /// `SREJ` and `MIN_NUM_LIGH` before it reaches the watchdog. Traced against
-    /// measured rates on this board: relaxing off `wd 7` lands on `wd 6` at
-    /// 13–17/min, and climbing back by ones takes 63 minutes spent almost
-    /// entirely at "wait 5" or worse.
+    /// One step deafer: the next `NF_LEV` up, or `None` at the ceiling.
     ///
-    /// So this walks [`FIELDS`] **cheapest first** — the same cost order the bit
-    /// layout encodes, read forwards: `NF_LEV`, which cannot reject a strike, is
-    /// spent before `WDTH`, and `MIN_NUM_LIGH` only when nothing else is left.
-    /// `relaxed` walks the same list backwards, refunding the dearest first. The
-    /// pair is not a strict inverse and does not need to be; what matters is
-    /// that the device is reluctant to go deaf and eager to come back.
+    /// **With one field left this is `raw + 1`**, and the machinery around it
+    /// looks like more than it is. It stays because the shape is the argument,
+    /// not the arithmetic: `tightened` walks [`FIELDS`] *cheapest first* and
+    /// `relaxed` walks it backwards, so whatever is in the table is spent in
+    /// cost order and refunded in the reverse. Put a register back in the table
+    /// and the ordering is already right.
     ///
-    /// The raw number still rises on every step, so the gauge and
-    /// [`Point::percent`] keep their direction.
+    /// That ordering was learned expensively. While the point packed four
+    /// registers, `raw + 1` moved the *bottom* bits — `MIN_NUM_LIGH` — so the
+    /// first answer to a noisy minute was "wait five strikes", and a room that
+    /// stayed noisy ground up through `SREJ` and `MIN_NUM_LIGH` before it
+    /// reached the watchdog. Measured on this board: relaxing off `wd 7` landed
+    /// on `wd 6` at 13–17/min, and climbing back by ones took 63 minutes spent
+    /// almost entirely at "wait 5" or worse. Those states cannot occur now —
+    /// the tuner cannot reach those registers — but the reason they were
+    /// unreachable is this ordering.
+    ///
+    /// The raw number rises on every step, so the gauge and [`Point::percent`]
+    /// keep their direction.
     pub fn tightened(self) -> Option<Point> {
         for index in 0..FIELDS.len() {
             let value = self.field(index);
@@ -383,13 +386,13 @@ impl Point {
     /// on down, because a chip waiting for sixteen strikes hears nothing, which
     /// reads as "no noise, relax".
     ///
-    /// So relax the **least significant non-zero field** instead. From 448 that
-    /// is the watchdog, giving 384 (`wd 6, sr 0, ms 0`) — gentler in exactly one
-    /// register and unchanged in the rest, which is what the word means.
+    /// So relax the **least significant non-zero field** instead — gentler in
+    /// exactly one register and unchanged in the rest, which is what the word
+    /// means. With `NF_LEV` alone in the table that is plain `raw - 1`; the
+    /// walk is kept for the same reason as in [`Point::tightened`].
     ///
-    /// Climbing stays plain `raw + 1`: a borrow on the way up can only carry
-    /// *out* of the destructive low fields, which resets them toward reporting
-    /// every strike rather than away from it.
+    /// The worked example this used to give — 448 relaxing to 384, `wd 6, sr 0,
+    /// ms 0` — describes a point that no longer exists. `MAX` is 7.
     pub fn relaxed(self) -> Option<Point> {
         // Least significant first, which is the reverse of the table order.
         for index in (0..FIELDS.len()).rev() {
@@ -403,24 +406,22 @@ impl Point {
 
     /// How deaf to lightning the device currently is, 0–100.
     ///
-    /// **A weighted sum, not the raw value scaled.** The raw number is dominated
-    /// by whichever register holds the top bits, which is `NF_LEV` — and that is
-    /// the one register with essentially no detection cost. Measured on this
-    /// board: `nf 7, wd 6, sr 0, ms 0` read **92 %** while the device was
-    /// reporting every single strike. The bar was alarming about the harmless
-    /// knob and silent about the dangerous ones.
+    /// **A weighted sum over [`FIELDS`], not the raw value scaled.** With one
+    /// field of weight 100 that reduces to `100 · nf / 7`, and it is monotonic
+    /// in the raw value again — which it was not while the space held four
+    /// registers, and the difference is worth keeping written down.
     ///
-    /// Each walkable register contributes its [`Field::weight`] scaled by how
-    /// far up its own range it sits, so the same point now reads **25 %**.
+    /// The raw number was then dominated by whichever register held the top
+    /// bits, `NF_LEV`, which is the one register with essentially no detection
+    /// cost. Measured on this board: `nf 7, wd 6, sr 0, ms 0` read **92 %**
+    /// while the device was reporting every single strike — alarming about the
+    /// harmless knob and silent about the dangerous ones. Weighting each
+    /// register by its own cost brought the same point to **25 %**.
     ///
-    /// **`MIN_NUM_LIGH` overrides everything.** It cannot be spent by the walk,
-    /// so a non-zero value means somebody set it by hand — and any value above
-    /// zero silences the opening of every storm, which is maximal harm for an
-    /// early-warning device whatever the other three are doing. A bar that
-    /// averaged that away would be hiding the worst state the part can be in.
-    ///
-    /// The consequence, stated plainly: this is **not** monotonic in the raw
-    /// value any more. It is a harm reading, not a position in the search space.
+    /// Those registers left the point entirely, so the weighting has nothing
+    /// left to correct. It stays because it is what makes the bar mean "how
+    /// deaf" rather than "how far up the search space", and that distinction
+    /// comes straight back the moment anything rejoins [`FIELDS`].
     pub fn percent(self) -> u32 {
         let mut total = 0u32;
         for (index, field) in FIELDS.iter().enumerate() {

@@ -392,7 +392,7 @@ pub fn print_help() {
         crate::session::QUIET_PER_MIN
     );
     println!("                             stored in NVS; omit to keep the current one");
-    println!("  sensitive on|off      every knob wide open, auto-tune frozen");
+    println!("  sensitive on|off      noise floor to 0, auto-tune frozen");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
     println!();

@@ -32,7 +32,16 @@ cd "$HERE"
 # without knowing anything about the layout here. One crate, so this is short --
 # but it is still a list rather than "everything", because committing the
 # release/ tree must not make every image stale.
-SOURCES="src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defaults rust-toolchain.toml littlefs_bindings.h assets"
+#
+# **`.cargo/config.toml` and `components_esp32c3.lock` are build inputs.** They
+# were missing, and both change the binary: the first pins ESP_IDF_VERSION, the
+# `espidf_time64` rustflag, the MCU and the globs that deliver partitions.csv
+# into the generated IDF project; the second pins joltwallet/littlefs by hash
+# under a floating `^1.14` in Cargo.toml. Because the dirty guard and
+# `release/flash.sh`'s staleness check both read this list, editing either file
+# passed the guard and produced an image stamped with a commit that did not
+# contain it -- the same class as the untracked-files hole.
+SOURCES="src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defaults rust-toolchain.toml littlefs_bindings.h assets .cargo/config.toml components_esp32c3.lock"
 
 TARGET_TRIPLE="riscv32imc-esp-espidf"
 BINARY="lightning"

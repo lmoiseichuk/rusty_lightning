@@ -40,8 +40,8 @@
 ///
 /// The original `BUTTON_HOLD_MS` was 1.5 s, chosen to clear a flashing tool's
 /// few-hundred-millisecond pulse. Two seconds keeps that clearance and buys a
-/// rounder number for a person to aim at: with the long gesture at ten, "two
-/// seconds for gain, ten for the network" is something somebody can remember at
+/// rounder number for a person to aim at: with the long gesture at five, "two
+/// seconds for gain, five for the network" is something somebody can remember at
 /// the top of a ladder without reading anything.
 pub const ACCEPT_MS: u32 = 2_000;
 
@@ -62,8 +62,8 @@ pub const LONG_MS: u32 = 5_000;
 
 /// Past this, nothing human is happening: a host is holding DTR.
 ///
-/// Ten seconds of slack over [`LONG_MS`], which is generous for somebody
-/// counting to ten and still far short of a session.
+/// Twenty-five seconds of slack over [`LONG_MS`], which is generous for
+/// somebody counting to five and still far short of a session.
 pub const STUCK_MS: u32 = 30_000;
 
 /// What a completed press turned out to be.
@@ -125,7 +125,7 @@ impl Press {
 
     /// How long the current press has been held, if one is in progress.
     ///
-    /// For the console and the screen, so somebody counting to ten can see the
+    /// For the console and the screen, so somebody counting to five can see the
     /// device counting with them.
     pub fn held_ms(&self, now_ms: u32) -> Option<u32> {
         self.down_at_ms.map(|at| now_ms.wrapping_sub(at))

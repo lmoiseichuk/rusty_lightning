@@ -78,9 +78,11 @@ fn convert_assets() {
 /// may appear anywhere in the header — GIMP writes one on every export, and
 /// that is the part naive parsers get wrong.
 fn parse_p4<'a>(raw: &'a [u8], name: &str) -> (usize, usize, &'a [u8]) {
-    assert_eq!(
-        &raw[..2],
-        b"P4",
+    // `&raw[..2]` on a shorter file panics with "range end index 2 out of
+    // range" before this assert can say anything useful, so test the prefix in
+    // a way that tolerates a short slice.
+    assert!(
+        raw.starts_with(b"P4"),
         "{name}: not a binary (P4) PBM -- re-export as Raw, not ASCII",
     );
 
@@ -109,7 +111,16 @@ fn parse_p4<'a>(raw: &'a [u8], name: &str) -> (usize, usize, &'a [u8]) {
     // specification, not "skip all whitespace". Getting this wrong eats the
     // first row of any image whose leading pixel byte happens to look like
     // whitespace.
-    i += 1;
+    //
+    // **`\r\n` counts as that one separator.** A header written with DOS line
+    // endings otherwise leaves the `\n` as the first pixel byte, which shifts
+    // the whole bitmap by one and fails the length check below with a message
+    // about sizes that says nothing about the real cause.
+    if raw.get(i) == Some(&b'\r') && raw.get(i + 1) == Some(&b'\n') {
+        i += 2;
+    } else {
+        i += 1;
+    }
 
     (fields[0], fields[1], &raw[i..])
 }

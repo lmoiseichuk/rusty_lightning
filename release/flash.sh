@@ -67,6 +67,38 @@ EOF
     fi
 fi
 
+# **An explicit port is checked too.** The lookup above is by MAC, but a port
+# passed as an argument used to skip it -- so the board-identity guarantee this
+# script was written around was dropped on the path a person types by hand,
+# where `ttyACM<n>` shuffling does its damage.
+resolve_by_id() {
+    local port="$1" link target
+    target="$(readlink -f -- "$port" 2>/dev/null)" || return 1
+    [[ -n "$target" ]] || return 1
+    for link in /dev/serial/by-id/*; do
+        [[ -e "$link" ]] || continue
+        if [[ "$(readlink -f -- "$link")" == "$target" ]]; then
+            printf '%s\n' "$link"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if resolved="$(resolve_by_id "$PORT")"; then
+    if [[ "$resolved" != *'B0:A6:04:06:E6:D4'* ]]; then
+        echo "⚠ $PORT is not the lightning board." >&2
+        echo "  it resolves to: $resolved" >&2
+        echo "  expected MAC:   B0:A6:04:06:E6:D4" >&2
+        echo "Refusing: flashing the wrong board replaces its firmware." >&2
+        exit 1
+    fi
+else
+    echo "⚠ $PORT has no /dev/serial/by-id entry, so this cannot check which" >&2
+    echo "  board it is. Refusing rather than flashing an unknown device." >&2
+    exit 1
+fi
+
 echo "port    : $PORT"
 echo "variant : $TARGET"
 echo "purpose : $PURPOSE"

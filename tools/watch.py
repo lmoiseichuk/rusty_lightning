@@ -18,7 +18,18 @@ import time
 import serial
 
 port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
-seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+
+# A bare `int()` here raised an unhandled ValueError on a typo, printing a
+# traceback where a usage line belongs.
+if len(sys.argv) > 2:
+    try:
+        seconds = int(sys.argv[2])
+    except ValueError:
+        print(f"not a number of seconds: {sys.argv[2]!r}", file=sys.stderr)
+        print(f"usage: {sys.argv[0]} [port] [seconds]", file=sys.stderr)
+        sys.exit(2)
+else:
+    seconds = 60
 
 s = serial.Serial()
 s.port = port
@@ -26,7 +37,17 @@ s.baudrate = 115200
 s.timeout = 1
 s.dtr = False          # GPIO9 strap released -- set BEFORE open()
 s.rts = False          # EN released
-s.open()
+
+# **`open()` belongs inside the guard.** It sat above the try, so the single
+# most common failure -- the port missing, or already held by another console --
+# produced a raw traceback instead of the message written for exactly that case.
+try:
+    s.open()
+except serial.SerialException as e:
+    print(f"could not open {port}: {e}", file=sys.stderr)
+    print("if the board is asleep the port comes and goes; try again, or", file=sys.stderr)
+    print("check nothing else is holding it.", file=sys.stderr)
+    sys.exit(1)
 
 end = time.time() + seconds
 try:

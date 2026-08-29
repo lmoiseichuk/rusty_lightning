@@ -76,20 +76,88 @@ fi
 
 # An explicit port is still checked, because being explicit is not the same as
 # being right.
-if [[ "$PORT" == /dev/serial/by-id/* && "$PORT" != *"$BOARD_MAC"* ]]; then
-    echo "⚠ $PORT is not the lightning board ($BOARD_MAC)." >&2
-    echo "This script ERASES THE WHOLE CHIP. Refusing." >&2
+#
+# **This used to check only paths that already began `/dev/serial/by-id/`.**
+# The condition was `by-id/* && != *MAC*`, so both halves had to hold to refuse
+# -- and a bare `/dev/ttyACM0` failed the first half, skipped the guard
+# entirely, and went straight to `esptool erase-flash`. The comment above it
+# claimed the opposite. That is the exact shuffle this script's own header
+# describes as "one port shuffle away from erasing somebody else's log", left
+# open on the path a person types by hand when they are in a hurry.
+#
+# So resolve whatever was given back to a by-id name and check *that*. Both
+# paths point at the same character device, so comparing `readlink -f` is
+# enough and needs no udev query.
+resolve_by_id() {
+    local port="$1" link target
+    target="$(readlink -f -- "$port" 2>/dev/null)" || return 1
+    [[ -n "$target" ]] || return 1
+    for link in /dev/serial/by-id/*; do
+        [[ -e "$link" ]] || continue
+        if [[ "$(readlink -f -- "$link")" == "$target" ]]; then
+            printf '%s\n' "$link"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [[ "${RECOVER_SKIP_IDENTITY_CHECK:-}" == "1" ]]; then
+    echo "⚠ RECOVER_SKIP_IDENTITY_CHECK=1 -- erasing $PORT without checking which board it is."
+elif resolved="$(resolve_by_id "$PORT")"; then
+    if [[ "$resolved" != *"$BOARD_MAC"* ]]; then
+        echo "⚠ $PORT is not the lightning board." >&2
+        echo "  it resolves to: $resolved" >&2
+        echo "  expected MAC:   $BOARD_MAC" >&2
+        echo "This script ERASES THE WHOLE CHIP. Refusing." >&2
+        exit 1
+    fi
+else
+    echo "⚠ $PORT has no /dev/serial/by-id entry, so its identity cannot be" >&2
+    echo "  checked -- and this script ERASES THE WHOLE CHIP, including the" >&2
+    echo "  strike log and NVS. Refusing." >&2
+    echo >&2
+    echo "If the board really is this one and udev has not named it, set" >&2
+    echo "RECOVER_SKIP_IDENTITY_CHECK=1 deliberately:" >&2
+    echo >&2
+    echo "    RECOVER_SKIP_IDENTITY_CHECK=1 $0 $PORT" >&2
     exit 1
 fi
 MAX_ATTEMPTS="${2:-8}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIR="$HERE/target/riscv32imc-esp-espidf/release"
+
+# **Its own target directory, and the recovery feature is not optional.**
+#
+# This read `target/riscv32imc-esp-espidf/release` -- the same directory
+# `flash.sh` builds the *default* image into -- and only advised building with
+# `--features no-light-sleep` in an error message nothing enforced. The natural
+# sequence made that fatal: `flash.sh` fails, leaving exactly the light-sleep
+# binary that broke the console sitting in `target/`, and recovery writes it
+# straight back. The board comes up unreachable again and the run looks like a
+# success.
+#
+# A separate `--target-dir` means the recovery image cannot be a leftover of
+# anything else, and building it here means it cannot be forgotten.
+RECOVERY_TARGET="$HERE/target/recovery"
+DIR="$RECOVERY_TARGET/riscv32imc-esp-espidf/release"
+
+need_build=0
+for f in bootloader.bin partition-table.bin lightning; do
+    [[ -f "$DIR/$f" ]] || need_build=1
+done
+
+if (( need_build )); then
+    echo "building the recovery image (light sleep compiled out) ..."
+    if ! (cd "$HERE" && cargo build --release --features no-light-sleep \
+              --target-dir "$RECOVERY_TARGET"); then
+        echo "the recovery build failed -- not erasing anything" >&2
+        exit 1
+    fi
+fi
 
 for f in bootloader.bin partition-table.bin lightning; do
     if [[ ! -f "$DIR/$f" ]]; then
-        echo "missing: $DIR/$f" >&2
-        echo "build first, ideally the recovery image:" >&2
-        echo "    cargo build --release --features no-light-sleep" >&2
+        echo "missing after build: $DIR/$f" >&2
         exit 1
     fi
 done
@@ -155,12 +223,20 @@ while (( attempt < MAX_ATTEMPTS )); do
     # The chip now has no app, so it sits in the ROM downloader -- which is the
     # easy case, and why the write below needs no coaxing.
     echo "[$(stamp)] WRITING -- do not power-cycle"
+    # **Gated on the exit status, not on the wording.** This tested only
+    # `grep -q 'Flashing has completed'` and threw the exit status away, while
+    # the erase above was `if !`-gated -- so if espflash ever rephrases that
+    # line, a *successful* write is reported failed, the loop comes round and
+    # erases the flash it just wrote, and after eight attempts it announces
+    # FAILED on a board that was recovered on the first one. The grep stays,
+    # as a display detail rather than as the verdict.
+    write_status=0
     write_out=$(timeout 90 espflash flash --port "$PORT" --non-interactive \
                     --chip esp32c3 \
                     --bootloader "$DIR/bootloader.bin" \
                     --partition-table "$DIR/partition-table.bin" \
-                    "$DIR/lightning" 2>&1)
-    if grep -q 'Flashing has completed' <<<"$write_out"; then
+                    "$DIR/lightning" 2>&1) || write_status=$?
+    if (( write_status == 0 )); then
         echo
         echo "=============================================="
         echo " RECOVERED on attempt $attempt"

@@ -162,7 +162,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `defence` | the current tuning point: raw value, percent, and the `NF_LEV` field it holds |
 | `defence <raw>` | set the tuning point by hand, 0–7. `0` is fully receptive |
 | `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
-| `sensitive on\|off` | every rejection knob wide open, with the auto-tune frozen |
+| `sensitive on\|off` | the noise floor to 0 — the most receptive the tuner's own space goes — with the auto-tune frozen |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
 | `sleep on\|off` | light sleep alone, leaving the clock where it is |
 | `strike [km] [intensity]` | inject a synthetic strike |
@@ -369,11 +369,11 @@ evidence that lightning is present and the strike-hold rule wants all of it.
 
 **`defence <raw>` skips the sweep** when you already know the answer for a room.
 `0` is fully receptive; higher is deafer. A device that has never calibrated
-starts mid-range on the two volume knobs (`NF_LEV`, `WDTH`) with spike rejection
+starts mid-range on the one knob it walks (`NF_LEV`), with spike rejection
 at its most sensitive — spike rejection is not a volume control, so it is not
 pre-set to a guess.
 
-**`sensitive on` opens every knob and freezes the auto-tune**, because otherwise
+**`sensitive on` opens the noise floor and freezes the auto-tune**, because otherwise
 the first disturber climbs straight back off it. Expect a lot of disturbers —
 that is the trade.
 

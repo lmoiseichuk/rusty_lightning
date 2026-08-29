@@ -144,7 +144,7 @@ pub fn listen(
     // device that had never seen a storm.
     if strike_log.is_some() {
         let mut replayed = 0u32;
-        log::for_each(|epoch, strike| {
+        log::for_each(|epoch, strike, strokes| {
             history.record((epoch / 60) as u32, &strike);
             // **And the table on the right, which the rings do not fill.**
             //
@@ -155,15 +155,16 @@ pub fn listen(
             // empty table, which is exactly half a restored history.
             //
             // `strokes: 1` because the file does not say. A replayed row is one
-            // record; whether the merge window had folded return strokes into it
-            // is not recoverable from the columns, and inventing a count would
-            // put a number on the glass that nothing measured.
+            // record. The stroke count comes from the file's own `strokes`
+            // column -- it used to be hardcoded to 1 here, on the belief that
+            // it was not recoverable, which showed every replayed multi-stroke
+            // flash as a single strike.
             history.recent.push(history::Recent {
                 epoch: Some(epoch),
                 distance: strike.distance,
                 energy_raw: strike.energy_raw,
                 score_milli: history::score_milli(&strike).unwrap_or(0),
-                strokes: 1,
+                strokes,
             });
             replayed += 1;
         });
@@ -487,6 +488,15 @@ pub fn listen(
         session::reset_if_stuck_overhead(sensor, i2c, &mut totals);
 
         tuning.observe(&batch);
+
+        // A frozen tuner still measures. `due` is false while frozen, so the
+        // branch below never runs and the noise caption and JAMMED warning
+        // would sit on whatever they last held -- `0/min` if the freeze came
+        // first. Publishing the rates without deciding keeps the panel honest
+        // during `sensitive on`, which is when it matters most.
+        if tuning.frozen && tuning.window_elapsed(now_ms()) {
+            tuning.publish(&mut totals, now_ms());
+        }
 
         if tuning.due(now_ms()) {
             // --- §4.3's storm end -----------------------------------------

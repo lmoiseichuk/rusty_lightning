@@ -35,6 +35,7 @@ if [[ -z "$EDITION" ]]; then
 fi
 
 failed=0
+files=0
 
 echo "== host checks (edition $EDITION) =="
 for source in "$HERE"/tests/host/*.rs; do
@@ -48,10 +49,21 @@ for source in "$HERE"/tests/host/*.rs; do
         failed=1
         continue
     fi
-    if ! "$BIN/$name"; then
+    # Each test binary prints its own "N passed, M failed"; tee it through so
+    # the per-file detail still scrolls past, and total it at the end. The
+    # count is derived here rather than written down anywhere -- a number kept
+    # by hand in a doc is a number that goes stale, which this repo has proved
+    # about netlists and about this very figure.
+    if ! "$BIN/$name" | tee "$BIN/$name.out"; then
         failed=1
     fi
+    files=$(( files + 1 ))
 done
+
+total_passed=$(awk '/passed, /{p += $1} END {print p + 0}' "$BIN"/*.out 2>/dev/null)
+total_failed=$(awk '/passed, /{f += $3} END {print f + 0}' "$BIN"/*.out 2>/dev/null)
+echo
+echo "== ${total_passed} checks across ${files} files, ${total_failed} failed =="
 
 if (( failed )); then
     echo

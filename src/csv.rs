@@ -31,6 +31,8 @@ pub struct Columns {
     pub energy: usize,
     /// `None` in a file written before event logging existed.
     pub kind: Option<usize>,
+    /// `None` in a file written before merged flashes recorded their count.
+    pub strokes: Option<usize>,
     pub width: usize,
 }
 
@@ -48,6 +50,7 @@ impl Columns {
             distance: at("distance_km")?,
             energy: at("energy_raw")?,
             kind: at("kind"),
+            strokes: at("strokes"),
             width: names.len(),
         })
     }
@@ -56,8 +59,13 @@ impl Columns {
 /// What one row turned out to be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
-    /// A strike: epoch, distance field, energy.
-    Strike { epoch: u64, energy_raw: u32, distance: Distance },
+    /// A strike: epoch, distance field, energy, and how many return strokes
+    /// the merge window folded into it.
+    ///
+    /// `strokes` is 1 for a file written before the column existed, which is
+    /// the truthful reading: those records are single strikes as far as
+    /// anything can now tell.
+    Strike { epoch: u64, energy_raw: u32, distance: Distance, strokes: u32 },
     /// A disturber or noise event — logged, and never a strike.
     Event,
     /// Unreadable, or a row this build does not understand.
@@ -111,5 +119,17 @@ pub fn parse_row(line: &str, columns: &Columns) -> Row {
             Err(_) => return Row::Skip,
         },
     };
-    Row::Strike { epoch, energy_raw, distance }
+    // **Read, not assumed.** The replay used to hardcode 1 here, with a comment
+    // saying the count was "not recoverable from the columns" -- but `strokes`
+    // has been the eleventh column since merged flashes started recording it,
+    // and `log::append` writes it. So a replayed storm showed every multi-stroke
+    // flash as a single strike, and the comment sent the next reader looking in
+    // the wrong place. A file older than the column still reads 1, which is what
+    // the old comment was right about and is now the only case it covers.
+    let strokes = match columns.strokes {
+        Some(at) => fields[at].trim().parse::<u32>().unwrap_or(1).max(1),
+        None => 1,
+    };
+
+    Row::Strike { epoch, energy_raw, distance, strokes }
 }

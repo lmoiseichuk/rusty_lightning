@@ -213,7 +213,36 @@ impl Tuning {
     }
 
     pub fn due(&self, now_ms: u32) -> bool {
-        !self.frozen && crate::uptime::due(now_ms, self.window_started_ms, self.window_s() * 1000)
+        !self.frozen && self.window_elapsed(now_ms)
+    }
+
+    /// Whether the measurement window has run its length, frozen or not.
+    ///
+    /// Separate from [`Tuner::due`] because freezing the tuner must not stop
+    /// the device *measuring* — only deciding. See [`Tuner::publish`].
+    pub fn window_elapsed(&self, now_ms: u32) -> bool {
+        crate::uptime::due(now_ms, self.window_started_ms, self.window_s() * 1000)
+    }
+
+    /// Publish the window's rates without taking a tuning decision.
+    ///
+    /// **For a frozen tuner.** `due` is false while frozen, so `step` never
+    /// runs — and `step` was the only writer of `totals.noise_per_min`. The
+    /// consequence was not a stale gauge but a *lying* one: `sensitive on`
+    /// before the first window closed left the caption reading `0/min` and made
+    /// the JAMMED warning unreachable, at exactly the moment the receiver is
+    /// wide open and most likely to be drowning. The override is meant to be
+    /// the tool for diagnosing a deaf device, and it silenced the one number
+    /// that says whether the band is usable.
+    ///
+    /// So: measure always, decide only when not frozen. The window is restarted
+    /// here as `step` would, so rates stay windowed rather than accumulating.
+    pub fn publish(&mut self, totals: &mut Totals, now_ms: u32) {
+        let window_s = self.window_s();
+        self.window_started_ms = now_ms;
+        totals.noise_per_min = self.window.noise_per_min(window_s);
+        totals.disturbers_per_min = self.window.disturbers_per_min(window_s);
+        self.window.clear();
     }
 
     /// Begin the window again from now, discarding what it had counted.
@@ -409,9 +438,11 @@ impl Tuning {
     /// A nearby strike is not a clean impulse: it throws harmonics that arrive
     /// as disturbers, so a storm close enough to matter looks like a noisy band
     /// to a counter that cannot tell them apart. Climbing on that would deafen
-    /// the device at exactly the moment it exists for — and each notch of
-    /// `MIN_NUM_LIGH` then hides the following strikes too, which is a loop that
-    /// closes on itself.
+    /// the device at exactly the moment it exists for, and a deafer receiver
+    /// then hears less of the storm, which reads as quiet — a loop that closes
+    /// on itself. (This named `MIN_NUM_LIGH` as the register doing the hiding,
+    /// from when the tuner could still reach it. It walks only `NF_LEV` now;
+    /// the loop is the same shape and one step longer.)
     ///
     /// Holding rather than relaxing: the window genuinely was noisy, so this is
     /// a refusal to escalate, not evidence of quiet.
@@ -438,9 +469,12 @@ impl Tuning {
     /// Dividing by the quiet threshold makes the step mean "how many times over
     /// the line is this", which needs no separate constant and scales with
     /// whatever the room's threshold has been set to. It saturates naturally: a
-    /// fully jammed band here is ~480/min, which is 40 notches against a ladder
-    /// exactly 40 notches deep, so the worst case is "fully deaf in one window"
-    /// rather than an unbounded number nobody has budgeted for.
+    /// fully jammed band here is ~480/min, which is 40 notches — and the ladder
+    /// is now 8 deep, so the loop runs out of ladder long before it runs out of
+    /// notches and the worst case is "fully deaf in one window" rather than an
+    /// unbounded number nobody has budgeted for. (Written when the ladder was
+    /// 40 deep and the two numbers matched exactly. The behaviour is unchanged:
+    /// `tightened` returns `None` at the ceiling and the loop stops.)
     fn climb(&mut self, totals: &Totals) -> Option<&'static str> {
         let notches = (totals.noise_per_min / self.quiet_per_min.max(1)).max(1);
         let mut stepped = false;
@@ -784,6 +818,17 @@ impl Tuning {
     /// Put the point somewhere by hand — how a room with a known answer skips
     /// the sweep.
     pub fn place(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, raw: u16, now_ms: u32) {
+        // **Say so when this overrides a freeze.** `sensitive on` reports that
+        // the auto-tune is frozen, and the console's own help repeats it -- so
+        // a hand-placed point landing on top of it, silently, contradicts what
+        // the operator was just told. It is still allowed: an explicit command
+        // should win over a mode. But the next `sensitive off` restores the
+        // pre-override point and discards this one, and somebody who was not
+        // told will read that as the device moving on its own.
+        if self.frozen {
+            println!("def:  note -- the auto-tune is frozen (`sensitive on`).");
+            println!("def:  this point is yours until `sensitive off`, which restores the saved one.");
+        }
         self.point = defence::Point::new(raw);
         // A jump rather than a ±1 step: the population of events feeding the
         // estimate changes with it.

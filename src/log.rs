@@ -466,9 +466,11 @@ pub fn dump_csv(log: &Log) {
 ///
 /// Malformed lines are skipped rather than fatal. A power cut mid-append leaves
 /// a torn final line, and one bad row must not cost the other thousand.
+/// The visitor also receives the stroke count, which the file carries and the
+/// replay used to discard.
 pub fn for_each<F>(mut visit: F)
 where
-    F: FnMut(u64, Strike),
+    F: FnMut(u64, Strike, u32),
 {
     let Ok(file) = File::open(PATH) else {
         return;
@@ -488,7 +490,7 @@ where
 
     for line in lines {
         match crate::csv::parse_row(&line, &columns) {
-            crate::csv::Row::Strike { epoch, energy_raw, distance } => visit(
+            crate::csv::Row::Strike { epoch, energy_raw, distance, strokes } => visit(
                 epoch,
                 Strike {
                     distance: match distance {
@@ -498,6 +500,7 @@ where
                     },
                     energy_raw,
                 },
+                strokes,
             ),
             crate::csv::Row::Event | crate::csv::Row::Skip => continue,
         }
