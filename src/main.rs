@@ -13,6 +13,7 @@ mod console;
 mod display;
 mod effects;
 mod defence;
+mod golden;
 mod history;
 mod i2c_scan;
 mod listen;

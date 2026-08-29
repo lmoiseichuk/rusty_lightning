@@ -10,7 +10,7 @@ share code with — which is why this project has modules where the moisture
 project next door has crates.
 
 <!-- generated: map -->
-**33 modules**, of which **11 are free of ESP-IDF** and so can be
+**34 modules**, of which **12 are free of ESP-IDF** and so can be
 compiled and tested by bare `rustc` on this machine:
 
 ```
@@ -19,15 +19,15 @@ host-testable (no esp_idf_hal)      needs the device
 civil                                as3935
 csv                                  battery
 defence                              boot
-history                              clock
-merger                               commands
-policy                               console
-press                                credentials
-query                                display
-strike                               effects
-uptime                               i2c_scan
-verdict                              listen
-                                     log
+golden                               clock
+history                              commands
+merger                               console
+policy                               credentials
+press                                display
+query                                effects
+strike                               i2c_scan
+uptime                               listen
+verdict                              log
                                      portal
                                      power
                                      screen
@@ -40,7 +40,7 @@ verdict                              listen
                                      webui
 ```
 
-**Every one of them is covered** by the 10 files in `tests/` — a module that can be host-tested is.
+**Every one of them is covered** by the 11 files in `tests/` — a module that can be host-tested is.
 
 `tools/check.sh` prints the check total. It is deliberately not repeated
 here: a count kept in two places is a count that disagrees with itself,
@@ -93,9 +93,9 @@ this table is generated from it.
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 543 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 436 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1003 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1056 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/history.rs`, `tests/merger.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 876 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 947 |
 | `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 70 |
 
 ### Keeping it
@@ -107,8 +107,8 @@ this table is generated from it.
 | `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 135 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
 | `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 533 |
-| `settings` | What survives a power cut, and nothing else. | -- | 286 |
-| `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 172 |
+| `settings` | What survives a power cut, and nothing else. | -- | 330 |
+| `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 
 ### The glass
 
@@ -122,8 +122,8 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 415 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 447 |
+| `commands` | What the console commands actually do (§5). | -- | 452 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 456 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 399 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
@@ -136,12 +136,14 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 235 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 271 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 69 |
 | `power` | Clock and sleep policy (§7). | -- | 118 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 165 |
 | `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
+
+**Unclassified** (add them to `ROLES` in `tools/modules.py`): `golden`
 
 <!-- end generated -->
 
@@ -156,9 +158,9 @@ program' is not information.
 |---|---|
 | `as3935` | `strike` |
 | `battery` | `settings` `uptime` |
-| `boot` | `as3935` `defence` `session` `settings` |
+| `boot` | `as3935` `defence` `golden` `session` `settings` |
 | `clock` | `civil` `storage` |
-| `commands` | `as3935` `battery` `clock` `console` `credentials` `history` `log` `power` `session` `settings` `strike` `system` `ui` |
+| `commands` | `as3935` `battery` `clock` `console` `credentials` `golden` `history` `log` `power` `session` `settings` `strike` `system` `ui` |
 | `console` | `defence` `session` |
 | `credentials` | `storage` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
@@ -169,14 +171,14 @@ program' is not information.
 | `portal` | `clock` `credentials` `history` `log` `session` `strike` `system` `tuning` `uptime` `webui` |
 | `power` | `policy` `storage` |
 | `screen` | `as3935` `battery` `clock` `defence` `display` `history` `power` `session` `system` `ui` `uptime` |
-| `session` | `as3935` `clock` `defence` `history` `log` `merger` `settings` `uptime` |
-| `settings` | `as3935` `battery` `defence` `storage` |
-| `tuning` | `as3935` `defence` `listen` `session` `settings` `uptime` `verdict` |
+| `session` | `as3935` `clock` `defence` `golden` `history` `log` `merger` `settings` `uptime` |
+| `settings` | `as3935` `battery` `defence` `golden` `storage` |
+| `tuning` | `as3935` `defence` `golden` `listen` `session` `settings` `uptime` `verdict` |
 | `ui` | `as3935` `battery` `clock` `display` `history` `session` `system` |
 | `webui` | `portal` `query` |
 
 **Depends on nothing in this crate** — the bottom of the stack, and
-where a change is cheapest: `civil`, `csv`, `defence`, `display`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `system`, `uptime`, `verdict`.
+where a change is cheapest: `civil`, `csv`, `defence`, `display`, `golden`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `system`, `uptime`, `verdict`.
 <!-- end generated -->
 
 ## How a strike travels

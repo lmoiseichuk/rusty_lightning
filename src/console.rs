@@ -54,6 +54,9 @@ pub enum ApRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Help,
+    /// `golden` shows the settings that last heard lightning; `golden clear`
+    /// forgets them.
+    Golden(bool),
     /// `ap` raises the access point; `ap off` drops it; `ap <ssid> <password>`
     /// stores credentials and raises it with them.
     ///
@@ -313,6 +316,11 @@ pub fn parse(line: &str) -> Command {
                 _ => Command::Unknown,
             },
         },
+        "golden" | "gold" => match arg {
+            Some("clear") | Some("forget") => Command::Golden(true),
+            None => Command::Golden(false),
+            _ => Command::Unknown,
+        },
         "ap" | "portal" => {
             match (arg, arg2) {
                 (None, _) => Command::AccessPoint(ApRequest::Raise),
@@ -437,6 +445,7 @@ pub fn print_help() {
     println!("                             stored in NVS; omit to keep the current one");
     println!("  sensitive on|off      noise floor to 0, auto-tune frozen");
     println!("  ap [off|<ssid> <pass>] raise the access point and web UI; `off` drops it");
+    println!("  golden [clear]        the settings that last heard lightning");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
     println!();

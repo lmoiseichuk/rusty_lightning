@@ -335,6 +335,43 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Srej(Some(level)) => effects.set_spike_rejection = Some(level),
         Command::Wdth(None) => effects.show_watchdog = true,
         Command::Wdth(Some(level)) => effects.set_watchdog = Some(level),
+        Command::Golden(clear) => {
+            if clear {
+                match crate::settings::clear_golden() {
+                    Ok(()) => println!("gold: forgotten -- the next strike starts a new record"),
+                    Err(e) => println!("gold: could not clear -- {e}"),
+                }
+                return effects;
+            }
+            match crate::settings::golden() {
+                None => {
+                    println!("gold: nothing recorded -- this device has not heard a strike yet,");
+                    println!("gold: or the record was cleared. The first one writes it.");
+                }
+                Some(record) => {
+                    println!(
+                        "gold: nf {} wd {} sr {} ({}) -- {} strike(s) heard here",
+                        record.combo.nf,
+                        record.combo.wdth,
+                        record.combo.srej,
+                        if record.combo.outdoor { "outdoor" } else { "indoor" },
+                        record.strikes,
+                    );
+                    if record.strikes < crate::golden::TRUSTED_STRIKES {
+                        println!(
+                            "gold: not yet trusted -- {} strike(s) needed before the tuner will",
+                            crate::golden::TRUSTED_STRIKES
+                        );
+                        println!("gold: return to it, because one detection at srej 0 may be man-made");
+                    } else {
+                        println!(
+                            "gold: trusted -- the tuner returns here after {} min of silence at a deafer point",
+                            crate::golden::PATIENCE_MINUTES
+                        );
+                    }
+                }
+            }
+        }
         Command::AccessPoint(request) => {
             // Credentials are stored here, because that is NVS and not a radio.
             // Raising the network itself is the loop's job.

@@ -159,6 +159,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `srej [0-15]` | spike rejection. **`0` reports man-made impulses as lightning** — see below |
 | `wdth [0-15]` | watchdog threshold, aliased `watchdog`. Raising it discards the slow-rising distant arrivals this device exists to report |
 | `ap` | raise the access point and its web UI for 60 s. `ap off` drops it; `ap <ssid> <password>` stores credentials and raises with them |
+| `golden [clear]` | the settings that last heard lightning, and how many strikes at them |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the `NF_LEV` field it holds |
 | `defence <raw>` | set the tuning point by hand, 0–7. `0` is fully receptive |
@@ -448,3 +449,41 @@ A few consequences worth knowing:
 * **Handlers never touch the sensor.** They read a snapshot the main loop
   publishes and queue a command line it runs — the console's state is written
   for a single caller, and the I2C bus has no lock.
+
+
+## The golden combination
+
+**The device writes down what it was set to when it heard lightning.**
+
+This exists because of an asymmetry that makes the tuner hard. Everything the
+device measures is *quiet*, and quiet is two different things wearing one face:
+a working receiver under a still sky, and a deaf one under a storm. The auto-tune
+cannot tell them apart — which is why "minimise events" has **deafness as its
+global optimum**. A receiver that hears nothing has scored perfectly.
+
+A detected strike is the only signal that breaks the tie. It is proof, not
+inference, that this exact combination of `NF_LEV`, `WDTH`, `SREJ` and the AFE
+gain was able to hear lightning *from this room*. So it is recorded, and it is
+used three ways:
+
+* **At boot**, it outranks the stored point. The stored point is wherever the
+  walk happened to be when power went; if the device had been driven deaf, that
+  is the deafness it resumes, silently. The record is a measurement.
+* **As a rescue.** If the tuner sits deafer than the record and hears nothing
+  for 20 minutes, it returns to the record and says so. Silence at a deafer
+  setting than one this room has produced strikes at is evidence about the
+  receiver, not about the sky.
+* **As a report.** `golden` prints it.
+
+Two strikes are needed before the record is trusted. **One is not evidence that
+a setting can hear lightning** — at `srej 0` a single detection may be an
+electric hammer, and this device has logged 503 of those in a morning. Two is
+cheap in any real storm and discards the isolated false positive.
+
+The record can only pull the point *toward* something already proved, never past
+it. A tuner that has found something more open keeps it. And a record made at
+one AFE gain is never applied at the other: a noise floor learned indoors
+describes a front end seeing roughly four times what the outdoor one sees, and
+carrying it across is exactly how a good point becomes a deaf one.
+
+`golden clear` forgets it; the next strike starts a new record.

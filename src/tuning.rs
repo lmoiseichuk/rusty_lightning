@@ -84,6 +84,9 @@ pub struct Tuning {
     /// window is — which is exactly how a 60 s sweep came to settle deafer than
     /// a 10 s one in the same room. See [`session::QUIET_PER_MIN`].
     quiet_per_min: u32,
+    /// When lightning was last heard. Feeds the fall-back to the known-good
+    /// combination — see [`crate::golden`].
+    last_strike_ms: Option<u32>,
     /// Where to go back to when a dip hears nothing. `Some` while dipping.
     dip_restore: Option<defence::Point>,
     /// When the last dip ran, so they are spaced rather than continuous.
@@ -151,6 +154,7 @@ impl Tuning {
             last_save_s: now_ms / 1000,
             sweep: None,
             quiet_per_min,
+            last_strike_ms: None,
             dip_restore: None,
             // Starts now, so a board that reboots mid-storm does not dip
             // immediately on top of the weather it just came up in.
@@ -201,6 +205,21 @@ impl Tuning {
     /// evidence about the noise floor.
     pub fn observe(&mut self, batch: &Batch) {
         self.window.fold(batch.noise, batch.disturbers, batch.strikes);
+        if batch.strikes > 0 {
+            self.last_strike_ms = Some(crate::now_ms());
+        }
+    }
+
+    /// Minutes since lightning was last heard, or `None` if it never has been
+    /// during this run.
+    ///
+    /// **Since the last strike, not since boot.** A device that has been up for
+    /// a week and heard a storm an hour ago is not deaf; one that has been up
+    /// an hour and heard nothing might be, and only the record of what worked
+    /// can tell the two apart.
+    fn quiet_minutes(&self, now_ms: u32) -> Option<u32> {
+        self.last_strike_ms
+            .map(|at| crate::uptime::since(now_ms, at) / 60_000)
     }
 
     /// How long this window runs. A sweep sets its own, so `calibrate 60` means
@@ -220,6 +239,25 @@ impl Tuning {
     ///
     /// Separate from [`Tuner::due`] because freezing the tuner must not stop
     /// the device *measuring* — only deciding. See [`Tuner::publish`].
+    /// Whether to return to the last combination known to have heard lightning.
+    ///
+    /// All the judgement is in `golden::fall_back_to`, which is host-tested;
+    /// this only gathers the four current settings and the silence.
+    fn rescue(&self, now_ms: u32) -> Option<crate::golden::Combo> {
+        // A frozen tuner is under explicit operator control, and a sweep owns
+        // the point for its duration. Neither should be overruled.
+        if self.frozen || self.sweep.is_some() || self.dip_restore.is_some() {
+            return None;
+        }
+        let current = crate::golden::Combo {
+            nf: self.point.raw() as u8,
+            wdth: crate::settings::watchdog().unwrap_or(0),
+            srej: crate::settings::spike_rejection().unwrap_or(0),
+            outdoor: matches!(crate::settings::location(), Some(crate::as3935::Location::Outdoor)),
+        };
+        crate::golden::fall_back_to(current, crate::settings::golden(), self.quiet_minutes(now_ms)?)
+    }
+
     /// The threshold a window is judged against, for the console and the page.
     pub fn quiet_per_min(&self) -> u32 {
         self.quiet_per_min
@@ -300,6 +338,39 @@ impl Tuning {
         // here, and it must pre-empt the ordinary walk for the same reason a
         // sweep does.
         let dipping = self.dip_restore.is_some();
+
+        // **Deafer than something that provably worked, and hearing nothing.**
+        //
+        // Checked before the ordinary walk, and pre-empting it, because the
+        // walk is what got the device here: every quiet window it saw was read
+        // as "the room is calm" and spent relaxing or holding, when the same
+        // silence was equally consistent with a receiver that had stopped
+        // hearing. `golden` is the only thing that breaks that tie -- it is a
+        // setting this room has been *measured* to produce strikes at -- so
+        // when the tuner sits above it through a long silence, the receiver is
+        // the likelier explanation than the sky.
+        //
+        // Deliberately not a competing controller: it can only move the point
+        // toward something already proved, never past it, and it does nothing
+        // at all until the record is trusted and the patience has run out.
+        let rescue = self.rescue(now_ms);
+        if let Some(combo) = rescue {
+            println!(
+                "gold: nothing heard for {}+ min at nf {} -- returning to nf {}, which has heard {} strike(s) here",
+                crate::golden::PATIENCE_MINUTES,
+                self.point.raw(),
+                combo.nf,
+                crate::settings::golden().map(|g| g.strikes).unwrap_or(0),
+            );
+            self.point = defence::Point::new(combo.nf as u16);
+            if let Err(e) = session::apply(sensor, i2c, self.point) {
+                println!("gold: could not program -- {e}");
+            }
+            self.restart(now_ms);
+            // The window that triggered this described the old point, so it
+            // must not also be spent stepping the new one.
+            return;
+        }
 
         let moved = match () {
             // The search owns this window; it has already moved the point.

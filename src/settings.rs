@@ -35,6 +35,8 @@ const KEY_LOGGED: &[u8] = b"log_recs\0";
 const KEY_MERGE: &[u8] = b"merge_ms\0";
 const KEY_SREJ: &[u8] = b"srej\0";
 const KEY_WDTH: &[u8] = b"wdth\0";
+const KEY_GOLDEN: &[u8] = b"golden\0";
+const KEY_GOLDEN_N: &[u8] = b"golden_n\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -282,5 +284,47 @@ pub fn merge_window_ms() -> Option<u32> {
 pub fn store_merge_window_ms(window_ms: u32) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u32(KEY_MERGE, window_ms)?;
+    nvs.commit()
+}
+
+
+// --- the settings that last heard lightning ---------------------------------
+
+/// The known-good combination, if this device has ever heard a strike.
+///
+/// Two keys rather than one packed word: the combination and its count change
+/// on different schedules — the count moves on every strike at the same
+/// setting, the combination only when the tuner has moved — and a single word
+/// would rewrite both to change either.
+pub fn golden() -> Option<crate::golden::Golden> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    let packed = nvs.get_u32(KEY_GOLDEN)?;
+    let strikes = nvs.get_u32(KEY_GOLDEN_N).unwrap_or(1);
+    Some(crate::golden::Golden {
+        combo: crate::golden::Combo::unpack(packed),
+        strikes,
+    })
+}
+
+/// Persist the known-good combination.
+///
+/// **Written only when it changes**, which the caller checks. A close storm can
+/// produce strikes faster than once a minute and this is flash; the count is
+/// the only field that would otherwise move every time, and a count that is
+/// approximately right after a power cut is worth more than the write.
+pub fn store_golden(record: crate::golden::Golden) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_GOLDEN, record.combo.pack())?;
+    nvs.set_u32(KEY_GOLDEN_N, record.strikes)?;
+    nvs.commit()
+}
+
+/// Forget it, for `golden clear`.
+pub fn clear_golden() -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    // Absent rather than zeroed: a zeroed record is a real combination -- the
+    // most open one -- and would read as "nf 0 has heard lightning here".
+    let _ = nvs.erase(KEY_GOLDEN);
+    let _ = nvs.erase(KEY_GOLDEN_N);
     nvs.commit()
 }

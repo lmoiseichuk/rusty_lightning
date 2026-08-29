@@ -500,6 +500,24 @@ pub fn commit_merged(
     let strike = &merged.strike;
     totals.strikes += 1;
 
+    // **Write down what was set when it worked.**
+    //
+    // This is the only moment the device gets unambiguous positive evidence
+    // about its own settings. Quiet is two things wearing one face -- a working
+    // receiver under a still sky, and a deaf one under a storm -- and the tuner
+    // cannot tell them apart, which is why "minimise events" has deafness as
+    // its optimum. A strike proves this combination could hear lightning from
+    // this room, and that proof is what `golden::fall_back_to` later uses to
+    // decide that silence is the receiver's fault rather than the sky's.
+    //
+    // **Simulated strikes are excluded.** A `strike` console command proves
+    // nothing about the front end -- it never went through it -- and letting it
+    // write the record would let a bench test pin the device to whatever it
+    // happened to be set to.
+    if !merged.simulated {
+        remember_working_point();
+    }
+
     // **A kilometre reading re-arms; the nearest bin counts toward a reset.**
     // `OutOfRange` re-arms too: it is a real answer about distance, so an
     // estimator producing it is demonstrably not stuck.
@@ -999,5 +1017,40 @@ impl Sweep {
             probes += 1;
         }
         probes
+    }
+}
+
+
+/// Fold the current settings into the known-good record.
+///
+/// Reads the registers' *stored* values rather than the chip's, because the
+/// stored ones are what a reboot will restore -- a record of something the
+/// device cannot get back to would be worse than none.
+///
+/// Written to NVS only when the record actually changes. A close storm makes
+/// strikes faster than once a minute, and this is flash.
+fn remember_working_point() {
+    let combo = crate::golden::Combo {
+        nf: CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
+        wdth: crate::settings::watchdog().unwrap_or(0),
+        srej: crate::settings::spike_rejection().unwrap_or(0),
+        outdoor: matches!(crate::settings::location(), Some(Location::Outdoor)),
+    };
+
+    let before = crate::settings::golden();
+    let after = crate::golden::observe(before, combo);
+    if before == Some(after) {
+        return;
+    }
+    match crate::settings::store_golden(after) {
+        Ok(()) if before.map(|b| b.combo) != Some(combo) => println!(
+            "gold: heard lightning at nf {} wd {} sr {} ({}) -- remembered as the setting that works",
+            combo.nf,
+            combo.wdth,
+            combo.srej,
+            if combo.outdoor { "outdoor" } else { "indoor" },
+        ),
+        Ok(()) => println!("gold: {} strike(s) now heard at this setting", after.strikes),
+        Err(e) => println!("gold: could not store the working point -- {e}"),
     }
 }

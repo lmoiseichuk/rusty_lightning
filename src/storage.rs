@@ -97,6 +97,22 @@ impl Namespace {
     /// asks how long the value is, including its NUL; the second call fills a
     /// buffer of that size. Doing it in one call with a guessed size is how a
     /// value gets silently truncated.
+    /// Remove a key entirely.
+    ///
+    /// **Absent is not the same as zero.** A record whose fields are all zero
+    /// is a perfectly ordinary value; for a stored setting, "nobody has ever
+    /// set this" has to be representable separately, and erasing is how.
+    ///
+    /// A key that is not there is not an error: the caller wanted it gone and
+    /// it is gone.
+    pub fn erase(&self, key: &[u8]) -> Result<(), EspError> {
+        let err = unsafe { sys::nvs_erase_key(self.handle, key.as_ptr() as *const c_char) };
+        if err == sys::ESP_ERR_NVS_NOT_FOUND {
+            return Ok(());
+        }
+        check(err)
+    }
+
     pub fn get_string(&self, key: &[u8]) -> Option<String> {
         unsafe {
             let mut len: usize = 0;

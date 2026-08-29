@@ -94,12 +94,48 @@ pub fn configure(
     // its first tweak brought forward, not a new deviation -- unlike `WDTH` and
     // `SREJ`, which stay untouched at their power-on defaults.
     // Resume where this room left off, rather than climbing from zero again.
-    let point = match settings::defence_point() {
-        Some(stored) => {
+    //
+    // **A combination that has heard lightning outranks the one the tuner
+    // happened to stop at.** The stored point is wherever the walk was when
+    // power went; if the device had been driven deaf, that is the deafness it
+    // resumes, and it resumes it in silence. The golden record is the one
+    // setting this room is *measured* to produce strikes at, so when the two
+    // disagree and the record is trusted, the measurement wins.
+    //
+    // Only when the record's gain matches: a noise floor learned indoors
+    // describes a front end seeing roughly four times what the outdoor one
+    // does, and carrying it across is how a good point becomes a deaf one.
+    let here_outdoor = matches!(settings::location(), Some(crate::as3935::Location::Outdoor));
+    let known_good = settings::golden().filter(|record| {
+        record.strikes >= crate::golden::TRUSTED_STRIKES
+            && record.combo.outdoor == here_outdoor
+    });
+
+    let point = match (known_good, settings::defence_point()) {
+        (Some(record), stored) => {
+            let golden = defence::Point::new(record.combo.nf as u16);
+            match stored {
+                // The tuner is already at least as open as the record; it has
+                // learned something better and keeps it.
+                Some(stored) if stored.raw() <= golden.raw() => {
+                    println!("as:   resumed defence point from NVS");
+                    stored
+                }
+                _ => {
+                    println!(
+                        "as:   starting at nf {} -- {} strike(s) have been heard here at it",
+                        golden.raw(),
+                        record.strikes
+                    );
+                    golden
+                }
+            }
+        }
+        (None, Some(stored)) => {
             println!("as:   resumed defence point from NVS");
             stored
         }
-        None => {
+        (None, None) => {
             // Not `OPEN`. A never-calibrated device booting fully open drowns --
             // measured here at 7-9 noise events per batch, continuously -- and
             // the +/-1 walk needs about a thousand windows to climb out of it.
