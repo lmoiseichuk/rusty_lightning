@@ -60,6 +60,7 @@ seconds and point a phone at the screen.
 ```sh
 tools/check.sh          # the host checks, then the release build
 tools/release.sh        # stamped images into release/
+tools/power.sh          # cut and restore USB power, when the port stops appearing
 tools/modules.py        # regenerate the module map
 ```
 

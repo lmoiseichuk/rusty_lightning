@@ -558,6 +558,34 @@ Refusing: flashing the wrong board replaces its firmware
 ```
 
 The lookup and the guard live in `tools/board.sh`, sourced by `flash.sh`,
-`tools/recover.sh` and `release/flash.sh` — `release.sh` copies it in beside the
-images, so a release tree carries the check with it rather than depending on the
-checkout it came from.
+`tools/recover.sh`, `tools/power.sh` and `release/flash.sh` — `release.sh` copies
+it in beside the images, so a release tree carries the check with it rather than
+depending on the checkout it came from.
+
+### Cutting the power
+
+Two optional columns, `hub` and `port`, say where a board sits on a switchable
+USB hub. `tools/power.sh` uses them and nothing else does.
+
+```sh
+tools/power.sh              # cycle the default board
+tools/power.sh lightning    # by name
+tools/power.sh --list       # what is on the switchable hubs
+```
+
+**This is the last lever.** Light sleep powers down the USB PHY, so a board
+running the ordinary build appears in windows — and when it stops appearing at
+all, `espflash` cannot connect, the console cannot attach, and there is no reset
+line. Cutting VBUS is what is left.
+
+It takes a **name**, never a port number. The ports on a bench carry devices
+from more than one project, and a script given a port number has no way to know
+it was the wrong one. It also names whatever else is on the hub before cutting:
+these Genesys hubs report `ganged`, which would mean one port cannot be switched
+alone. **Measured here it is false** — port 1 was cycled with a live device on
+port 2 and the neighbour did not blink — but "measured false once" is not
+"cannot happen", and the neighbour may be somebody else's running experiment.
+
+`uhubctl` needs `-f` on this hub (without it: *"No compatible devices
+detected"*), and is often installed to `/usr/sbin`, which is not on a normal
+PATH. Set `UHUBCTL=` if it lives elsewhere.
