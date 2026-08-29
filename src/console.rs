@@ -54,6 +54,17 @@ pub enum ApRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Help,
+    /// `import <epoch>,<distance>,<energy>,<strokes>` appends one historical
+    /// record to the log.
+    ///
+    /// **Comma-separated and no spaces, deliberately.** The console splits on
+    /// whitespace, and a CSV line carries a space inside its ISO timestamp — so
+    /// a raw row pasted in would be truncated at it. This takes the *facts*
+    /// instead and lets the device build the row through the same `Log::append`
+    /// a live strike uses, which is what makes an imported record
+    /// indistinguishable in form from a recorded one, and impossible to get
+    /// subtly wrong by transcription.
+    Import(Option<(u64, crate::strike::Distance, u32, u32)>),
     /// `golden` shows the settings that last heard lightning; `golden clear`
     /// forgets them.
     Golden(bool),
@@ -316,6 +327,10 @@ pub fn parse(line: &str) -> Command {
                 _ => Command::Unknown,
             },
         },
+        "import" => match arg.map(parse_import) {
+            Some(Some(record)) => Command::Import(Some(record)),
+            _ => Command::Import(None),
+        },
         "golden" | "gold" => match arg {
             Some("clear") | Some("forget") => Command::Golden(true),
             None => Command::Golden(false),
@@ -446,6 +461,7 @@ pub fn print_help() {
     println!("  sensitive on|off      noise floor to 0, auto-tune frozen");
     println!("  ap [off|<ssid> <pass>] raise the access point and web UI; `off` drops it");
     println!("  golden [clear]        the settings that last heard lightning");
+    println!("  import <e>,<d>,<en>,<n> append one historical record: epoch, distance, energy, strokes");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
     println!();
@@ -481,4 +497,35 @@ pub fn verify_web_commands() {
     if bad > 0 {
         println!("web:  {bad} web command(s) would do nothing -- see `query::COMMANDS`");
     }
+}
+
+
+/// `<epoch>,<distance>,<energy>,<strokes>` for `import`.
+///
+/// `distance` is `overhead`, `far`, or a number of kilometres — the same three
+/// spellings the log itself uses, so a value copied out of a dumped CSV goes
+/// back in unchanged.
+fn parse_import(raw: &str) -> Option<(u64, crate::strike::Distance, u32, u32)> {
+    let mut parts = raw.split(',');
+    let epoch: u64 = parts.next()?.trim().parse().ok()?;
+    // A record with no timestamp cannot be placed on any axis, and the log
+    // already writes 0 for "the clock was unset". Importing one would add a row
+    // nothing can use.
+    if epoch == 0 {
+        return None;
+    }
+    let distance = match parts.next()?.trim() {
+        "overhead" => crate::strike::Distance::Overhead,
+        "far" => crate::strike::Distance::OutOfRange,
+        km => crate::strike::Distance::Km(km.parse().ok()?),
+    };
+    let energy: u32 = parts.next()?.trim().parse().ok()?;
+    let strokes: u32 = match parts.next() {
+        Some(value) => value.trim().parse().ok()?,
+        None => 1,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((epoch, distance, energy, strokes))
 }

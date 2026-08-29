@@ -122,8 +122,8 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 452 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 484 |
+| `commands` | What the console commands actually do (§5). | -- | 482 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 531 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 407 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
@@ -161,7 +161,7 @@ program' is not information.
 | `boot` | `as3935` `defence` `golden` `session` `settings` |
 | `clock` | `civil` `storage` |
 | `commands` | `as3935` `battery` `clock` `console` `credentials` `golden` `history` `log` `power` `session` `settings` `strike` `system` `ui` |
-| `console` | `defence` `query` `session` |
+| `console` | `defence` `query` `session` `strike` |
 | `credentials` | `storage` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
 | `history` | `strike` |

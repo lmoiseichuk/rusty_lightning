@@ -335,6 +335,36 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Srej(Some(level)) => effects.set_spike_rejection = Some(level),
         Command::Wdth(None) => effects.show_watchdog = true,
         Command::Wdth(Some(level)) => effects.set_watchdog = Some(level),
+        Command::Import(None) => {
+            println!("import: usage -- import <epoch>,<distance>,<energy>,<strokes>");
+            println!("import:   distance is `overhead`, `far`, or kilometres");
+            println!("import:   e.g. import 1786651612,5,67997,1");
+        }
+        Command::Import(Some((epoch, distance, energy_raw, strokes))) => {
+            match ctx.strike_log.as_deref_mut() {
+                None => println!("import: no log on this device"),
+                Some(log) => {
+                    let strike = Strike { distance, energy_raw };
+                    // **`srej` is written as 1, and that is a judgement.** The
+                    // rows this exists to restore were all recorded at 0 -- the
+                    // configuration in which the chip validates man-made
+                    // impulses -- and 99.1% of that history was `overhead`
+                    // noise. What is imported is the remainder that carried a
+                    // real distance, which is the part there is reason to
+                    // trust; marking it 1 says so in the column that means
+                    // "trust this row", rather than restating a register value
+                    // that was the same for every row and told you nothing.
+                    log.append(epoch, 0, 0, 1, &strike, false, strokes.max(1));
+                    println!(
+                        "import: {} -- {} strike(s), energy {}",
+                        clock::format_local(epoch),
+                        strokes.max(1),
+                        energy_raw,
+                    );
+                    effects.clock_saved = false;
+                }
+            }
+        }
         Command::Golden(clear) => {
             if clear {
                 match crate::settings::clear_golden() {

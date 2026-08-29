@@ -160,6 +160,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `wdth [0-15]` | watchdog threshold, aliased `watchdog`. Raising it discards the slow-rising distant arrivals this device exists to report |
 | `ap` | raise the access point and its web UI for 60 s. `ap off` drops it; `ap <ssid> <password>` stores credentials and raises with them |
 | `golden [clear]` | the settings that last heard lightning, and how many strikes at them |
+| `import <epoch>,<distance>,<energy>,<strokes>` | append one historical record; commas and no spaces, because the console splits on whitespace |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the `NF_LEV` field it holds |
 | `defence <raw>` | set the tuning point by hand, 0–7. `0` is fully receptive |
@@ -498,3 +499,34 @@ describes a front end seeing roughly four times what the outdoor one sees, and
 carrying it across is exactly how a good point becomes a deaf one.
 
 `golden clear` forgets it; the next strike starts a new record.
+
+
+## Putting history back
+
+`clear` is irreversible on the device, and `dump` beforehand is what makes it
+safe — but a dumped CSV cannot be pasted back, because the console splits on
+whitespace and every row carries a space inside its ISO timestamp.
+
+`import` takes the **facts** instead:
+
+```
+import 1786651612,5,67997,1        epoch, distance, energy, strokes
+import 1786651612,overhead,67997,1 the same three spellings the log uses
+```
+
+The device then builds the row through the same `Log::append` a live strike
+uses, so an imported record is indistinguishable in form from a recorded one and
+cannot be got subtly wrong by transcription. The ISO timestamp is *derived* from
+the epoch rather than copied, so the two can never disagree.
+
+**The charts do not update until the next boot.** They are rebuilt from the log
+at startup, which is the one path that reads it — importing writes the file, and
+the replay picks it up.
+
+**`srej` is written as 1 for an imported row, and that is a judgement rather
+than a reading.** The history this exists to restore was recorded entirely at
+`srej 0`, where 99.1% of it was `overhead` noise from man-made impulses. What is
+worth importing is the remainder that carried a real distance; marking those 1
+says "trust this row" in the column that means exactly that, instead of
+restating a register value that was identical for every row and distinguished
+nothing.
