@@ -216,10 +216,35 @@ impl Log {
             if let Ok(file) = File::open(PATH) {
                 if let Some(Ok(first)) = BufReader::new(file).lines().next() {
                     if first != HEADER {
-                        println!("log:  ⚠ header is from an older format:");
-                        println!("log:    on disk: {first}");
-                        println!("log:    current: {HEADER}");
-                        println!("log:    rows still parse; use `clear` to start fresh");
+                        // **"Rows still parse" was wrong, and wrong in the
+                        // direction that hides a storm.** The reader takes its
+                        // column positions from the header on disk, so in an
+                        // old-header file every row written in the new format
+                        // is read at the old offsets -- `distance_km` lands on
+                        // `kind`, "lightning" fails a `u8` parse, and the row
+                        // is skipped. Old rows replay; new ones do not, and the
+                        // counts disagree silently. Observed at 2092 records on
+                        // disk against 2090 replayed.
+                        //
+                        // So the warning has to name the consequence and the
+                        // number, because "an older format" reads as cosmetic
+                        // and this is data that will not come back after a
+                        // reboot.
+                        let on_disk = first.split(',').count();
+                        let current = HEADER.split(',').count();
+                        println!("log:  ⚠⚠ this file's header is from an older format");
+                        println!("log:    on disk: {on_disk} columns -- {first}");
+                        println!("log:    current: {current} columns -- {HEADER}");
+                        println!(
+                            "log:    ROWS WRITTEN FROM NOW ON WILL NOT BE REPLAYED after a reboot:"
+                        );
+                        println!(
+                            "log:    the reader takes its columns from the header, so a {current}-column"
+                        );
+                        println!(
+                            "log:    row read at {on_disk}-column offsets fails and is skipped."
+                        );
+                        println!("log:    `dump` to keep what is here, then `clear` to start fresh.");
                     }
                 }
             }

@@ -375,3 +375,30 @@ host to the device's access point, and `CLAUDE.md` forbids touching the host's
 WiFi configuration. What is confirmed is that the server task starts, the
 credentials are generated and shown, the join screen renders, and the window
 closes on time. The query parser has 29 host checks. The rendered page has none.
+
+## L-N3 — an old header silently drops every new row
+
+**[RAISED AND PARTLY FIXED 2026-08-29.]** Found while checking the device before
+a forecast storm, from a count that did not add up: `2092 records, ... replayed
+2090`.
+
+`Columns::from_header` takes its positions from the header **on disk**. A file
+created before `millis,kind,nf` were added has `distance_km` at index 2; in a
+row written now, index 2 is `kind`. `"lightning"` fails the `u8` parse and the
+row becomes `Row::Skip`. So a device whose log predates the format change
+replays its *old* strikes and silently drops every strike recorded since —
+they are in the file, and invisible to the charts, the recent-strike table and
+anything else fed by the replay.
+
+The boot warning said "rows still parse; use `clear` to start fresh", which is
+the opposite of true and reads as cosmetic. It now names the consequence, both
+column counts, and the `dump`-then-`clear` procedure.
+
+**Not changed: the behaviour.** `ensure_header` deliberately refuses to rewrite
+a file to correct a label, because that would discard records; `clear` is the
+documented way out and a `dump` beforehand keeps everything. Making the reader
+fall back to counting columns per row would be a second parsing convention
+living alongside the header, which is the drift this design exists to prevent.
+
+The live device is affected: 2092 records against a 2091-row 8-column body and
+2 new-format rows. Backed up to `~/lightning-backups/` before any clear.
