@@ -11,18 +11,18 @@
 //! was circular and nothing could have shown it.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/merger merger.rs && /tmp/merger
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/merger merger.rs && /tmp/merger
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/strike.rs"]
+#[path = "../src/strike.rs"]
 mod strike;
 // `merger` reaches for `crate::uptime` for its wrap-correct interval check, so
 // the real one is compiled in here too rather than stubbed.
-#[path = "../../src/uptime.rs"]
+#[path = "../src/uptime.rs"]
 mod uptime;
-#[path = "../../src/merger.rs"]
+#[path = "../src/merger.rs"]
 mod merger;
 
 // `merger` reaches for `crate::strike`; at the crate root of this test binary

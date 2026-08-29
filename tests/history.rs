@@ -13,14 +13,14 @@
 //! names coexist.)
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/history history.rs && /tmp/history
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/history history.rs && /tmp/history
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/strike.rs"]
+#[path = "../src/strike.rs"]
 mod strike;
-#[path = "../../src/history.rs"]
+#[path = "../src/history.rs"]
 mod history;
 use history::*;
 use strike::*;

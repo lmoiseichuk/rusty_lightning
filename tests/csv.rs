@@ -9,12 +9,12 @@
 //! would have quietly stopped filling. Nothing would have errored.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/csv csv.rs && /tmp/csv
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/csv csv.rs && /tmp/csv
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/csv.rs"]
+#[path = "../src/csv.rs"]
 mod csv;
 use csv::*;
 

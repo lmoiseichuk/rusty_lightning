@@ -77,7 +77,7 @@ for row in "${VARIANTS[@]}"; do
     # would then be unreproducible, and `flash.sh` would call it fresh, because
     # its staleness check compares the same set.
     #
-    # Not hypothetical: `src/csv.rs` and `tests/host/csv.rs` were both untracked
+    # Not hypothetical: `src/csv.rs` and `tests/csv.rs` were both untracked
     # when this was found, and both are compiled into the binary.
     #
     # `--porcelain` reports tracked and untracked alike, so the guard now sees

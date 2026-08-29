@@ -3,7 +3,7 @@
 //! **Free of ESP-IDF on purpose**, like `defence` and for the same reason: the
 //! decision this holds is the one worth testing, and `tuning` cannot be compiled
 //! on a workstation because it drives an I²C sensor. Everything here is
-//! arithmetic over four counters, so `tests/host/verdict.rs` includes this file
+//! arithmetic over four counters, so `tests/verdict.rs` includes this file
 //! by path and checks the real thing rather than a copy.
 //!
 //! ## The distinction this exists to hold

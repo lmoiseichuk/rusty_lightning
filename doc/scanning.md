@@ -55,7 +55,7 @@ built on:
 That is not enforced by any code path. It is a consequence of the point being
 three bits wide and `defence::FIELDS` naming one register — and a table with an
 extra row added back would compile, run, and quietly start trading distant
-strikes for a quieter room again. `tests/host/defence.rs` exists to make that
+strikes for a quieter room again. `tests/defence.rs` exists to make that
 change fail loudly.
 
 **Why the rule has to be structural.** A lost strike leaves no evidence. There

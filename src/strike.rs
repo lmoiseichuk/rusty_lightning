@@ -5,7 +5,7 @@
 //! `history` and the score formula operate on strikes and nothing else — no
 //! I2C, no registers, no ESP-IDF. Keeping them in `as3935` meant that anything
 //! importing a `Distance` also imported the whole HAL, which is what forced
-//! `tests/host` to hand-copy the logic it wanted to test rather than compiling
+//! `tests/` to hand-copy the logic it wanted to test rather than compiling
 //! the real thing.
 //!
 //! Splitting them is what lets the host harnesses `#[path]`-include the actual

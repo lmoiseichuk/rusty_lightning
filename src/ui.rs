@@ -972,7 +972,7 @@ impl ChartPeriod {
     /// **Taken from `history`, not duplicated from it.**
     ///
     /// These were written out by hand, with a comment claiming they were
-    /// "asserted equal in `tests/host/history.rs`". They were not: that test
+    /// "asserted equal in `tests/history.rs`". They were not: that test
     /// only checked `FINE_MINUTES == 5` and never mentioned this function. And
     /// the day value had drifted to 15 against a ring of 5-minute buckets, so
     /// the axis divided by three times the real width: a gridline every 24

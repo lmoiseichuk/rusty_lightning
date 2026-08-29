@@ -9,12 +9,12 @@
 //! nothing, for another 49.7 days.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/uptime uptime.rs && /tmp/uptime
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/uptime uptime.rs && /tmp/uptime
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/uptime.rs"]
+#[path = "../src/uptime.rs"]
 mod uptime;
 use uptime::*;
 

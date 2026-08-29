@@ -11,14 +11,14 @@
 //! flattening its battery in about two and a half days instead of thirty.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/policy policy.rs && /tmp/policy
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/policy policy.rs && /tmp/policy
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/uptime.rs"]
+#[path = "../src/uptime.rs"]
 mod uptime;
-#[path = "../../src/policy.rs"]
+#[path = "../src/policy.rs"]
 mod policy;
 use policy::*;
 

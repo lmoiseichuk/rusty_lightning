@@ -179,7 +179,7 @@ pub fn score_milli(strike: &Strike) -> Option<u32> {
 /// different thing from "nothing recently" and should leave the default alone.
 /// Returns the console's own scope numbering — `0` day, `1` week, `2` month —
 /// rather than `ui::ChartPeriod`. **This module must not reach into `ui`**: it
-/// is compiled by `tests/host/history.rs` on a workstation, where no such module
+/// is compiled by `tests/history.rs` on a workstation, where no such module
 /// exists, and a `use` added here breaks that silently until somebody runs the
 /// checks. It was added here once and the host build caught it immediately,
 /// which is the arrangement working.

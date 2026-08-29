@@ -50,7 +50,7 @@
 //!   sitting in permanent `NoiseTooHigh`, which is precisely and only `NF_LEV`.
 //!
 //! **[`FIELDS`] is the layout**, one row of mask-and-shift per register.
-//! `tests/host/defence.rs` checks that whatever is in the table tiles
+//! `tests/defence.rs` checks that whatever is in the table tiles
 //! [`BITS`] with no gap and no overlap — which is still worth checking with one
 //! row, because it is what would catch a second field being added back without
 //! [`BITS`] following it.
@@ -81,7 +81,7 @@
 //! deafness on silence. **That class of bug is now unrepresentable**: the fields
 //! *are* the register values, so there is no second convention to disagree with.
 //!
-//! This module stays free of ESP-IDF imports so `tests/host/defence.rs` can
+//! This module stays free of ESP-IDF imports so `tests/defence.rs` can
 //! compile it directly; the register writes live in `session::apply`.
 
 /// One register's slice of the packed number.
@@ -332,7 +332,7 @@ impl Point {
     /// Assemble from the three field values, each clamped to its width.
     ///
     /// **Unused by the firmware**, which only ever walks raw integers — kept
-    /// because it is how `tests/host/defence.rs` states what a layout should
+    /// because it is how `tests/defence.rs` states what a layout should
     /// produce, and a packing with no way to write it a field at a time is a
     /// packing nobody can check.
     #[allow(dead_code)]

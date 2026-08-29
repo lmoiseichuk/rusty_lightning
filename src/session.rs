@@ -679,7 +679,7 @@ pub fn toggle_location(sensor: &As3935, i2c: &mut I2cDriver<'_>, location: &mut 
 /// Program the chip with a defence point.
 ///
 /// Lives here rather than in `defence` so that module stays free of ESP-IDF —
-/// which is what lets `tests/host` compile the real packing instead of a copy of
+/// which is what lets `tests/` compile the real packing instead of a copy of
 /// it. The register writes are the one part that cannot be host-tested anyway.
 ///
 /// **All four fields, every time.** The tuner and the search both move the

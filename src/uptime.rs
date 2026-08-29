@@ -29,7 +29,7 @@
 //! against 0.0127 W, thirty days of battery spent in two and a half. It is the
 //! same arithmetic and the opposite symptom, which is the argument for fixing
 //! it here once rather than judging each call site on what its failure looks
-//! like. `tests/host/policy.rs` covers it.
+//! like. `tests/policy.rs` covers it.
 //!
 //! **Every interval site now uses [`since`] or [`due`].** The remaining
 //! `saturating_sub` calls in the firmware are magnitudes — millivolts, bytes,

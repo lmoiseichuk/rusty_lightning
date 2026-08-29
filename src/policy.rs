@@ -61,7 +61,7 @@ pub fn decide(uptime_s: u32, last_console_s: Option<u32>) -> Policy {
     // device that never sleeps looks perfectly healthy from the console.
     //
     // This site was missed when every other interval in the firmware moved to
-    // wrapping arithmetic. `tests/host/policy.rs` fails without it.
+    // wrapping arithmetic. `tests/policy.rs` fails without it.
     match last_console_s {
         Some(seen) if crate::uptime::since(uptime_s, seen) < CONSOLE_AWAKE_S => Policy::Awake,
         _ => Policy::Frugal,

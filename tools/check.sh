@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run the host checks in tests/host, then the release build.
+# Run the host checks in tests/, then the release build.
 #
 #     ./tools/check.sh
 #
@@ -13,7 +13,7 @@
 #
 # That arrangement only works if somebody runs it. Nobody did:
 # `SPIKE_REJECTION_DEFAULT` changed from 1 to 0 in `src/defence.rs` on
-# 2026-08-19 and `tests/host/defence.rs` went on asserting 1 for four days,
+# 2026-08-19 and `tests/defence.rs` went on asserting 1 for four days,
 # through two commits and a flash. The checks were not wrong — they were never
 # run, which is the same thing with better manners.
 #
@@ -38,7 +38,7 @@ failed=0
 files=0
 
 echo "== host checks (edition $EDITION) =="
-for source in "$HERE"/tests/host/*.rs; do
+for source in "$HERE"/tests/*.rs; do
     name="$(basename "$source" .rs)"
     # A fresh binary every time, in a temp directory. Building into /tmp under a
     # fixed name meant a compile failure left the *previous* binary in place, so
@@ -68,6 +68,16 @@ echo "== ${total_passed} checks across ${files} files, ${total_failed} failed ==
 if (( failed )); then
     echo
     echo "host checks failed -- not building"
+    exit 1
+fi
+
+# The module map is derived from the source, so it can go stale the moment a
+# module is added. Checked rather than regenerated: a build step that quietly
+# rewrites a tracked file makes `git status` lie about what the run did.
+echo
+echo "== module map =="
+if ! python3 "$HERE/tools/modules.py" --check; then
+    echo "run tools/modules.py and commit doc/modules.md" >&2
     exit 1
 fi
 

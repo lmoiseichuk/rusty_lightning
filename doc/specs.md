@@ -1173,7 +1173,7 @@ suggested 0.44/0.49. Two API drifts caught immediately: `esp_idf_hal::prelude` n
 
 **Testing:** `cargo test` cannot run in this crate — it only builds for `riscv32imc-esp-espidf` and
 every dependency pulls in ESP-IDF. Pure logic is exercised on the host instead; see
-`tests/host/README.md`, which lists what each file covers. The count is deliberately not written
+`tests/README.md`, which lists what each file covers. The count is deliberately not written
 here: `tools/check.sh` prints it, and a number kept by hand in a second file is a number that goes
 stale silently — this one said 83 while naming two of the eight files.
 

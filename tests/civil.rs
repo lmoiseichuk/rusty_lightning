@@ -13,12 +13,12 @@
 //! of the code under test.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civil
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civil
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/civil.rs"]
+#[path = "../src/civil.rs"]
 mod civil;
 use civil::*;
 

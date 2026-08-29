@@ -11,12 +11,12 @@
 //! console with something the console did not expect.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/query query.rs && /tmp/query
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/query query.rs && /tmp/query
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/query.rs"]
+#[path = "../src/query.rs"]
 mod query;
 use query::*;
 

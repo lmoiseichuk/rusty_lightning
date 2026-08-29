@@ -13,12 +13,12 @@
 //! against events that knob cannot touch.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/verdict verdict.rs && /tmp/verdict
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/verdict verdict.rs && /tmp/verdict
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/verdict.rs"]
+#[path = "../src/verdict.rs"]
 mod verdict;
 use verdict::*;
 

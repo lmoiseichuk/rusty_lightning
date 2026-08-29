@@ -1,8 +1,17 @@
 [package]
 name = "lightning"
-version = "0.14.2"
+version = "0.14.3"
 authors = ["LM"]
 edition = "2024"
+# **Cargo must not discover `tests/`.**
+#
+# These are host programs: each `#[path]`-includes a module out of `src/` and
+# has its own `main`, and they are compiled by bare `rustc` for this machine --
+# see `tests/README.md`. Cargo auto-discovers `tests/*.rs` as integration test
+# targets and would try to build them for `riscv32imc-esp-espidf`, which is the
+# one thing they cannot be. They lived in `tests/host/` to hide from that;
+# saying so outright is clearer than a directory whose purpose is invisible.
+autotests = false
 resolver = "2"
 rust-version = "1.85"
 

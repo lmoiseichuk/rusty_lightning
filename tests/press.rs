@@ -11,12 +11,12 @@
 //! quarter of the indoor gain, having heard nothing through a storm.
 //!
 //! ```sh
-//! cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/press press.rs && /tmp/press
+//! cd tests && rustc --edition 2024 -A dead_code -o /tmp/press press.rs && /tmp/press
 //! ```
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[path = "../../src/press.rs"]
+#[path = "../src/press.rs"]
 mod press;
 use press::*;
 

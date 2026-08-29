@@ -18,7 +18,7 @@ and so can go stale** — `check.sh` is the authority, and it reads the edition
 from `Cargo.toml` rather than naming one:
 
 ```sh
-cd tests/host && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civil
+cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civil
 ```
 
 | File | Covers |
