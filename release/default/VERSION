@@ -1,7 +1,7 @@
 build   : default
-version : 0.14.2
-commit  : a029837830d7
-built   : 2026-08-29T03:08:59Z
+version : 0.15.1
+commit  : 68de8d618abd
+built   : 2026-08-29T13:22:34Z
 flags   : (default)
 image   : lightning
 target  : riscv32imc-esp-espidf
