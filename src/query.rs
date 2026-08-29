@@ -47,8 +47,8 @@ pub const COMMANDS: &[(&str, Arity)] = &[
     ("tz", Arity::One),
     ("events", Arity::One),
     ("strike", Arity::One),
-    ("scope", Arity::One),
-    ("sensitive", Arity::OnOff),
+    ("sensitive", Arity::Choice(&["on", "off"])),
+    ("scope", Arity::Choice(&["day", "week", "month"])),
 ];
 
 /// How many arguments a command takes, and of what shape.
@@ -58,8 +58,14 @@ pub enum Arity {
     None,
     /// Takes exactly one, which `console` range-checks.
     One,
-    /// Takes literally `on` or `off`.
-    OnOff,
+    /// Takes one of a fixed set of words.
+    ///
+    /// **Separate from [`Arity::One`] because a number is not a word.** The
+    /// boot check fed `scope 1` to the parser and the parser rejected it:
+    /// `scope` takes `day`, `week` or `month`, and a sample built as "the name
+    /// plus 1" is not a command. That was the sixth dead entry in this list,
+    /// found by the check written for the first five.
+    Choice(&'static [&'static str]),
 }
 
 /// Turn `/do?cmd=...` into a console line.
@@ -99,10 +105,13 @@ pub fn command_from_query(query: &str) -> Option<String> {
             }
             Some(format!("{name} {value}"))
         }
-        Arity::OnOff => match value {
-            "on" | "off" => Some(format!("{name} {value}")),
-            _ => None,
-        },
+        Arity::Choice(allowed) => {
+            if allowed.contains(&value) {
+                Some(format!("{name} {value}"))
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -115,7 +124,8 @@ pub fn samples() -> impl Iterator<Item = String> {
     COMMANDS.iter().map(|(name, arity)| match arity {
         Arity::None => (*name).to_string(),
         Arity::One => format!("{name} 1"),
-        Arity::OnOff => format!("{name} off"),
+        // The first choice, which is a real value by construction.
+        Arity::Choice(allowed) => format!("{name} {}", allowed[0]),
     })
 }
 

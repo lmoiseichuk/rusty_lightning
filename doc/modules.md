@@ -128,7 +128,7 @@ this table is generated from it.
 | `effects` | Applying the console's hardware effects. | -- | 399 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 192 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 202 |
 | `webui` | The page the access point serves. | -- | 245 |
 
 ### The board underneath

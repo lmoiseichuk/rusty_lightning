@@ -107,6 +107,27 @@ fn main() {
         command_from_query("cmd=defence&v=5%0Areboot").is_none(),
     );
 
+    // The sixth dead entry, and the one the boot check found: `scope` takes a
+    // word, not a number, so a sample built as "name plus 1" is not a command.
+    check(
+        "scope takes a period name",
+        command_from_query("cmd=scope&v=week").as_deref() == Some("scope week"),
+    );
+    check("scope refuses a number", command_from_query("cmd=scope&v=1").is_none());
+    check(
+        "every sample uses a real choice where there is one",
+        samples().all(|line| {
+            let mut parts = line.splitn(2, ' ');
+            let name = parts.next().unwrap_or("");
+            match COMMANDS.iter().find(|(c, _)| c.split(' ').next() == Some(name)) {
+                Some((_, Arity::Choice(allowed))) => {
+                    allowed.iter().any(|a| line.ends_with(a))
+                }
+                _ => true,
+            }
+        }),
+    );
+
     println!("\n  percent decoding");
     check("plain text is unchanged", percent_decode("hello") == "hello");
     check("a plus is a space", percent_decode("a+b") == "a b");
