@@ -93,7 +93,7 @@ this table is generated from it.
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 543 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 474 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1071 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1076 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/history.rs`, `tests/merger.rs` | 93 |
 | `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1035 |
 | `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 70 |
@@ -104,9 +104,9 @@ this table is generated from it.
 |---|---|---|---|
 | `civil` | Unix timestamp to calendar date, with no hardware and no library. | pure, `tests/civil.rs` | 88 |
 | `clock` | Wall-clock time without a network (§5). | -- | 194 |
-| `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 135 |
+| `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
-| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 533 |
+| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 534 |
 | `settings` | What survives a power cut, and nothing else. | -- | 330 |
 | `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 

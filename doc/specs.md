@@ -675,12 +675,12 @@ Refine later from the logged database once enough storms are recorded.
 > #### ⚠ AS BUILT: `/lfs/strikes.csv`, and **LittleFS specifically**
 >
 > ```text
-> timestamp,millis,kind,nf,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated,strokes
-> 1785727634,41337250,strike,2,2026-08-02 23:27:14,6,50331,3000,500,0,1
-> 1785727702,41405118,noise,2,2026-08-02 23:28:22,,,,,0,0
+> timestamp,millis,kind,nf,srej,iso_local,distance_km,energy_raw,intensity_milli,score_milli,simulated,strokes
+> 1785727634,41337250,strike,2,1,2026-08-02 23:27:14,6,50331,3000,500,0,1
+> 1785727702,41405118,noise,2,1,2026-08-02 23:28:22,,,,,0,0
 > ```
 >
-> Five columns were added after the fact, each to remove an ambiguity the file could not otherwise
+> Six columns were added after the fact, each to remove an ambiguity the file could not otherwise
 > answer about itself. **`simulated`** distinguishes a `strike`-injected record from a detected one,
 > because four records of unknown provenance once made "has this device ever seen real lightning?"
 > unanswerable. **`strokes`** (0.7.0) says how many return strokes §4.3's merge window folded into
@@ -693,7 +693,7 @@ Refine later from the logged database once enough storms are recorded.
 > and the tuner's decisions can be replayed against what it actually heard. **`millis`** is the
 > uptime in milliseconds, which unlike `timestamp` is monotonic and present before the clock is set:
 > it is what orders rows within a boot that has no wall clock, and what measures the interval between
-> two events without trusting the epoch.
+> two events without trusting the epoch. **`srej`** is the provenance column, added 0.18.0: at `SREJ 0` the chip validates man-made impulses as lightning, so a record written there is not wrong but *unproven*, and without this nothing downstream can tell the two apart afterwards. 99.1% of this device's first 2090 records were `overhead`, which is what that setting looks like from outside.
 >
 > A noise or disturber row leaves `distance_km`, `energy_raw`, `intensity_milli` and `score_milli`
 > **empty**, not zero: the chip reports no such quantity for those interrupts, and an empty cell says

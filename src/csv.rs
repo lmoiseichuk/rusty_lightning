@@ -33,6 +33,14 @@ pub struct Columns {
     pub kind: Option<usize>,
     /// `None` in a file written before merged flashes recorded their count.
     pub strokes: Option<usize>,
+    /// `None` in a file written before spike rejection was recorded.
+    ///
+    /// **The provenance column.** `SREJ 0` is the setting at which the chip
+    /// validates man-made impulses as lightning -- 503 of them in three and a
+    /// half hours, every one graded `overhead`. A record written at 0 is not
+    /// wrong, it is *unproven*, and without this column nothing downstream can
+    /// tell the two apart afterwards.
+    pub srej: Option<usize>,
     pub width: usize,
 }
 
@@ -51,6 +59,7 @@ impl Columns {
             energy: at("energy_raw")?,
             kind: at("kind"),
             strokes: at("strokes"),
+            srej: at("srej"),
             width: names.len(),
         })
     }

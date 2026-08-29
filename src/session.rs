@@ -437,6 +437,7 @@ fn log_event(strike_log: Option<&mut log::Log>, kind: log::Kind) {
         clock::now().unwrap_or(0),
         crate::now_ms(),
         CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
+        crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
         kind,
     );
 }
@@ -557,6 +558,7 @@ pub fn commit_merged(
             merged.epoch.unwrap_or(0),
             crate::now_ms(),
             CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
+            crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
             strike,
             merged.simulated,
             merged.strokes,
@@ -652,7 +654,7 @@ pub fn describe(point: defence::Point) -> String {
     // line that showed only the tunable third of the configuration would be the
     // "two different things to read at 3am" this function exists to prevent.
     let watchdog = settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
-    let spike = settings::spike_rejection().unwrap_or(defence::SPIKE_REJECTION_DEFAULT);
+    let spike = defence::spike_rejection_for_autorun(settings::spike_rejection());
     out.push_str(&format!(
         "[wd {watchdog} sr {spike} fixed] (wait {} strike(s))",
         point.min_strikes_count()
@@ -1048,7 +1050,10 @@ fn remember_working_point() {
     let combo = crate::golden::Combo {
         nf: CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
         wdth: crate::settings::watchdog().unwrap_or(0),
-        srej: crate::settings::spike_rejection().unwrap_or(0),
+        // **Not `unwrap_or(0)`.** An unset value means the device is using its
+        // own default, which is 1 and never 0 -- recording 0 here would write a
+        // combination the device has never actually run, and then boot from it.
+        srej: crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
         outdoor: matches!(crate::settings::location(), Some(Location::Outdoor)),
     };
 
