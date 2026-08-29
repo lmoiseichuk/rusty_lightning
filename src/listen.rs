@@ -146,6 +146,25 @@ pub fn listen(
         let mut replayed = 0u32;
         log::for_each(|epoch, strike| {
             history.record((epoch / 60) as u32, &strike);
+            // **And the table on the right, which the rings do not fill.**
+            //
+            // `record` folds a strike into the day/week/month buckets, which is
+            // what the chart draws. The per-strike table beside it reads
+            // `history.recent`, a separate ring that only `commit_merged` was
+            // pushing to -- so a replayed device came up with a chart and an
+            // empty table, which is exactly half a restored history.
+            //
+            // `strokes: 1` because the file does not say. A replayed row is one
+            // record; whether the merge window had folded return strokes into it
+            // is not recoverable from the columns, and inventing a count would
+            // put a number on the glass that nothing measured.
+            history.recent.push(history::Recent {
+                epoch: Some(epoch),
+                distance: strike.distance,
+                energy_raw: strike.energy_raw,
+                score_milli: history::score_milli(&strike).unwrap_or(0),
+                strokes: 1,
+            });
             replayed += 1;
         });
         if replayed > 0 {
