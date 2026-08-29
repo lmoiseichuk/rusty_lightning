@@ -38,6 +38,7 @@ fn main() {
     check("one tick under the floor is too short", classify(ACCEPT_MS - 1) == Gesture::TooShort);
     check("the floor itself is a gain press", classify(ACCEPT_MS) == Gesture::Gain);
     check("2 s is a gain press", classify(2_000) == Gesture::Gain);
+    check("1.5 s no longer is -- the floor moved to 2 s", classify(1_500) == Gesture::TooShort);
     check("one tick under the long band is still gain", classify(LONG_MS - 1) == Gesture::Gain);
     check("ten seconds is the portal", classify(LONG_MS) == Gesture::Portal);
     check("one tick under the ceiling is still the portal", classify(STUCK_MS - 1) == Gesture::Portal);

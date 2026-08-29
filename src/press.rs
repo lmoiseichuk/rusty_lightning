@@ -38,9 +38,12 @@
 
 /// Below this, it is a flashing tool pulsing DTR, not a person.
 ///
-/// Kept from the original `BUTTON_HOLD_MS`, whose reasoning this module
-/// inherits.
-pub const ACCEPT_MS: u32 = 1_500;
+/// The original `BUTTON_HOLD_MS` was 1.5 s, chosen to clear a flashing tool's
+/// few-hundred-millisecond pulse. Two seconds keeps that clearance and buys a
+/// rounder number for a person to aim at: with the long gesture at ten, "two
+/// seconds for gain, ten for the network" is something somebody can remember at
+/// the top of a ladder without reading anything.
+pub const ACCEPT_MS: u32 = 2_000;
 
 /// At or past this, the gesture is the long one.
 pub const LONG_MS: u32 = 10_000;
