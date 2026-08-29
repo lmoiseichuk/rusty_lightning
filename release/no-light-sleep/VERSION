@@ -1,7 +1,7 @@
 build   : no-light-sleep
-version : 0.19.0
-commit  : 9a03f51fda8a
-built   : 2026-08-29T14:07:30Z
+version : 0.19.1
+commit  : cad538f39bdf
+built   : 2026-08-29T15:07:18Z
 flags   : --features no-light-sleep
 image   : lightning
 target  : riscv32imc-esp-espidf
