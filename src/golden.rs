@@ -161,3 +161,92 @@ pub fn observe(golden: Option<Golden>, combo: Combo) -> Golden {
         _ => Golden { combo, strikes: 1 },
     }
 }
+
+
+// --- the other end of the ladder --------------------------------------------
+
+/// The lowest rung the tuner may relax to, learned from being swamped.
+///
+/// **Symmetric to [`Golden`], and for the same reason.** `Golden` records a rung
+/// measured to *hear*; this records one measured to *drown*. Both exist because
+/// the walk otherwise treats every window as fresh evidence and forgets what it
+/// has already established about this room.
+///
+/// The failure it prevents was observed directly. A sweep probed `nf 0`,
+/// measured **595 events/min**, correctly graded it noisy and settled at `nf 1`
+/// — and then the ordinary walk relaxed into `nf 0` on the next quiet window,
+/// drowned, and the proportional climb (`noise_per_min / quiet_per_min`) took
+/// 595/60 ≈ 9 notches at once, saturating at `nf 7`: fully deaf. From there it
+/// walks back one notch per window, so a single excursion into the swamp costs
+/// seven windows of maximum deafness, and it repeats.
+///
+/// One rung of memory ends that cycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Floor {
+    /// The highest rung measured to be swamped, if any.
+    ///
+    /// The ladder is monotonic — a lower `nf` looks at more — so "swamped at
+    /// this rung" implies swamped at every rung below it, and only the highest
+    /// needs keeping.
+    pub swamped_at: Option<u8>,
+}
+
+impl Floor {
+    /// Fold in a window that drowned at `nf`.
+    pub fn swamped(self, nf: u8) -> Floor {
+        Floor {
+            swamped_at: Some(match self.swamped_at {
+                Some(previous) => previous.max(nf),
+                None => nf,
+            }),
+        }
+    }
+
+    /// The lowest rung the walk may relax to.
+    ///
+    /// One above the highest rung known to drown, and `0` when nothing is known
+    /// — an unlearned device is not restricted, because a floor invented
+    /// without evidence is just a deafer default.
+    pub fn lowest(self) -> u8 {
+        match self.swamped_at {
+            Some(nf) => nf.saturating_add(1).min(MAX_NF),
+            None => 0,
+        }
+    }
+
+    /// Whether relaxing from `nf` is allowed.
+    pub fn may_relax_from(self, nf: u8) -> bool {
+        nf > self.lowest()
+    }
+
+    /// Forget it.
+    ///
+    /// **The room changes.** A floor learned beside a running fridge is wrong
+    /// once it stops, and nothing in a noise measurement says which it was. So
+    /// a gain change clears it — that is a different front end — and so does an
+    /// explicit recalibration, which is the operator saying the room is not
+    /// what it was.
+    pub fn forget() -> Floor {
+        Floor { swamped_at: None }
+    }
+}
+
+/// The top of the `NF_LEV` ladder, mirrored here so this module needs nothing
+/// from `defence` and stays host-testable on its own.
+pub const MAX_NF: u8 = 7;
+
+/// How far above the quiet threshold a window must be to count as *swamped*
+/// rather than merely noisy.
+///
+/// **Not simply "not quiet".** An ordinary noisy window is what the ±1 walk is
+/// for, and treating every one as a permanent fact about the room would ratchet
+/// the floor upward until the device was deaf by accumulation — the exact
+/// failure the tuner already has, with a longer memory. Drowning is a different
+/// state: the measured figures are 595/min against a 60/min threshold, roughly
+/// ten times, where an ordinary noisy window sits at one or two times.
+pub const SWAMPED_MULTIPLE: u32 = 5;
+
+/// Whether a window's event rate means the front end is drowning.
+pub fn is_swamped(events_per_min: u32, quiet_per_min: u32) -> bool {
+    events_per_min >= quiet_per_min.max(1).saturating_mul(SWAMPED_MULTIPLE)
+}

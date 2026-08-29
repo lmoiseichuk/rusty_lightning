@@ -87,6 +87,12 @@ pub struct Tuning {
     /// When lightning was last heard. Feeds the fall-back to the known-good
     /// combination — see [`crate::golden`].
     last_strike_ms: Option<u32>,
+    /// The lowest rung the walk may relax to, learned from drowning at one.
+    ///
+    /// Held in RAM rather than NVS: it describes the room *now*, and a room
+    /// changes — a floor learned beside a running compressor is wrong once it
+    /// stops. A reboot re-learns it in one window, which is cheap.
+    floor: crate::golden::Floor,
     /// Where to go back to when a dip hears nothing. `Some` while dipping.
     dip_restore: Option<defence::Point>,
     /// When the last dip ran, so they are spaced rather than continuous.
@@ -155,6 +161,7 @@ impl Tuning {
             sweep: None,
             quiet_per_min,
             last_strike_ms: None,
+            floor: crate::golden::Floor::default(),
             dip_restore: None,
             // Starts now, so a board that reboots mid-storm does not dip
             // immediately on top of the weather it just came up in.
@@ -326,6 +333,26 @@ impl Tuning {
         // correctly instead of collapsing to 1.
         totals.noise_per_min = self.window.noise_per_min(window_s);
         totals.disturbers_per_min = self.window.disturbers_per_min(window_s);
+
+        // **Remember a rung that drowned.** Measured here: a sweep graded nf 0
+        // at 595 events/min against a 60/min threshold, settled at nf 1, and
+        // the walk relaxed straight back into nf 0 on the next quiet window --
+        // where the proportional climb then took nine notches at once and
+        // saturated at fully deaf. The measurement was already in hand; it was
+        // simply not kept. One rung of memory ends that cycle.
+        let events_per_min = totals.noise_per_min + totals.disturbers_per_min;
+        if crate::golden::is_swamped(events_per_min, self.quiet_per_min) {
+            let before = self.floor.lowest();
+            self.floor = self.floor.swamped(self.point.raw() as u8);
+            if self.floor.lowest() != before {
+                println!(
+                    "tune: nf {} drowned at {}/min -- will not relax below nf {} again",
+                    self.point.raw(),
+                    events_per_min,
+                    self.floor.lowest()
+                );
+            }
+        }
 
         // **The one place "quiet" is decided.** A rate, not a count, so the
         // verdict means the same thing whatever the window length — see
@@ -712,6 +739,9 @@ impl Tuning {
         // reaches for the gain is still asking for it wide open. Resetting the
         // point here would quietly hand back the noise rejection they turned
         // off, which is the kind of silent state change that costs an evening.
+        // A different gain is a different front end, so what drowned at the old
+        // one says nothing about the new one.
+        self.floor = crate::golden::Floor::forget();
         if self.frozen {
             println!("tune: gain changed ({why}) -- point held, `sensitive on` is in force");
             self.forget_span();
@@ -818,6 +848,16 @@ impl Tuning {
     }
 
     fn relax(&mut self) -> Option<&'static str> {
+        // **Not below a rung this room has been measured to drown at.**
+        //
+        // The walk's own evidence said `nf 0` was 595 events/min; a quiet
+        // window one rung up is not new evidence that the rung below has
+        // become habitable, it is the expected reading at a *working* setting.
+        // Relaxing on it costs nine notches of climb and seven windows at full
+        // deafness to undo, every time.
+        if !self.floor.may_relax_from(self.point.raw() as u8) {
+            return None;
+        }
         match self.point.relaxed() {
             Some(gentler) => {
                 self.point = gentler;
@@ -863,6 +903,8 @@ impl Tuning {
         requested_quiet: u32,
         now_ms: u32,
     ) {
+        // The operator is re-asking the question, so the old answer goes.
+        self.floor = crate::golden::Floor::forget();
         if requested_quiet != u32::MAX && requested_quiet != self.quiet_per_min {
             self.quiet_per_min = requested_quiet;
             match settings::store_quiet_per_min(self.quiet_per_min) {

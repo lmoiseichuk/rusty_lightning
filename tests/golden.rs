@@ -161,6 +161,35 @@ fn main() {
         fall_back_to(combo(1, 2, 0, false), trusted(combo(1, 2, 0, false)), 6000).is_none(),
     );
 
+    println!("\n  the floor: rungs measured to drown");
+    let none = Floor::default();
+    check("nothing learned means no restriction", none.lowest() == 0);
+    check("...and relaxing is allowed from anywhere", none.may_relax_from(1));
+
+    // The observed case: a sweep measured nf 0 at 595/min against a 60/min
+    // threshold, settled at nf 1, and the walk relaxed into nf 0 anyway.
+    let learned = none.swamped(0);
+    check("swamped at 0 puts the floor at 1", learned.lowest() == 1);
+    check("so nf 1 may not relax further", !learned.may_relax_from(1));
+    check("but nf 2 still may", learned.may_relax_from(2));
+
+    check("only the highest swamped rung is kept", none.swamped(0).swamped(2).lowest() == 3);
+    check("...in either order", none.swamped(2).swamped(0).lowest() == 3);
+    check(
+        "the floor cannot exceed the ladder",
+        none.swamped(MAX_NF).lowest() == MAX_NF,
+    );
+    check("forgetting clears it", Floor::forget().lowest() == 0);
+
+    println!("\n  what counts as drowning");
+    // Ordinary noise is the walk's business; only drowning is a fact about the
+    // room worth remembering, or the floor ratchets up until the device is deaf.
+    check("the measured swamp qualifies", is_swamped(595, 60));
+    check("a merely noisy window does not", !is_swamped(120, 60));
+    check("nor does exactly twice the threshold", !is_swamped(120, 60));
+    check("five times does", is_swamped(300, 60));
+    check("a zero threshold does not divide by zero", is_swamped(5, 0));
+
     let passed = PASS.load(Ordering::Relaxed);
     let failed = FAIL.load(Ordering::Relaxed);
     println!("\n{passed} passed, {failed} failed");
