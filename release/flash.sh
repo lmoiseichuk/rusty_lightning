@@ -49,55 +49,28 @@ PURPOSE="$(field purpose)"
 # --- find the board ---------------------------------------------------------
 #
 # **By its stable path, never by ttyACM<n>.** The numbering shuffles between
-# plug-ins and has pointed at a different board before. This one is
-# B0:A6:04:06:E6:D4; the by-id path carries that and does not move.
+# plug-ins and has pointed at a different board before. Which board this is
+# lives in `devices.list`, not in this script: the script is the reusable part.
+#
+# `board.sh` is copied in beside this file by `tools/release.sh`, so a release
+# tree carries the check with it rather than depending on the checkout it came
+# from.
+# shellcheck source=../tools/board.sh
+. "$HERE/board.sh"
+
 if [[ -z "$PORT" ]]; then
-    found="$(ls /dev/serial/by-id/ 2>/dev/null | grep -m1 'B0:A6:04:06:E6:D4' || true)"
-    if [[ -n "$found" ]]; then
-        PORT="/dev/serial/by-id/$found"
-    else
+    PORT="$(board_port)" || {
         cat >&2 <<'EOF'
-No port given and the board is not on /dev/serial/by-id.
 
 If it is plugged in and still missing, it is probably asleep: light sleep powers
 down the USB Serial/JTAG PHY, so the port comes and goes. Either catch it in a
 waking window, or flash the no-light-sleep variant once and it will stay.
 EOF
         exit 1
-    fi
+    }
 fi
 
-# **An explicit port is checked too.** The lookup above is by MAC, but a port
-# passed as an argument used to skip it -- so the board-identity guarantee this
-# script was written around was dropped on the path a person types by hand,
-# where `ttyACM<n>` shuffling does its damage.
-resolve_by_id() {
-    local port="$1" link target
-    target="$(readlink -f -- "$port" 2>/dev/null)" || return 1
-    [[ -n "$target" ]] || return 1
-    for link in /dev/serial/by-id/*; do
-        [[ -e "$link" ]] || continue
-        if [[ "$(readlink -f -- "$link")" == "$target" ]]; then
-            printf '%s\n' "$link"
-            return 0
-        fi
-    done
-    return 1
-}
-
-if resolved="$(resolve_by_id "$PORT")"; then
-    if [[ "$resolved" != *'B0:A6:04:06:E6:D4'* ]]; then
-        echo "⚠ $PORT is not the lightning board." >&2
-        echo "  it resolves to: $resolved" >&2
-        echo "  expected MAC:   B0:A6:04:06:E6:D4" >&2
-        echo "Refusing: flashing the wrong board replaces its firmware." >&2
-        exit 1
-    fi
-else
-    echo "⚠ $PORT has no /dev/serial/by-id entry, so this cannot check which" >&2
-    echo "  board it is. Refusing rather than flashing an unknown device." >&2
-    exit 1
-fi
+board_is "$PORT" "flashing the wrong board replaces its firmware" || exit 1
 
 echo "port    : $PORT"
 echo "variant : $TARGET"

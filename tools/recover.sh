@@ -59,63 +59,25 @@ set -uo pipefail
 # already pointed at a different board -- so the default was one port shuffle
 # away from erasing somebody else's log. `release/flash.sh` looks the board up by
 # MAC and this had no equivalent.
-readonly BOARD_MAC="B0:A6:04:06:E6:D4"
+# The board's identity lives in devices.list, not here -- see tools/board.sh.
+# shellcheck source=board.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/board.sh"
 
 if [[ -n "${1:-}" ]]; then
     PORT="$1"
 else
-    found="$(ls /dev/serial/by-id/ 2>/dev/null | grep -m1 "$BOARD_MAC" || true)"
-    if [[ -z "$found" ]]; then
-        echo "The lightning board ($BOARD_MAC) is not on /dev/serial/by-id." >&2
+    PORT="$(board_port)" || {
         echo "Pass a port explicitly if you are sure, or check the power switch:" >&2
         echo "in battery mode with no cell fitted the board never enumerates." >&2
         exit 1
-    fi
-    PORT="/dev/serial/by-id/$found"
+    }
 fi
 
-# An explicit port is still checked, because being explicit is not the same as
-# being right.
-#
-# **This used to check only paths that already began `/dev/serial/by-id/`.**
-# The condition was `by-id/* && != *MAC*`, so both halves had to hold to refuse
-# -- and a bare `/dev/ttyACM0` failed the first half, skipped the guard
-# entirely, and went straight to `esptool erase-flash`. The comment above it
-# claimed the opposite. That is the exact shuffle this script's own header
-# describes as "one port shuffle away from erasing somebody else's log", left
-# open on the path a person types by hand when they are in a hurry.
-#
-# So resolve whatever was given back to a by-id name and check *that*. Both
-# paths point at the same character device, so comparing `readlink -f` is
-# enough and needs no udev query.
-resolve_by_id() {
-    local port="$1" link target
-    target="$(readlink -f -- "$port" 2>/dev/null)" || return 1
-    [[ -n "$target" ]] || return 1
-    for link in /dev/serial/by-id/*; do
-        [[ -e "$link" ]] || continue
-        if [[ "$(readlink -f -- "$link")" == "$target" ]]; then
-            printf '%s\n' "$link"
-            return 0
-        fi
-    done
-    return 1
-}
-
+# **An explicit port is checked too**, because being explicit is not the same as
+# being right -- and this is the one script here that erases a whole chip.
 if [[ "${RECOVER_SKIP_IDENTITY_CHECK:-}" == "1" ]]; then
     echo "⚠ RECOVER_SKIP_IDENTITY_CHECK=1 -- erasing $PORT without checking which board it is."
-elif resolved="$(resolve_by_id "$PORT")"; then
-    if [[ "$resolved" != *"$BOARD_MAC"* ]]; then
-        echo "⚠ $PORT is not the lightning board." >&2
-        echo "  it resolves to: $resolved" >&2
-        echo "  expected MAC:   $BOARD_MAC" >&2
-        echo "This script ERASES THE WHOLE CHIP. Refusing." >&2
-        exit 1
-    fi
-else
-    echo "⚠ $PORT has no /dev/serial/by-id entry, so its identity cannot be" >&2
-    echo "  checked -- and this script ERASES THE WHOLE CHIP, including the" >&2
-    echo "  strike log and NVS. Refusing." >&2
+elif ! board_is "$PORT" "this script ERASES THE WHOLE CHIP, including the strike log and NVS"; then
     echo >&2
     echo "If the board really is this one and udev has not named it, set" >&2
     echo "RECOVER_SKIP_IDENTITY_CHECK=1 deliberately:" >&2
@@ -123,6 +85,7 @@ else
     echo "    RECOVER_SKIP_IDENTITY_CHECK=1 $0 $PORT" >&2
     exit 1
 fi
+
 MAX_ATTEMPTS="${2:-8}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

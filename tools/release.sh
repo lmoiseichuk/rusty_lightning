@@ -43,6 +43,10 @@ cd "$HERE"
 # contain it -- the same class as the untracked-files hole.
 SOURCES="src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defaults rust-toolchain.toml littlefs_bindings.h assets .cargo/config.toml components_esp32c3.lock"
 
+# `release/flash.sh` sources this, so a release tree carries its own identity
+# check rather than depending on the checkout it was built in.
+SHARED_INTO_RELEASE="tools/board.sh devices.list.example"
+
 TARGET_TRIPLE="riscv32imc-esp-espidf"
 BINARY="lightning"
 
@@ -104,6 +108,12 @@ for row in "${VARIANTS[@]}"; do
     for f in bootloader.bin partition-table.bin "$BINARY"; do
         [[ -f "$from/$f" ]] || { echo "missing build artifact: $from/$f" >&2; exit 1; }
         cp "$from/$f" "$out/$f"
+    done
+
+    # The identity check travels with the images, so `release/flash.sh` refuses
+    # the wrong board even in a tree copied to another machine.
+    for shared in $SHARED_INTO_RELEASE; do
+        cp "$HERE/$shared" "$(dirname "$out")/$(basename "$shared")"
     done
 
     version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"

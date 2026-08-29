@@ -43,9 +43,16 @@ number in a commit message is a number nobody reads again.
 ## Getting one running
 
 ```sh
-./flash.sh                              # build and flash, by MAC not by ttyACM
-echo "date $(date +%s)" > /dev/ttyACM0  # set the clock -- flashing stops the RTC
+cp devices.list.example devices.list     # name your board, once
+./flash.sh                               # build and flash, by MAC not by ttyACM
+echo "date $(date +%s)" > /dev/ttyACM0   # set the clock -- flashing stops the RTC
 ```
+
+**`devices.list` is why the first line exists.** Every script that can write to a
+device looks the board up there and refuses anything else — `/dev/ttyACM<n>`
+numbering shuffles between plug-ins, and this repository has already come within
+one guard of erasing a different board's flash. The file is gitignored, so no
+device identity is committed and a clone is somebody else's bench, not this one.
 
 Then open the console at 115200 and type `help`. Or hold **BOOT** for five
 seconds and point a phone at the screen.

@@ -333,7 +333,7 @@ The guard was `[[ "$PORT" == /dev/serial/by-id/* && "$PORT" != *"$BOARD_MAC"* ]]
 and went straight to `esptool erase-flash`.
 
 Run against the live bench while fixing it, `/dev/ttyACM0` was **the C5 panel
-candidate**, `10:BD:A3:CF:3D:A0` — not the lightning board, which was on
+candidate**, the C5 panel candidate — not the lightning board, which was on
 `ttyACM2`. The old path would have erased the C5's whole flash. The new guard
 resolves any given path back to its by-id name and names both boards when it
 refuses. `RECOVER_SKIP_IDENTITY_CHECK=1` remains as a deliberate override for a

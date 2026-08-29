@@ -58,60 +58,19 @@ fi
 
 # **By MAC, never by ttyACM<n>.** The numbering shuffles between plug-ins and has
 # pointed at a different board before.
-readonly BOARD_MAC="B0:A6:04:06:E6:D4"
+# The board's identity lives in board.conf, not here -- see tools/board.sh.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/board.sh
+. "$HERE/tools/board.sh"
 
 if [[ -n "${1:-}" ]]; then
     PORT="$1"
 else
-    found="$(ls /dev/serial/by-id/ 2>/dev/null | grep -m1 "$BOARD_MAC" || true)"
-    if [[ -z "$found" ]]; then
-        echo "The lightning board is not on /dev/serial/by-id." >&2
-        echo "If it is plugged in and missing, check the power switch: in battery" >&2
-        echo "mode with no cell fitted, USB does not reach the rail and the board" >&2
-        echo "never enumerates." >&2
-        exit 1
-    fi
-    PORT="/dev/serial/by-id/$found"
+    PORT="$(board_port)" || exit 1
 fi
 
-# **Every port is checked, not only the one this script found itself.**
-#
-# The lookup below is by MAC, but an explicit `$1` used to skip it entirely --
-# and this script's own usage line advertises `./flash.sh /dev/ttyACM1`. The
-# numbering shuffles between plug-ins, so the guarantee the by-id path exists to
-# give was dropped on exactly the path a person types by hand.
-#
-# Both paths name the same character device, so resolving with `readlink -f` is
-# enough to recover the by-id name and check it.
-resolve_by_id() {
-    local port="$1" link target
-    target="$(readlink -f -- "$port" 2>/dev/null)" || return 1
-    [[ -n "$target" ]] || return 1
-    for link in /dev/serial/by-id/*; do
-        [[ -e "$link" ]] || continue
-        if [[ "$(readlink -f -- "$link")" == "$target" ]]; then
-            printf '%s\n' "$link"
-            return 0
-        fi
-    done
-    return 1
-}
+board_is "$PORT" "flashing the wrong board replaces its firmware" || exit 1
 
-if resolved="$(resolve_by_id "$PORT")"; then
-    if [[ "$resolved" != *"$BOARD_MAC"* ]]; then
-        echo "⚠ $PORT is not the lightning board." >&2
-        echo "  it resolves to: $resolved" >&2
-        echo "  expected MAC:   $BOARD_MAC" >&2
-        echo "Refusing: flashing the wrong board replaces its firmware." >&2
-        exit 1
-    fi
-else
-    echo "⚠ $PORT has no /dev/serial/by-id entry, so this cannot check which" >&2
-    echo "  board it is. Refusing rather than flashing an unknown device." >&2
-    exit 1
-fi
-
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIR="$HERE/target/riscv32imc-esp-espidf/release"
 
 cargo build --release

@@ -530,3 +530,34 @@ worth importing is the remainder that carried a real distance; marking those 1
 says "trust this row" in the column that means exactly that, instead of
 restating a register value that was identical for every row and distinguished
 nothing.
+
+
+## Which board a script talks to
+
+`devices.list` in the checkout root, one `name  MAC` pair per line:
+
+```
+lightning   B0:A6:04:06:E6:D4
+panel-c5    10:BD:A3:CF:3D:A0
+```
+
+The first entry is the default; `BOARD=panel-c5 ./flash.sh` picks another, and
+`BOARD_MAC=AA:BB:… ./flash.sh` overrides both for one command. It is gitignored,
+and `devices.list.example` shows the format.
+
+**Naming them is not decoration.** When a port resolves to the wrong board the
+refusal can say *which* one, and "it resolves to `panel-c5`" is a sentence
+somebody acts on where a bare MAC is one they squint at:
+
+```
+⚠ /dev/ttyACM0 is not the configured board.
+  it resolves to: /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_10:BD:A3:CF:3D:A0-if00
+  which is:       panel-c5
+  expected MAC:   B0:A6:04:06:E6:D4
+Refusing: flashing the wrong board replaces its firmware
+```
+
+The lookup and the guard live in `tools/board.sh`, sourced by `flash.sh`,
+`tools/recover.sh` and `release/flash.sh` — `release.sh` copies it in beside the
+images, so a release tree carries the check with it rather than depending on the
+checkout it came from.

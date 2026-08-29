@@ -24,3 +24,6 @@ target
 # worth looking at -- which in a storm season is weekly, so they are working
 # files rather than anything to version.
 storm-*.csv
+
+# The boards on this bench -- local identities, not shared code.
+devices.list
