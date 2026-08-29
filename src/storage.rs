@@ -91,6 +91,54 @@ impl Namespace {
         check(unsafe { sys::nvs_set_u64(self.handle, key.as_ptr() as *const c_char, value) })
     }
 
+    /// Read a string, or `None` if the key is absent.
+    ///
+    /// **Two calls, because that is the NVS string API.** Passing a null buffer
+    /// asks how long the value is, including its NUL; the second call fills a
+    /// buffer of that size. Doing it in one call with a guessed size is how a
+    /// value gets silently truncated.
+    pub fn get_string(&self, key: &[u8]) -> Option<String> {
+        unsafe {
+            let mut len: usize = 0;
+            let err = sys::nvs_get_str(
+                self.handle,
+                key.as_ptr() as *const c_char,
+                core::ptr::null_mut(),
+                &mut len,
+            );
+            if err != ESP_OK || len == 0 {
+                return None;
+            }
+            let mut buffer = vec![0u8; len];
+            let err = sys::nvs_get_str(
+                self.handle,
+                key.as_ptr() as *const c_char,
+                buffer.as_mut_ptr() as *mut c_char,
+                &mut len,
+            );
+            if err != ESP_OK {
+                return None;
+            }
+            // `len` counts the NUL; the Rust string must not.
+            buffer.truncate(len.saturating_sub(1));
+            String::from_utf8(buffer).ok()
+        }
+    }
+
+    /// Write a string. `value` must not contain an interior NUL.
+    pub fn set_string(&self, key: &[u8], value: &str) -> Result<(), EspError> {
+        let mut owned = Vec::with_capacity(value.len() + 1);
+        owned.extend_from_slice(value.as_bytes());
+        owned.push(0);
+        check(unsafe {
+            sys::nvs_set_str(
+                self.handle,
+                key.as_ptr() as *const c_char,
+                owned.as_ptr() as *const c_char,
+            )
+        })
+    }
+
     pub fn get_u16(&self, key: &[u8]) -> Option<u16> {
         let mut value = 0u16;
         let err =

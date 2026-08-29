@@ -37,9 +37,31 @@ pub enum FreqRequest {
 ///
 /// The read side is non-blocking (see [`Console::new`]), so an idle console
 /// costs one failed `read` per loop and never stalls the sensor or the screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What an `ap` command is asking for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApRequest {
+    Raise,
+    Lower,
+    /// Store these and raise with them.
+    Set(String, String),
+}
+
+// **`Command` is no longer `Copy`.** It was, while every variant held a number
+// or nothing -- and `ApRequest::Set` carries a network name and a password,
+// which cannot be. The alternative was two fixed-size buffers sized by
+// guessing; a clone on a path a person reaches by typing is not a path that
+// needs to be free.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Help,
+    /// `ap` raises the access point; `ap off` drops it; `ap <ssid> <password>`
+    /// stores credentials and raises it with them.
+    ///
+    /// **The console can do this because the button can.** A five-second press
+    /// is the ordinary way in; this exists for the case the button is the
+    /// problem, and for setting a password somebody chose rather than keeping
+    /// the generated one.
+    AccessPoint(ApRequest),
     /// `date` shows the clock; `date <unix-epoch>` sets it (§5).
     Date(Option<u64>),
     /// `tz <hours>` — local offset, negative west of UTC.
@@ -191,7 +213,13 @@ impl Console {
     }
 }
 
-fn parse(line: &str) -> Command {
+/// Public so the web UI can reach it.
+///
+/// **The page composes a command line and this parses it**, exactly as if it
+/// had been typed. That is the whole reason the web UI needs no range checks,
+/// no second command table and no way to express anything the console cannot:
+/// there is one parser, and both front ends go through it.
+pub fn parse(line: &str) -> Command {
     let mut parts = line.split_whitespace();
     let word = parts.next().unwrap_or("");
     let arg = parts.next();
@@ -285,6 +313,21 @@ fn parse(line: &str) -> Command {
                 _ => Command::Unknown,
             },
         },
+        "ap" | "portal" => {
+            match (arg, arg2) {
+                (None, _) => Command::AccessPoint(ApRequest::Raise),
+                (Some("off"), _) => Command::AccessPoint(ApRequest::Lower),
+                (Some("on"), _) => Command::AccessPoint(ApRequest::Raise),
+                // Both or neither: a name with no password would store a pair
+                // that cannot be joined, and silently leaving the old password
+                // against a new name is worse than refusing.
+                (Some(ssid), Some(password)) => Command::AccessPoint(ApRequest::Set(
+                    ssid.to_string(),
+                    password.to_string(),
+                )),
+                (Some(_), None) => Command::Unknown,
+            }
+        }
         "clearstats" | "cs" => Command::ClearStats,
         "merge" => match arg {
             None => Command::Merge(None),
@@ -393,6 +436,7 @@ pub fn print_help() {
     );
     println!("                             stored in NVS; omit to keep the current one");
     println!("  sensitive on|off      noise floor to 0, auto-tune frozen");
+    println!("  ap [off|<ssid> <pass>] raise the access point and web UI; `off` drops it");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
     println!();

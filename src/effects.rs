@@ -50,13 +50,15 @@ pub struct Runtime<'a> {
 }
 
 /// Run one console command and apply whatever it asked for.
+/// Returns what `ap` asked for, if anything, for the caller to act on — see
+/// [`commands::Effects::access_point`].
 pub fn handle(
     command: console::Command,
     hw: &mut Hardware<'_, '_>,
     rt: &mut Runtime<'_>,
     now_ms: u32,
     minute: u32,
-) {
+) -> Option<console::ApRequest> {
         let effects = commands::run(
             command,
             &mut commands::Ctx {
@@ -337,6 +339,8 @@ pub fn handle(
             rt.tuning.place(hw.sensor, hw.i2c, raw, now_ms);
         }
 
+        let access_point = effects.access_point.clone();
+
         // A sweep runs as ordinary measurement windows from here on -- the
         // tune block below spends each one on the search instead of on the
         // +/-1 walk -- so the loop, the console and the screen all keep
@@ -390,4 +394,6 @@ pub fn handle(
                 Err(e) => println!("sens: could not apply -- {e}"),
             }
         }
+
+        access_point
 }

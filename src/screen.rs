@@ -75,6 +75,12 @@ pub struct View<'a> {
 
 /// What the glass currently shows, and the scratch used to put it there.
 pub struct Screen {
+    /// Set while the access point is up, and what the panel shows instead of
+    /// the status screen. Owned here rather than passed through `View` because
+    /// the redraw policy has to see it: raising or dropping the network is a
+    /// change worth a refresh, and the change test below is where that is
+    /// decided.
+    pub join: Option<ui::Join>,
     /// The subset of state the last redraw was made from. The change test
     /// compares against this and nothing else.
     drawn: Option<Drawn>,
@@ -108,6 +114,7 @@ pub struct Screen {
 impl Screen {
     pub fn new() -> Screen {
         Screen {
+            join: None,
             drawn: None,
             // Zero rather than `now_ms()`, so the very first iteration draws
             // immediately instead of waiting out the floor. A device showing its
@@ -191,7 +198,16 @@ impl Screen {
         };
 
         let mut frame = display::Panel::frame();
-        ui::status(&mut frame, &status);
+
+        // **The join screen replaces the status screen, it does not share it.**
+        // A refresh costs 3.8 s, so there is one screen at a time, and while
+        // somebody is standing at the board trying to join a network the
+        // credentials and the two codes are the only thing worth the glass.
+        // The status screen comes back on the redraw after the window closes.
+        match &self.join {
+            Some(join) => ui::join(&mut frame, join),
+            None => ui::status(&mut frame, &status),
+        }
 
         let started = now_ms;
         match panel.show(&frame) {

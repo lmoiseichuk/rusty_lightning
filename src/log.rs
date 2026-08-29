@@ -20,7 +20,7 @@ use crate::as3935::{Distance, Strike};
 
 const MOUNT_POINT: &str = "/lfs";
 const PARTITION_LABEL: &str = "storage";
-const PATH: &str = "/lfs/strikes.csv";
+pub const PATH: &str = "/lfs/strikes.csv";
 
 /// The header row, which is also how an empty log is recognised.
 ///

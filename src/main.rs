@@ -19,8 +19,10 @@ mod listen;
 mod log;
 mod merger;
 mod policy;
+mod portal;
 mod power;
 mod press;
+mod query;
 mod screen;
 mod session;
 mod settings;
@@ -30,8 +32,10 @@ mod system;
 mod tuning;
 mod ui;
 mod uptime;
+mod credentials;
 mod csv;
 mod verdict;
+mod webui;
 
 use std::num::NonZeroU32;
 
@@ -352,8 +356,10 @@ fn main() {
 
     println!("irq:  GPIO21 (D6), rising edge, pulldown");
     println!(
-        "btn:  GPIO9 (BOOT), HOLD {} ms to switch indoor/outdoor",
-        boot::BUTTON_HOLD_MS
+        "btn:  GPIO9 (BOOT): hold {}-{} s for indoor/outdoor, {} s+ for the network",
+        press::ACCEPT_MS / 1000,
+        press::LONG_MS / 1000,
+        press::LONG_MS / 1000,
     );
     println!("as:   running {}", location.label());
 

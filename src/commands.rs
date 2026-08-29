@@ -11,7 +11,7 @@
 
 use crate::as3935::{Distance, Location, Strike};
 use crate::session;
-use crate::console::Command;
+use crate::console::{ApRequest, Command};
 use crate::{battery, clock, history, log, system, ui};
 
 /// Everything a command may read or change.
@@ -59,6 +59,12 @@ pub struct Effects {
     /// `Some((seconds, quiet_per_min))` when `calibrate` was used. `u32::MAX`
     /// for the threshold means "leave the stored one alone".
     pub calibrate: Option<(u32, u32)>,
+    /// What `ap` asked for, if anything.
+    ///
+    /// Applied by the caller for the same reason as the two below: the listen
+    /// loop owns the `Portal`, and a second place that can create a radio is a
+    /// second place that can leave one running.
+    pub access_point: Option<ApRequest>,
     /// `Some(raw)` when `defence <raw>` was used. Applied by the caller, which
     /// is the only place that owns the point and the bus.
     pub set_point: Option<u16>,
@@ -329,6 +335,34 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Srej(Some(level)) => effects.set_spike_rejection = Some(level),
         Command::Wdth(None) => effects.show_watchdog = true,
         Command::Wdth(Some(level)) => effects.set_watchdog = Some(level),
+        Command::AccessPoint(request) => {
+            // Credentials are stored here, because that is NVS and not a radio.
+            // Raising the network itself is the loop's job.
+            if let ApRequest::Set(ssid, password) = &request {
+                match crate::credentials::Credentials::check(ssid, password) {
+                    Ok(()) => {
+                        let credentials = crate::credentials::Credentials {
+                            ssid: ssid.clone(),
+                            password: password.clone(),
+                            generated: false,
+                        };
+                        match credentials.save() {
+                            Ok(()) => println!("ap:   stored `{ssid}`"),
+                            Err(e) => println!("ap:   could not store -- {e}"),
+                        }
+                    }
+                    Err(why) => {
+                        println!("ap:   refused -- {why}");
+                        // Not raised: the pair the operator just gave is the
+                        // pair they expect to see, and raising the old one
+                        // under a rejection reads as the rejection not having
+                        // happened.
+                        return effects;
+                    }
+                }
+            }
+            effects.access_point = Some(request);
+        }
         Command::ClearStats => effects.clear_statistics = true,
         Command::Merge(None) => {
             let window_ms = ctx.totals.merger.window_ms();

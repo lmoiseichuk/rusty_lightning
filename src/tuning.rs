@@ -220,6 +220,11 @@ impl Tuning {
     ///
     /// Separate from [`Tuner::due`] because freezing the tuner must not stop
     /// the device *measuring* — only deciding. See [`Tuner::publish`].
+    /// The threshold a window is judged against, for the console and the page.
+    pub fn quiet_per_min(&self) -> u32 {
+        self.quiet_per_min
+    }
+
     pub fn window_elapsed(&self, now_ms: u32) -> bool {
         crate::uptime::due(now_ms, self.window_started_ms, self.window_s() * 1000)
     }

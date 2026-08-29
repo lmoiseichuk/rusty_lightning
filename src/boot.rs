@@ -244,25 +244,6 @@ pub fn antenna_self_test(
 }
 
 
-/// Was the button held long enough to be a person rather than a USB host?
-///
-/// See [`BUTTON_HOLD_MS`] for why duration is the only signal that separates
-/// them: a host asserting DTR drives GPIO9 low exactly as a fingertip does, and
-/// GPIO9 is the only button on this board.
-///
-/// Returns as soon as the pin comes back up, so a rejected press costs nothing
-/// — which matters because the rejected ones are every flash attempt.
 
-pub fn button_held(button: &PinDriver<'_, esp_idf_hal::gpio::Input>) -> bool {
-    let mut held_ms = 0;
-    while held_ms < BUTTON_HOLD_MS {
-        if !button.is_low() {
-            return false;
-        }
-        FreeRtos::delay_ms(BUTTON_POLL_MS);
-        held_ms += BUTTON_POLL_MS;
-    }
-    button.is_low()
-}
 
 

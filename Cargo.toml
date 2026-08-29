@@ -1,6 +1,6 @@
 [package]
 name = "lightning"
-version = "0.13.8"
+version = "0.14.0"
 authors = ["LM"]
 edition = "2024"
 resolver = "2"
@@ -11,11 +11,29 @@ name = "lightning"
 harness = false
 
 [dependencies]
-# esp-idf-svc is deliberately not here yet. It links the WiFi and BLE stacks
-# behind it, and §5's WiFi/SNTP is deferred -- so until there is a network to
-# talk to, the radio stacks are pure binary size. esp-idf-hal re-exports the raw
-# IDF bindings as `sys`, which is enough for NVS and the filesystem.
 esp-idf-hal = "0.46"
+
+# **No `esp-idf-svc`, and that is a decision rather than an omission.**
+#
+# The access point and its web server are driven through the raw IDF bindings
+# `esp-idf-hal` already re-exports as `sys`. `esp-idf-svc` wraps the same C
+# functions, but it pins `esp-idf-hal` a minor version behind what this crate
+# uses, so taking it would mean moving the whole HAL backwards. The moisture
+# project reached the same place from the other direction and drives WiFi
+# through `sys` too.
+#
+# What that costs: `unsafe` around a dozen calls, and configuration structs
+# filled out by hand. What it buys: no version pin, no BLE stack pulled in
+# behind the WiFi one, and a much smaller image.
+# QR codes for the join page: the network credentials as a `WIFI:` payload, and
+# the portal URL. Chosen over the alternatives for having no allocator
+# requirement and no image encoder -- it hands back a bitmap this project draws
+# with the drawing primitives it already has.
+# `alloc` is on, which is the crate's default: it builds the segment list in a
+# `Vec`. This crate has std through ESP-IDF, and the alternative -- the
+# buffer-passing no-heap fork -- would buy nothing here, since the QR is built
+# once per portal window on a path that already allocates a page of HTML.
+qrcodegen = "1.8"
 
 # Stack-allocated strings for the console and the render path.
 heapless = "0.8"

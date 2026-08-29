@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "lightning"
-version = "0.13.7"
+version = "0.14.0"
 dependencies = [
  "embedded-graphics",
  "embedded-hal 1.0.0",
@@ -845,6 +845,7 @@ dependencies = [
  "epd-waveshare",
  "esp-idf-hal",
  "heapless 0.8.0",
+ "qrcodegen",
  "u8g2-fonts",
 ]
 
@@ -969,6 +970,12 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
 
 [[package]]
 name = "quote"

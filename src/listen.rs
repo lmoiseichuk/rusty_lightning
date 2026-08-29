@@ -18,9 +18,10 @@ use esp_idf_hal::task::notification::Notification;
 use crate::as3935::{As3935, Location};
 use crate::session::{collect, report, toggle_location, Batch, Drawn, StormWatch, Totals};
 use crate::{
-    battery, boot, clock, console, defence, display, effects, history, log, power, screen,
+    battery, clock, console, defence, display, effects, history, log, power, screen,
     session, system, tuning,
 };
+use crate::press;
 use crate::{minute_now, now_ms, NOTIFY_BUTTON};
 
 
@@ -97,7 +98,12 @@ pub const AUTO_CALIBRATE_WINDOW_S: u32 = 60;
 /// Measured against a real clock rather than decremented per batch, which was
 /// the earlier version's mistake: the batch is 1000 ms, so a 300 ms blanking
 /// counter was clear again by the next window and blanked nothing at all.
-pub const BUTTON_DEBOUNCE_MS: u32 = 300;
+/// How often to look at the button while one is held down.
+///
+/// Only used while a press is in progress — see the wait below. Fine enough
+/// that the two-second and five-second boundaries are where a person aiming at
+/// them expects, and coarse enough to be free.
+pub const PRESS_POLL_MS: u32 = 50;
 
 pub fn listen(
     sensor: &As3935,
@@ -118,7 +124,6 @@ pub fn listen(
     // Starts now rather than at zero, so a board that reboots during a storm
     // does not sweep the moment the weather clears.
     let mut last_calibrate_ms: u32 = now_ms();
-    let mut last_button_ms: u32 = 0;
     let mut batch = Batch::default();
     let mut batch_started = now_ms();
 
@@ -241,6 +246,13 @@ pub fn listen(
     }
     let mut tuning = tuning::Tuning::new(start_point, now_ms());
     let mut storm_watch = StormWatch::default();
+    let mut press = press::Press::new();
+    // `portal_request` says "the operator asked for a change"; `portal_wanted`
+    // says which way, for the console, which can name it. The button toggles
+    // and so leaves `portal_wanted` as `None`.
+    let mut portal_request = false;
+    let mut portal_wanted: Option<bool> = None;
+    let mut portal: Option<crate::portal::Portal> = None;
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -258,52 +270,30 @@ pub fn listen(
         // Wait only for what is left of the current window, so the batch closes
         // on time however many events arrive inside it.
         let elapsed = crate::uptime::since(now_ms(), batch_started);
-        let remaining = BATCH_MS.saturating_sub(elapsed).max(1);
+        let mut remaining = BATCH_MS.saturating_sub(elapsed).max(1);
+
+        // **While a button is down, wake often enough to time it.** The
+        // gestures are two seconds apart (`press::ACCEPT_MS` to
+        // `press::LONG_MS`), and a loop that only looks once a second cannot
+        // tell a three-second hold from a five-second one -- it would put the
+        // boundary between "change the gain" and "raise the access point"
+        // inside its own sampling error. Costs nothing when nothing is held,
+        // because this branch is not taken.
+        if press.held_ms(now_ms()).is_some() {
+            remaining = remaining.min(PRESS_POLL_MS);
+        }
+
         let woke = notification.wait(TickType::new_millis(remaining as u64).into());
 
         if let Some(source) = woke {
             let bits = source.get();
 
-            if bits & NOTIFY_BUTTON != 0 {
-                // **Confirm the pin is actually held down.** An edge alone is
-                // not a press: GPIO9 is a strapping pin on a board sharing a
-                // bench with a lightning sensor, and a glitch on it produced a
-                // falling edge indistinguishable from a fingertip.
-                //
-                // That mattered more than a stray toggle would suggest. A
-                // spurious press changes `location`, which forces a redraw, and
-                // `user_acted` deliberately bypasses the 30 s floor -- so each
-                // glitch bought an immediate 3.8 s refresh AND an NVS write.
-                // The symptom was a screen repainting without pause and no logo
-                // between repaints, which ruled out a reboot and left this.
-                //
-                // A real press is held for tens of milliseconds; a glitch is
-                // over in microseconds. Sampling after a short settle tells them
-                // apart with no state and no timer.
-                let held = boot::button_held(button);
-                let ready = crate::uptime::due(now_ms(), last_button_ms, BUTTON_DEBOUNCE_MS);
-
-                if held && ready {
-                    last_button_ms = now_ms();
-                    toggle_location(sensor, i2c, location);
-                    // The point was learned at the gain that just went away --
-                    // roughly a 4x change in what the front end sees, so it
-                    // describes nothing now. Both ways of changing the mode do
-                    // this; the console's copy is in `effects`.
-                    tuning.gain_changed(sensor, i2c, "button");
-                    // A deliberate press earns an immediate repaint -- see below.
-                    screen.user_acted = true;
-                } else if !held {
-                    // Almost always a flashing tool asserting DTR, which the C3
-                    // wires to this pin. Said out loud rather than swallowed,
-                    // because "the button does nothing" and "the button is
-                    // being pressed by your laptop" look identical otherwise.
-                    println!(
-                        "btn:  edge not held {} ms -- ignored (USB DTR?)",
-                        boot::BUTTON_HOLD_MS
-                    );
-                }
-            }
+            // The button is *sampled*, not acted on here. An edge only tells
+            // us something moved; what the press means depends on how long it
+            // lasts, and that is decided on release by `press`. The edge still
+            // matters -- it is what wakes the loop promptly so the timing
+            // starts at the press rather than at the next batch.
+            let _ = bits & NOTIFY_BUTTON;
 
             // Any bit that is not the button is the sensor. Not
             // `& NOTIFY_STRIKE` on purpose: an unrecognised bit is far more
@@ -319,6 +309,50 @@ pub fn listen(
                     minute_now(),
                     strike_log.as_deref_mut(),
                 );
+            }
+        }
+
+        // --- the button, as a gesture rather than an edge --------------------
+        //
+        // Sampled on every pass, woken or timed out, so a hold is measured
+        // whatever else the loop was doing.
+        if press.newly_stuck(now_ms()) {
+            println!(
+                "btn:  GPIO9 has been low for {} s -- that is a cable, not a finger.",
+                press::STUCK_MS / 1000
+            );
+            println!("btn:  the C3 wires DTR to this pin, so an open console port holds it down.");
+        }
+        if let Some(gesture) = press.sample(button.is_low(), now_ms()) {
+            match gesture {
+                // Almost always a flashing tool asserting DTR, which the C3
+                // wires to this pin. Said out loud rather than swallowed,
+                // because "the button does nothing" and "the button is being
+                // pressed by your laptop" look identical otherwise.
+                press::Gesture::TooShort => println!(
+                    "btn:  held under {} ms -- ignored (USB DTR?). Hold {}-{} s for gain, {} s+ for the network.",
+                    press::ACCEPT_MS,
+                    press::ACCEPT_MS / 1000,
+                    press::LONG_MS / 1000,
+                    press::LONG_MS / 1000,
+                ),
+                press::Gesture::Gain => {
+                    toggle_location(sensor, i2c, location);
+                    // The point was learned at the gain that just went away --
+                    // roughly a 4x change in what the front end sees, so it
+                    // describes nothing now. Both ways of changing the mode do
+                    // this; the console's copy is in `effects`.
+                    tuning.gain_changed(sensor, i2c, "button");
+                    // A deliberate press earns an immediate repaint.
+                    screen.user_acted = true;
+                }
+                press::Gesture::Portal => {
+                    portal_request = true;
+                    screen.user_acted = true;
+                }
+                // Reported while still held by `newly_stuck`, so the release
+                // needs no second complaint.
+                press::Gesture::Stuck => {}
             }
         }
 
@@ -356,6 +390,150 @@ pub fn listen(
         // against its right edge.
         history.tick(minute_now());
 
+        // --- what the web UI sees ---------------------------------------------
+        //
+        // Published every batch whether or not the access point is up. Building
+        // it costs a few dozen field reads and one short table, and doing it
+        // unconditionally means the page can never render a state from before
+        // the setting that is being looked at changed.
+        crate::portal::publish_from(
+            now_ms() / 1000,
+            location.label(),
+            &tuning,
+            &totals,
+            &history,
+            fuel.reading.map(|r| r.millivolts as u32).unwrap_or(0),
+            fuel.reading.map(|r| r.percent as u32).unwrap_or(0),
+            strike_log.as_ref().map(|log| log.len()).unwrap_or(0),
+            strike_log.as_ref().map(|log| log.used_bytes()).unwrap_or(0),
+            portal.as_ref().map(|running| &running.credentials),
+        );
+
+        // --- the access point ------------------------------------------------
+        //
+        // A long press toggles it: up if it is down, down if it is up. The same
+        // gesture both ways, because "press and hold until the screen changes"
+        // is one thing to remember and the screen says which way it went.
+        if portal_request {
+            portal_request = false;
+            let direction = portal_wanted.take();
+            // `ap off` with nothing running, or `ap` with one already up, is a
+            // request that is already satisfied. Saying so beats silently
+            // toggling to the opposite of what was asked.
+            //
+            // **Not `continue`**, which would skip the console, the batch and
+            // the screen for this pass -- the access point is one thing the
+            // loop does, not the thing it does.
+            let already = match (direction, portal.is_some()) {
+                (Some(true), true) => {
+                    println!("ap:   already up on http://{}", crate::portal::ADDRESS);
+                    true
+                }
+                (Some(false), false) => {
+                    println!("ap:   no access point is running");
+                    true
+                }
+                _ => false,
+            };
+            match if already { None } else { portal.take() } {
+                Some(running) => {
+                    println!("ap:   closing the access point");
+                    running.lower();
+                    screen.join = None;
+                    screen.user_acted = true;
+                }
+                None if already => {}
+                None => {
+                    let credentials = crate::credentials::Credentials::load();
+                    match crate::portal::Portal::raise(credentials, now_ms()) {
+                        Ok(running) => {
+                            println!(
+                                "ap:   `{}` is up on http://{} for {} s",
+                                running.credentials.ssid,
+                                crate::portal::ADDRESS,
+                                crate::portal::WINDOW_S,
+                            );
+                            println!("ap:   password: {}", running.credentials.password);
+                            if running.credentials.generated {
+                                println!("ap:   (generated for this session and NOT saved)");
+                            }
+                            screen.join = Some(crate::ui::Join {
+                                ssid: running.credentials.ssid.clone(),
+                                password: running.credentials.password.clone(),
+                                url: format!("http://{}", crate::portal::ADDRESS),
+                                remaining_s: crate::portal::WINDOW_S,
+                                generated: running.credentials.generated,
+                                stations: 0,
+                            });
+                            portal = Some(running);
+                            screen.user_acted = true;
+                        }
+                        Err(e) => println!("ap:   could not raise the access point -- {e}"),
+                    }
+                }
+            }
+        }
+
+        if let Some(running) = portal.as_mut() {
+            if running.expired(now_ms()) {
+                println!("ap:   window closed with nobody connected -- dropping the network");
+                if let Some(running) = portal.take() {
+                    running.lower();
+                }
+                screen.join = None;
+                screen.user_acted = true;
+            } else if let Some(join) = screen.join.as_mut() {
+                // The countdown and the connection count, refreshed for the
+                // next redraw. **Not a redraw of their own**: a refresh is
+                // 3.8 s and the window is 60, so repainting for each second
+                // would spend the whole window drawing. The screen's ordinary
+                // change policy decides when this is actually shown.
+                let was = join.remaining_s;
+                join.remaining_s = running.remaining_s(now_ms());
+                join.stations = running.stations();
+
+                // **Repaint on a 15 s boundary, not on every second.** A
+                // refresh is 3.8 s against a 60 s window, so a per-second
+                // countdown would spend two thirds of the window drawing and
+                // the panel would never be readable. Four updates is enough for
+                // "is this still worth walking over to".
+                if was / 15 != join.remaining_s / 15 {
+                    screen.user_acted = true;
+                }
+            }
+        }
+
+        // Anything the page asked for, run here rather than on the server's
+        // task -- see `portal`'s module comment for why that matters.
+        for line in crate::portal::drain() {
+            let asked = effects::handle(
+                crate::console::parse(&line),
+                &mut effects::Hardware {
+                    sensor,
+                    i2c,
+                    gauge,
+                    die_temperature,
+                    antenna_khz,
+                    irq_confirmed,
+                },
+                &mut effects::Runtime {
+                    location,
+                    totals: &mut totals,
+                    history: &mut history,
+                    strike_log: strike_log.as_deref_mut(),
+                    tuning: &mut tuning,
+                    screen: &mut screen,
+                    fuel: &mut fuel,
+                    policy: &mut policy,
+                    freq_override: &mut freq_override,
+                    clock_saved_s: &mut last_clock_save_s,
+                },
+                now_ms(),
+                minute_now(),
+            );
+            apply_ap_request(asked, &mut portal_request, &mut portal_wanted);
+        }
+
         // --- the console ----------------------------------------------------
         //
         // Any input counts as "somebody is here", which is what holds the awake
@@ -363,7 +541,7 @@ pub fn listen(
         // not lied, because it is about a person rather than a cable.
         if let Some(command) = console.poll() {
             last_console_s = Some(now_ms() / 1000);
-            effects::handle(
+            let asked = effects::handle(
                 command,
                 &mut effects::Hardware {
                     sensor,
@@ -388,6 +566,7 @@ pub fn listen(
                 now_ms(),
                 minute_now(),
             );
+            apply_ap_request(asked, &mut portal_request, &mut portal_wanted);
         }
 
         // Flush the strike log on its own cadence. Buffered rather than synced
@@ -433,7 +612,15 @@ pub fn listen(
             // Skipped entirely while pinned -- otherwise the next tick would
             // quietly undo the override and the console would go away again,
             // which is the exact problem `freq` exists to solve.
-            let want = power::decide(now_ms() / 1000, last_console_s);
+            // **A running access point pins the awake policy.** Light sleep
+            // powers down the modem between beacons, so an associated station
+            // drops mid-request -- the page half-loads and the phone decides
+            // the network is broken. The portal is at most a minute, so this
+            // costs a minute of radio rather than a policy exception.
+            let want = match portal {
+                Some(_) => power::Policy::Awake,
+                None => power::decide(now_ms() / 1000, last_console_s),
+            };
             if freq_override.is_none() && want != policy {
                 match power::apply(want) {
                     Ok(()) => {
@@ -584,3 +771,26 @@ pub fn listen(
     }
 }
 
+
+/// Fold an `ap` console request into the loop's two flags.
+///
+/// The button toggles, so it sets only `request`; the console can say which way
+/// it means, so it sets `wanted` too. Keeping them apart is what lets `ap off`
+/// on an already-down network say so rather than raising one.
+fn apply_ap_request(
+    asked: Option<crate::console::ApRequest>,
+    request: &mut bool,
+    wanted: &mut Option<bool>,
+) {
+    match asked {
+        None => {}
+        Some(crate::console::ApRequest::Lower) => {
+            *request = true;
+            *wanted = Some(false);
+        }
+        Some(crate::console::ApRequest::Raise) | Some(crate::console::ApRequest::Set(_, _)) => {
+            *request = true;
+            *wanted = Some(true);
+        }
+    }
+}

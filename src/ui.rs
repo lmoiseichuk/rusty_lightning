@@ -14,7 +14,9 @@
 
 use core::fmt::Write as _;
 
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_8X13, FONT_9X15, FONT_9X15_BOLD};
+use embedded_graphics::mono_font::ascii::{
+    FONT_10X20, FONT_6X10, FONT_8X13, FONT_9X15, FONT_9X15_BOLD,
+};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
@@ -1222,4 +1224,187 @@ fn chart<I>(
         .into_styled(PrimitiveStyle::with_fill(INK))
         .draw(frame);
     }
+}
+
+/// What the join screen needs to draw itself.
+/// **Owned strings, not borrowed.** The screen holds this between redraws and
+/// the credentials live in the `Portal`, so a borrow would tie the screen's
+/// lifetime to the radio's — and the two are deliberately independent: the
+/// panel keeps showing the join screen for the 3.8 s it takes to draw the one
+/// that replaces it, which is after the network has gone.
+pub struct Join {
+    pub ssid: String,
+    pub password: String,
+    pub url: String,
+    /// Seconds left before the window closes, so somebody walking to the board
+    /// can see whether it is worth hurrying.
+    pub remaining_s: u32,
+    /// True while the password was invented for this session and not stored.
+    pub generated: bool,
+    pub stations: u32,
+}
+
+/// Draw one QR code, scaled to fit a box, with a quiet zone.
+///
+/// **The quiet zone is not decoration.** The specification asks for four
+/// modules of blank margin on every side, and a scanner that cannot find it
+/// fails to see the code at all — which on a white e-paper panel looks exactly
+/// like a code that is simply not being recognised, and sends somebody looking
+/// at the phone instead of the margin.
+fn qr(frame: &mut Display7in5, text: &str, at: Point, box_px: u32) -> bool {
+    // **Medium correction, not Low.** The panel is matte and reflective under a
+    // room light, and the extra redundancy costs a slightly denser code that
+    // still fits the box at this size -- where a code that will not scan costs
+    // the whole feature.
+    let Ok(code) = qrcodegen::QrCode::encode_text(text, qrcodegen::QrCodeEcc::Medium) else {
+        return false;
+    };
+
+    const QUIET: i32 = 4;
+    let modules = code.size() + 2 * QUIET;
+    // Integer scale only: a fractional one puts module edges between pixels,
+    // and a scanner reads the resulting ragged border as noise.
+    let scale = (box_px as i32 / modules).max(1);
+    let side = modules * scale;
+
+    // Centre whatever the integer scale actually produced inside the box.
+    let origin = Point::new(
+        at.x + (box_px as i32 - side) / 2,
+        at.y + (box_px as i32 - side) / 2,
+    );
+
+    let _ = Rectangle::new(origin, Size::new(side as u32, side as u32))
+        .into_styled(PrimitiveStyle::with_fill(PAPER))
+        .draw(frame);
+
+    for y in 0..code.size() {
+        for x in 0..code.size() {
+            if !code.get_module(x, y) {
+                continue;
+            }
+            let block = Rectangle::new(
+                Point::new(
+                    origin.x + (x + QUIET) * scale,
+                    origin.y + (y + QUIET) * scale,
+                ),
+                Size::new(scale as u32, scale as u32),
+            );
+            let _ = block.into_styled(PrimitiveStyle::with_fill(INK)).draw(frame);
+        }
+    }
+    true
+}
+
+/// The screen shown while the access point is up.
+///
+/// Two codes rather than one, because they answer different questions and a
+/// phone can only act on one of them at a time: the left joins the network, the
+/// right opens the page. Most phones will offer the page by themselves once
+/// joined — that is what the captive-portal redirect is for — but "most" is not
+/// "all", and the second code is what makes the difference recoverable without
+/// typing an IP address into a browser bar.
+pub fn join(frame: &mut Display7in5, j: &Join) {
+    let _ = frame.clear(PAPER);
+
+    let title = MonoTextStyle::new(&FONT_10X20, INK);
+    let body = MonoTextStyle::new(&FONT_9X15, INK);
+
+    let _ = Text::with_alignment(
+        "Wi-Fi is on",
+        Point::new(WIDTH as i32 / 2, 34),
+        title,
+        Alignment::Center,
+    )
+    .draw(frame);
+
+    // The two codes, side by side, each under its own heading.
+    const BOX: u32 = 240;
+    let top = 60;
+    let left = WIDTH as i32 / 4 - BOX as i32 / 2;
+    let right = 3 * WIDTH as i32 / 4 - BOX as i32 / 2;
+
+    // The `WIFI:` payload is a de-facto standard every current phone camera
+    // understands: type, name, password, in that order, semicolon-separated.
+    // `H:false` says the network is not hidden -- omitting it makes some
+    // Android builds refuse the code rather than assume.
+    let payload = wifi_payload(j);
+    let joined = qr(frame, &payload, Point::new(left, top), BOX);
+    let opened = qr(frame, &j.url, Point::new(right, top), BOX);
+
+    for (x, label, ok) in [
+        (WIDTH as i32 / 4, "1. join the network", joined),
+        (3 * WIDTH as i32 / 4, "2. open the page", opened),
+    ] {
+        let _ = Text::with_alignment(
+            if ok { label } else { "(code too long to draw)" },
+            Point::new(x, top + BOX as i32 + 22),
+            body,
+            Alignment::Center,
+        )
+        .draw(frame);
+    }
+
+    // The credentials in text as well as in the code. A camera that will not
+    // focus, a cracked lens, a code drawn too small -- all of them end with
+    // somebody typing, and a screen that only carries the QR leaves them
+    // nothing to type.
+    let mut line = Text64::new();
+    let _ = line.push_str("network  ");
+    let _ = line.push_str(&j.ssid);
+    let _ = line.push_str("    password  ");
+    let _ = line.push_str(&j.password);
+    let _ = Text::with_alignment(
+        &line,
+        Point::new(WIDTH as i32 / 2, top + BOX as i32 + 54),
+        body,
+        Alignment::Center,
+    )
+    .draw(frame);
+
+    let mut second = Text64::new();
+    let _ = second.push_str("then  ");
+    let _ = second.push_str(&j.url);
+    let _ = Text::with_alignment(
+        &second,
+        Point::new(WIDTH as i32 / 2, top + BOX as i32 + 76),
+        body,
+        Alignment::Center,
+    )
+    .draw(frame);
+
+    // The footer answers "is it still on, and is anyone on it".
+    let mut footer = Text64::new();
+    if j.stations > 0 {
+        let _ = write!(footer, "{} connected -- the window stays open", j.stations);
+    } else {
+        let _ = write!(footer, "closing in {} s -- hold BOOT again to close now", j.remaining_s);
+    }
+    let _ = Text::with_alignment(
+        &footer,
+        Point::new(WIDTH as i32 / 2, HEIGHT as i32 - 34),
+        body,
+        Alignment::Center,
+    )
+    .draw(frame);
+
+    if j.generated {
+        let _ = Text::with_alignment(
+            "this password is for this session only and has not been saved",
+            Point::new(WIDTH as i32 / 2, HEIGHT as i32 - 14),
+            body,
+            Alignment::Center,
+        )
+        .draw(frame);
+    }
+}
+
+/// The `WIFI:` payload, built in a fixed buffer.
+fn wifi_payload(j: &Join) -> heapless::String<160> {
+    let mut out = heapless::String::new();
+    let _ = out.push_str("WIFI:T:WPA;S:");
+    let _ = out.push_str(&j.ssid);
+    let _ = out.push_str(";P:");
+    let _ = out.push_str(&j.password);
+    let _ = out.push_str(";H:false;;");
+    out
 }

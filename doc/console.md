@@ -158,6 +158,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `clearstats` | discard the sensor's accumulated distance estimate and rebuild from the next strikes |
 | `srej [0-15]` | spike rejection. **`0` reports man-made impulses as lightning** — see below |
 | `wdth [0-15]` | watchdog threshold, aliased `watchdog`. Raising it discards the slow-rising distant arrivals this device exists to report |
+| `ap` | raise the access point and its web UI for 60 s. `ap off` drops it; `ap <ssid> <password>` stores credentials and raises with them |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the `NF_LEV` field it holds |
 | `defence <raw>` | set the tuning point by hand, 0–7. `0` is fully receptive |
@@ -412,3 +413,38 @@ The device writes every strike to `/lfs/strikes.csv` on its own filesystem
 whether or not anything is connected, so nothing is lost by disconnecting. `dump`
 after the fact gets the full record, and the charts survive a power cut because
 the rings are rebuilt from that file at boot.
+
+
+## The access point and the web UI
+
+**Hold BOOT for five seconds.** Two to five seconds flips indoor/outdoor gain;
+five or more raises a WPA2 access point and a web server, and the panel switches
+to a join screen carrying two QR codes — one for the network, one for the page.
+Another long press closes it, and so does sixty seconds with nobody connected.
+
+The page carries everything: the strike counts, the receiver's state, the board's
+own vitals, the recent-strike table, every setting that has a console command,
+and a CSV download of the whole log.
+
+**Every button on that page composes a console command line.** There is one
+command table, one parser and one set of range checks; the web UI is a second
+way of typing into them rather than a second implementation of them. That is why
+nothing on the page can do anything `help` does not list, and why a setting's
+valid range is the same in both places without either knowing about the other.
+
+A few consequences worth knowing:
+
+* **The password is generated once and not saved.** A device that has never had
+  one invents eight characters from an alphabet with no `0`/`O` or `1`/`l`/`I`,
+  shows them on the panel, and stores nothing. It will be different next time.
+  That is deliberate — a password nobody has read should not quietly become
+  permanent. `ap <ssid> <password>` stores a chosen pair.
+* **The network name is derived and stable**, `lightning-XXXXXX` from the last
+  three bytes of the MAC, so a QR code printed once keeps working.
+* **Light sleep is suspended while the portal is up.** It powers down the modem
+  between beacons, which drops an associated station mid-request. The window is
+  at most a minute, so this costs a minute of radio rather than a policy
+  exception.
+* **Handlers never touch the sensor.** They read a snapshot the main loop
+  publishes and queue a command line it runs — the console's state is written
+  for a single caller, and the I2C bus has no lock.
