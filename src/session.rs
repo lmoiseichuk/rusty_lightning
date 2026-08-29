@@ -567,7 +567,7 @@ impl Merger {
 
         let expired = match self.pending.as_ref() {
             None => false,
-            Some(pending) => now_ms.saturating_sub(pending.started_ms) >= self.window_ms,
+            Some(pending) => crate::uptime::due(now_ms, pending.started_ms, self.window_ms),
         };
 
         let flushed = if expired {
@@ -606,7 +606,7 @@ impl Merger {
     pub fn take_due(&mut self, now_ms: u32) -> Option<Merged> {
         let expired = match self.pending.as_ref() {
             None => false,
-            Some(pending) => now_ms.saturating_sub(pending.started_ms) >= self.window_ms,
+            Some(pending) => crate::uptime::due(now_ms, pending.started_ms, self.window_ms),
         };
         match expired {
             true => self.pending.take().map(Accumulator::finish),
@@ -946,7 +946,8 @@ pub fn reset_if_stuck_overhead(sensor: &As3935, i2c: &mut I2cDriver<'_>, totals:
         return;
     }
     let now_s = crate::now_ms() / 1000;
-    let since = now_s.saturating_sub(totals.overhead_reset_at_s);
+    // Wrap-correct, like every other interval here -- see `crate::uptime`.
+    let since = crate::uptime::since(now_s, totals.overhead_reset_at_s);
     if totals.overhead_reset_at_s != 0 && since < OVERHEAD_RESET_MIN_INTERVAL_S {
         return;
     }

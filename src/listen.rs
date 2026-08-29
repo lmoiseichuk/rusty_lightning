@@ -256,7 +256,7 @@ pub fn listen(
 
         // Wait only for what is left of the current window, so the batch closes
         // on time however many events arrive inside it.
-        let elapsed = now_ms().saturating_sub(batch_started);
+        let elapsed = crate::uptime::since(now_ms(), batch_started);
         let remaining = BATCH_MS.saturating_sub(elapsed).max(1);
         let woke = notification.wait(TickType::new_millis(remaining as u64).into());
 
@@ -280,7 +280,7 @@ pub fn listen(
                 // over in microseconds. Sampling after a short settle tells them
                 // apart with no state and no timer.
                 let held = boot::button_held(button);
-                let ready = now_ms().saturating_sub(last_button_ms) >= BUTTON_DEBOUNCE_MS;
+                let ready = crate::uptime::due(now_ms(), last_button_ms, BUTTON_DEBOUNCE_MS);
 
                 if held && ready {
                     last_button_ms = now_ms();
@@ -322,14 +322,14 @@ pub fn listen(
         }
 
         // Not yet at the end of the window -- go back and keep listening.
-        if now_ms().saturating_sub(batch_started) < BATCH_MS {
+        if !crate::uptime::due(now_ms(), batch_started, BATCH_MS) {
             continue;
         }
 
         // Plan B: look for events the interrupt line never announced. Before
         // `report`, so anything found is summarised in this batch rather than
         // the next one.
-        if now_ms().saturating_sub(last_irq_poll_ms) >= IRQ_RESCUE_INTERVAL_MS {
+        if crate::uptime::due(now_ms(), last_irq_poll_ms, IRQ_RESCUE_INTERVAL_MS) {
             last_irq_poll_ms = now_ms();
             session::poll(
                 sensor,
@@ -394,7 +394,7 @@ pub fn listen(
         // become a flash write every few seconds -- the trade being that a
         // power cut loses at most a minute. Safe on LittleFS specifically: an
         // unsynced write is lost, not corrupting.
-        if now_ms().saturating_sub(last_log_sync_ms) >= log::SYNC_INTERVAL_MS {
+        if crate::uptime::due(now_ms(), last_log_sync_ms, log::SYNC_INTERVAL_MS) {
             last_log_sync_ms = now_ms();
             if let Some(log) = strike_log.as_deref_mut() {
                 match log.sync() {
@@ -508,7 +508,7 @@ pub fn listen(
             // elapses while it is raining, `last_calibrate_ms` is deliberately
             // left alone so the sweep runs at the first quiet window afterwards
             // rather than waiting another six hours.
-            if now_ms().saturating_sub(last_calibrate_ms) >= AUTO_CALIBRATE_INTERVAL_S * 1000
+            if crate::uptime::due(now_ms(), last_calibrate_ms, AUTO_CALIBRATE_INTERVAL_S * 1000)
                 && storm_watch.weather_quiet()
             {
                 last_calibrate_ms = now_ms();

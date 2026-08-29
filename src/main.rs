@@ -26,6 +26,7 @@ mod strike;
 mod system;
 mod tuning;
 mod ui;
+mod uptime;
 mod csv;
 mod verdict;
 

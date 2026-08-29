@@ -131,7 +131,7 @@ impl Screen {
     /// whole refresh, so a second press during one is handled after it rather
     /// than queued on top of it.
     pub fn due(&self, want: &Drawn, now_ms: u32) -> Option<&'static str> {
-        let since_draw_s = now_ms.saturating_sub(self.last_draw_ms) / 1000;
+        let since_draw_s = crate::uptime::since(now_ms, self.last_draw_ms) / 1000;
         let changed = self.drawn.as_ref() != Some(want);
         let stale = since_draw_s >= REDRAW_BASELINE_S;
         let allowed = self.user_acted
@@ -193,7 +193,7 @@ impl Screen {
             Ok(0) => println!("epd:  *** sent, but BUSY never fell -- nothing was drawn ***"),
             Ok(busy_ms) => println!(
                 "epd:  redrawn ({why}) -- {} ms total, panel busy {} ms",
-                crate::now_ms().saturating_sub(started),
+                crate::uptime::since(crate::now_ms(), started),
                 busy_ms
             ),
             Err(e) => println!("epd:  draw FAILED -- {e}"),

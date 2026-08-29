@@ -213,7 +213,7 @@ impl Tuning {
     }
 
     pub fn due(&self, now_ms: u32) -> bool {
-        !self.frozen && now_ms.saturating_sub(self.window_started_ms) >= self.window_s() * 1000
+        !self.frozen && crate::uptime::due(now_ms, self.window_started_ms, self.window_s() * 1000)
     }
 
     /// Begin the window again from now, discarding what it had counted.
@@ -530,7 +530,7 @@ impl Tuning {
         if self.frozen || self.sweep.is_some() {
             return;
         }
-        if now_ms.saturating_sub(self.last_kick_ms) < STUCK_KICK_INTERVAL_S * 1000 {
+        if !crate::uptime::due(now_ms, self.last_kick_ms, STUCK_KICK_INTERVAL_S * 1000) {
             return;
         }
         self.last_kick_ms = now_ms;
@@ -595,7 +595,7 @@ impl Tuning {
 
     /// Whether it is time to stop defending and listen.
     fn dip_due(&self, now_ms: u32) -> bool {
-        now_ms.saturating_sub(self.last_dip_ms) >= DIP_INTERVAL_S * 1000
+        crate::uptime::due(now_ms, self.last_dip_ms, DIP_INTERVAL_S * 1000)
     }
 
     /// Drop to fully open for one window, remembering where to come back to.
@@ -677,7 +677,7 @@ impl Tuning {
             return;
         }
         let now_s = now_ms / 1000;
-        if self.point == self.stored || now_s.saturating_sub(self.last_save_s) < DEFENCE_SAVE_S {
+        if self.point == self.stored || !crate::uptime::due(now_s, self.last_save_s, DEFENCE_SAVE_S) {
             return;
         }
         self.last_save_s = now_s;

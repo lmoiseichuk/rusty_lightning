@@ -543,7 +543,7 @@ impl Trend {
     pub fn observe(&mut self, millivolts: u16, now_s: u32) {
         self.latest_mv = millivolts;
         self.latest_s = now_s;
-        if now_s.saturating_sub(self.anchor_s) >= TREND_WINDOW_S {
+        if crate::uptime::due(now_s, self.anchor_s, TREND_WINDOW_S) {
             self.anchor_mv = millivolts;
             self.anchor_s = now_s;
         }
@@ -665,7 +665,7 @@ impl Fuel {
     }
 
     pub fn due(&self, now_ms: u32) -> bool {
-        now_ms.saturating_sub(self.last_poll_ms) >= GAUGE_POLL_S * 1000
+        crate::uptime::due(now_ms, self.last_poll_ms, GAUGE_POLL_S * 1000)
     }
 
     /// Take a reading and fold it into the trend and the discharge baseline.
@@ -699,7 +699,7 @@ impl Fuel {
         match self.previous_mv {
             None => self.previous_mv = Some(reading.millivolts),
             Some(previous) => {
-                let elapsed = now_s.saturating_sub(self.last_drain_s);
+                let elapsed = crate::uptime::since(now_s, self.last_drain_s);
                 let (next, reset) = drained(self.drain, previous, reading.millivolts, elapsed);
                 self.previous_mv = Some(reading.millivolts);
                 self.last_drain_s = now_s;
@@ -715,7 +715,7 @@ impl Fuel {
                         println!("bat:  baseline reset but NOT saved -- {e}");
                     }
                     self.last_drain_save_s = now_s;
-                } else if now_s.saturating_sub(self.last_drain_save_s) >= DRAIN_SAVE_S {
+                } else if crate::uptime::due(now_s, self.last_drain_save_s, DRAIN_SAVE_S) {
                     self.last_drain_save_s = now_s;
                     if let Err(e) = crate::settings::store_battery_drain(self.drain) {
                         println!("bat:  baseline NOT saved -- {e}");
