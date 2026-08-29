@@ -408,7 +408,14 @@ pub fn listen(
         // Re-save the clock periodically, so a power cut costs only the time the
         // device spent off rather than everything since it was last told.
         if let Some(epoch) = clock::now() {
-            if now_ms() / 1000 - last_clock_save_s >= clock::SAVE_INTERVAL_S {
+            // **`uptime::due`, not a bare subtraction.** This was the last
+            // interval in the firmware still written as `a - b`, and it is a
+            // plain `u32` subtraction rather than a saturating one: across the
+            // 49.7-day wrap it underflows, which panics in a debug build --
+            // inside the wake loop, where this module's own rule is that
+            // nothing may panic -- and in release wraps to a huge number that
+            // reads as due, spending one unasked-for NVS write.
+            if crate::uptime::due(now_ms() / 1000, last_clock_save_s, clock::SAVE_INTERVAL_S) {
                 last_clock_save_s = now_ms() / 1000;
                 if let Err(e) = clock::save(epoch) {
                     println!("time: periodic save failed -- {e}");

@@ -196,6 +196,35 @@ fn main() {
     check("week buckets are 60 min, as the axis assumes", MEDIUM_MINUTES == 60);
     check("month buckets are 6 h, as the axis assumes", COARSE_MINUTES == 6 * 60);
 
+    println!("\n  energy and intensity invert each other");
+    // The `strike` console command inverts `intensity_milli` to build a
+    // synthetic strike. The naive expression overflows u32 above 256_003, and
+    // the console parses an unbounded u32 -- a debug panic inside the wake
+    // loop, or silent garbage in release.
+    check(
+        "the ceiling is what a 20-bit field can hold",
+        strike::INTENSITY_MILLI_MAX == strike::ENERGY_RAW_MAX * 1000 / 16777,
+    );
+    check(
+        "the value that used to overflow is clamped, not wrapped",
+        strike::energy_for_intensity(300_000)
+            == strike::energy_for_intensity(strike::INTENSITY_MILLI_MAX),
+    );
+    check(
+        "u32::MAX in is still a representable energy out",
+        strike::energy_for_intensity(u32::MAX) <= strike::ENERGY_RAW_MAX,
+    );
+    // Walk the representable range: no input may produce an energy the chip
+    // could not have reported, and none may wrap.
+    let mut sane = true;
+    for milli in (0..=strike::INTENSITY_MILLI_MAX).step_by(97) {
+        if strike::energy_for_intensity(milli) > strike::ENERGY_RAW_MAX {
+            sane = false;
+            break;
+        }
+    }
+    check("every intensity maps inside the field", sane);
+
     println!(
         "\n{} passed, {} failed",
         PASS.load(Ordering::Relaxed),

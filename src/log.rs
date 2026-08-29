@@ -292,16 +292,17 @@ impl Log {
     }
 
     pub fn append_event(&mut self, epoch: u64, millis: u32, nf: u8, kind: Kind) {
-        match self.event_budget {
-            0 => return,
-            1 => {
-                self.event_budget = 0;
-                println!("log:  event budget spent -- disturbers and noise are no longer logged");
-                println!("log:  `events <rows>` arms another window; `dump` to read what was caught");
-                return;
-            }
-            budget => self.event_budget = budget - 1,
+        // **The last row is written, not spent announcing itself.** This used
+        // to `return` on a budget of 1 after printing the exhaustion notice,
+        // so `events 10` logged nine and `events 1` logged nothing at all --
+        // an off-by-one that quietly understated every armed measurement by one
+        // at its tail, which is the end of the window a measurement cares most
+        // about. Decrement, append, and announce when the budget reaches zero.
+        if self.event_budget == 0 {
+            return;
         }
+        self.event_budget -= 1;
+        let exhausted = self.event_budget == 0;
 
         let mut line = String::with_capacity(64);
         let iso = match epoch {
@@ -310,6 +311,13 @@ impl Log {
         };
         let _ = write!(line, "{epoch},{millis},{},{nf},{iso},,,,,0,0", kind.as_str());
         self.pending.push(line);
+
+        // Announced after the row is queued, so the notice and the file agree
+        // about how many were caught.
+        if exhausted {
+            println!("log:  event budget spent -- disturbers and noise are no longer logged");
+            println!("log:  `events <rows>` arms another window; `dump` to read what was caught");
+        }
     }
 
     pub fn append(&mut self, epoch: u64, millis: u32, nf: u8, strike: &Strike, simulated: bool, strokes: u32) {
@@ -404,7 +412,6 @@ impl Log {
     }
 
     /// Erase the log and start again.
-    #[allow(dead_code)]
     pub fn clear(&mut self) -> Result<(), std::io::Error> {
         self.pending.clear();
         std::fs::remove_file(PATH)?;

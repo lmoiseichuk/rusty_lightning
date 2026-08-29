@@ -61,3 +61,33 @@ impl Strike {
         self.energy_raw * 1000 / 16777
     }
 }
+
+/// The largest value the chip's energy field can hold: 20 bits.
+///
+/// Named because two places need it and they used to state it separately —
+/// `intensity_milli` in a comment, and the `strike` console command not at all.
+pub const ENERGY_RAW_MAX: u32 = 0xF_FFFF;
+
+/// The largest intensity a real strike can carry, in thousandths.
+///
+/// Anything above this describes an energy the 20-bit field cannot represent,
+/// so it is not a stronger strike — it is not a strike.
+pub const INTENSITY_MILLI_MAX: u32 = ENERGY_RAW_MAX * 1000 / 16777;
+
+/// Invert [`Strike::intensity_milli`]: the raw energy that would produce it.
+///
+/// **Clamped, and this is the whole point of the function.** The obvious
+/// expression, `milli * 16777 / 1000`, overflows `u32` above 256_003 — and the
+/// console's `strike` command parses an unbounded `u32`, so a typo reached it.
+/// In a debug build that panics inside the wake loop, where `listen`'s rule is
+/// that nothing may panic; in release it wraps silently and feeds a garbage
+/// energy into the rings, the score and the CSV, where it is indistinguishable
+/// from a real reading.
+///
+/// Clamping rather than widening to `u64`: `u64` would compute a number
+/// faithfully, but a faithful answer to "how much energy is 300 000 milli" is
+/// still an energy no strike can have. The ceiling is the physical one.
+pub fn energy_for_intensity(intensity_milli: u32) -> u32 {
+    let clamped = intensity_milli.min(INTENSITY_MILLI_MAX);
+    clamped * 16777 / 1000
+}

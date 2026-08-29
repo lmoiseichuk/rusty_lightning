@@ -9,7 +9,7 @@
 //!
 //! ## Why `saturating_sub` is the wrong tool, and how it fails
 //!
-//! Every interval in this firmware is `now.saturating_sub(then) >= interval`.
+//! Every interval in this firmware **was** `now.saturating_sub(then) >= interval`.
 //! That reads as defensive and is the opposite. After the wrap, `then` is a
 //! large number near 2³² and `now` is small, so the subtraction goes negative,
 //! **saturates to zero, and stays there** — not for one tick, but until `now`
@@ -20,6 +20,21 @@
 //! log never syncs. The interrupt still fires and the device still answers its
 //! console, so it looks alive while doing nothing at all. That is the worst
 //! shape a failure can have.
+//!
+//! ## The same mistake also fails the other way
+//!
+//! `power::decide` compared a console timestamp this way, and there the frozen
+//! zero reads as *"somebody is typing right now"* — so the device holds the
+//! awake policy instead of the frugal one and never sleeps again: 0.170 W
+//! against 0.0127 W, thirty days of battery spent in two and a half. It is the
+//! same arithmetic and the opposite symptom, which is the argument for fixing
+//! it here once rather than judging each call site on what its failure looks
+//! like. `tests/host/policy.rs` covers it.
+//!
+//! **Every interval site now uses [`since`] or [`due`].** The remaining
+//! `saturating_sub` calls in the firmware are magnitudes — millivolts, bytes,
+//! slice lengths — where saturation at zero is the wanted answer and no counter
+//! wraps underneath them.
 //!
 //! ## Why not a wider counter
 //!

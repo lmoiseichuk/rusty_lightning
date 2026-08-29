@@ -554,8 +554,18 @@ impl Trend {
         self.latest_mv as i32 - self.anchor_mv as i32
     }
 
+    /// How long the trend window has been accumulating.
+    ///
+    /// **`uptime::since`, not `saturating_sub`.** Both fields come from the
+    /// uptime counter, which wraps every 49.7 days, and across the wrap
+    /// `latest_s` is small while `anchor_s` is near the top — so a saturating
+    /// subtraction reports a zero-length span. `verdict` refuses to judge a
+    /// span shorter than the window, so the battery trend would read `Unknown`
+    /// until the anchor next rolled. Milder than the same mistake in `policy`,
+    /// because it heals itself, but the same mistake: `roll` on the line above
+    /// already uses wrapping arithmetic and this did not.
     pub fn span_s(&self) -> u32 {
-        self.latest_s.saturating_sub(self.anchor_s)
+        crate::uptime::since(self.latest_s, self.anchor_s)
     }
 
     /// What the voltage alone says.

@@ -150,8 +150,8 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 distance: Distance::Km(km),
                 // Invert `intensity_milli` so the synthetic strike carries a
                 // plausible raw energy rather than a magic number -- the same
-                // arithmetic a real one would have.
-                energy_raw: intensity_milli * 16777 / 1000,
+                // arithmetic a real one would have, including its ceiling.
+                energy_raw: crate::strike::energy_for_intensity(intensity_milli),
             };
             session::record_strike(
                 ctx.totals,

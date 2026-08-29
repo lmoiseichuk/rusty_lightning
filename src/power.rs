@@ -15,25 +15,10 @@
 
 use esp_idf_hal::sys::{self, EspError};
 
-/// What the device is doing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Policy {
-    /// Awake and fast: the console and the flasher both work. Held for the
-    /// grace period after boot, and whenever somebody is using the console.
-    Awake,
-    /// 80 MHz ceiling, 10 MHz floor, light sleep on. WiFi still works here —
-    /// 80 is its floor — so a radio window needs no separate policy.
-    Frugal,
-}
-
-impl Policy {
-    pub fn label(self) -> &'static str {
-        match self {
-            Policy::Awake => "awake",
-            Policy::Frugal => "frugal",
-        }
-    }
-}
+// The policy *decision* lives in `policy`, which is free of ESP-IDF so it can
+// be host-tested; re-exported so callers still say `power::decide` and
+// `power::Policy`. This module keeps what needs the registers.
+pub use crate::policy::{decide, Policy};
 
 /// Apply the policy for a supply.
 ///
@@ -130,35 +115,4 @@ pub fn config() -> Option<(u32, u32, bool)> {
         config.min_freq_mhz as u32,
         config.light_sleep_enable,
     ))
-}
-
-
-/// How long after boot the awake policy is held, whatever else is true.
-///
-/// This is the escape hatch, not a nicety — see §7. Long enough to flash, and
-/// always one power cycle away.
-pub const GRACE_S: u32 = 5 * 60;
-
-/// How long console activity keeps the device awake.
-///
-/// Somebody typing is the clearest signal that the console matters right now —
-/// it is about a person rather than a cable. Long enough to read a CSV dump or
-/// set the clock without the port dying mid-sentence.
-pub const CONSOLE_AWAKE_S: u32 = 10 * 60;
-
-/// Which policy to run.
-///
-/// No supply detection: see the module comment for the three schemes that were
-/// tried and why each failed. What is left is about what a person is doing.
-pub fn decide(uptime_s: u32, last_console_s: Option<u32>) -> Policy {
-    if cfg!(feature = "no-light-sleep") {
-        return Policy::Awake;
-    }
-    if uptime_s < GRACE_S {
-        return Policy::Awake;
-    }
-    match last_console_s {
-        Some(seen) if uptime_s.saturating_sub(seen) < CONSOLE_AWAKE_S => Policy::Awake,
-        _ => Policy::Frugal,
-    }
 }

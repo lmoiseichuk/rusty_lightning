@@ -1,10 +1,12 @@
 ## How to read this
 
-This is working state for the analysis pass of **2026-08-28** — gitignored, never
-committed. Each finding has an ID, a status, a location and an effort guess
-(S = small, M = medium, L = large). Fold re-analysis into the tables; a finding
-lives in exactly one table, so re-verifying it means editing its row, not
-appending a note elsewhere.
+This is working state for the analysis passes of **2026-08-28** (the second pass of
+that date put the shell tooling in scope) — gitignored, never committed. Each
+finding has an ID, a status, a location and an effort guess (S = small, M =
+medium, L = large). Fold re-analysis into the tables; a finding lives in exactly
+one table, so re-verifying it means editing its row, not appending a note
+elsewhere. The tooling (`tools/`, `*.sh`, `build.rs`, `.cargo/`) is analysed on
+the same footing as `src/` — findings there carry `L-T` IDs.
 
 The older narrative entries (clock skew, the disturber tuner) are preserved
 below their own headings, resolved and marked as such.
@@ -83,6 +85,67 @@ below their own headings, resolved and marked as such.
 |---|---|
 | L-N1 | **A merged flash mixing `Overhead` with kilometre readings reports the average of the kilometre ones and discards the sentinel.** `merger::Accumulator::finish` uses `overhead` only when there were no kilometre samples. Since "overhead" means *nearer than 5 km*, a flash containing one is arguably nearer than the average suggests, and the device reports the further of the two. Self-consistent and documented, so recorded rather than changed — altering it moves every mixed record and that is a decision. `tests/host/merger.rs` pins the current contract either way. |
 
+## Second pass — re-read the post-fix tree **and the tools**, 2026-08-28
+
+A follow-up pass after the 0.13.x fixes, and the first that put the shell tooling in
+scope. It verified every sweep verdict against the clean tree at `a40abd8e5f87`
+(all CONFIRMED), and turned up new items. This is the same "one home per finding"
+rule: new IDs, folded here, not re-raised elsewhere.
+
+### Code — new
+
+| ID | What | Where | Effort |
+|---|---|---|---|
+| L-P1 | **[FIXED — reproduced first] `power.rs:161` misses the wrap the L-B1 sweep fixed everywhere else — a device nobody uses wedges permanently Awake after 49.7 days.** `Some(seen) if uptime_s.saturating_sub(seen) < CONSOLE_AWAKE_S => Policy::Awake`. After the u32-seconds wrap, `uptime_s` is small and `seen` (pre-wrap) is near 2³², so the subtraction saturates to 0 forever → Policy::Awake for the rest of the wrap cycle: 160 MHz, no light sleep, ~0.170 W vs ~0.013 W (`power.rs:7-9`). The *opposite* symptom of the L-B1 freeze, at a site the sweep missed. Fix: `uptime::since`-style wrapping subtraction.** | `src/power.rs:161` | S |
+| L-P2 | **[OPEN] `press.rs` is a whole host-tested subsystem with zero firmware callers — the documented stuck-DTR protection is not shipped.** `Press::sample`/`classify`/`Gesture` run only in `tests/host/press.rs`; the runtime button path is `listen.rs:266-305` + `boot.rs:256-266`, implementing only a 1.5 s floor vs a 2 s ceiling. The module's own doc ("anything past the ceiling is a cable… refused and reported") is not true in the firmware.** Decide deliberately: wire it into the listen button path, or delete it and correct the claim.** | `src/press.rs`, `src/listen.rs:266`, `src/boot.rs:256` | L |
+| L-P3 | **[OPEN] `csv.rs` does not parse the `strokes` column it writes.** `Columns` (`csv.rs:28`) has no strokes member; `parse_row` (`csv.rs:76`) returns only epoch/energy/distance; the boot replay hardcodes `strokes: 1` (`listen.rs:161-167`) with a comment saying it's "not recoverable from the columns" — but the header and writer carry `strokes` as the 11th column (`log.rs:57,355`). Replayed storms undercount stroke counts on the per-strike table (`ui.rs:831-844`), and the comment misleads a future reader.** | `src/csv.rs:28,76`, `src/listen.rs:161`, `src/log.rs:57` | M |
+| L-P4 | **[FIXED] `log.rs` `events 1` budgets are effectively N−1: the event that spends the last row is reduced to 0 and returned without appending.** `src/log.rs:294-304` — the off-by-one understates every armed "how many did I catch" total by one at its tail.** | `src/log.rs:294-304` | S |
+| L-P5 | **[FIXED] `commands.rs:154` `strike` intensity overflows u32.** `energy_raw: intensity_milli * 16777 / 1000` overflows above ~255,934 (`console.rs:348-351` accepts any u32, default 4000). Debug: panic inside the wake loop — a hard reboot, violating `listen.rs`'s "nothing here may panic". Release: silently wraps and feeds garbage into the rings/score/CSV. Real ceiling ~62,500 (2²⁰−1 energy). Fix: u64 intermediate or clamp.** | `src/commands.rs:154` | S |
+| L-P6 | **[OPEN — behaviour, defensible] `defence <raw>` silently overrides a frozen `sensitive on` override.** `tuning.rs:786-802` `place()` programs the chip to the new point and moves the tuner's idea of it while frozen, contradicting the console's own "auto-tune frozen" claim; the next `sensitive off` discards it. Should be announced as an explicit operator override.** | `src/tuning.rs:786`, `src/commands.rs:249` | S |
+| L-P7 | **[FIXED] `log.rs:407` `#[allow(dead_code)]` on `clear()` is stale** — still reached via `Command::Clear`. The allow would mask a future removal.** | `src/log.rs:407` | S |
+| L-P8 | **[OPEN] The noise caption and the JAMMED warning still freeze during `sensitive on` — the second half of the original L-B3 never shipped.** While frozen, `tuning.due()` is false, so `listen.rs:484` skips `tuning.step`, and `totals.noise_per_min` is written only there; `sensitive on` before the first ~60 s step leaves `0/min` (Totals derives Default) and the JAMMED test (`NOISE_JAMMED_PER_MIN=60`) can never trip. L-B3's verdict claimed only the *gauge*; the caption/warning half is open.** | `src/listen.rs:484`, `src/tuning.rs:248`, `src/ui.rs:259` | M |
+
+### Code — raised during the verification pass, 2026-08-28
+
+Found while grounding L-D12 by listing every remaining `saturating_sub`. Neither
+pass raised them; both are the same class as L-P1.
+
+| ID | What | Where | Effort |
+|---|---|---|---|
+| L-P9 | **[FIXED] `battery.rs` `span_s()` had L-P1's bug in a milder form.** `latest_s.saturating_sub(anchor_s)`, both from the wrapping uptime counter, so across the wrap the trend window reports a zero-length span and `verdict()` — which refuses to judge a span shorter than the window — returns `Unknown`. The battery rate display goes blank until the anchor next rolls, so it heals itself, unlike L-P1. Notable because `roll()` on the line above *already* used `uptime::due`: the wrap sweep fixed the loop condition and left the accessor. | `src/battery.rs:558` | S |
+| L-P10 | **[FIXED] `listen.rs:411` was the last bare `a - b` interval in the firmware** — not even saturating. `now_ms() / 1000 - last_clock_save_s >= SAVE_INTERVAL_S` underflows across the wrap: a debug build panics **inside the wake loop**, where this module's own rule is that nothing may panic, and a release build wraps to a huge number that reads as due and spends one unasked-for NVS write. Now `uptime::due`. | `src/listen.rs:411` | S |
+
+### Tools — new (in scope this pass)
+
+| ID | What | Where | Effort |
+|---|---|---|---|
+| L-T1 | **[OPEN] `recover.sh`'s explicit-port guard only matches `/dev/serial/by-id/*`.** A bare `/dev/ttyACM0` or any other non-by-id path sails straight into the whole-chip `esptool erase-flash` (line 147) with zero identity check, despite the comment (77-78) claiming "being explicit is not the same as being right". On a host where ttyACM numbering shuffles, this erases the wrong board's log. Require a by-id path matching the MAC, or verify `esptool chip-id` first.** | `tools/recover.sh:77-82,147` | M |
+| L-T2 | **[OPEN] `recover.sh` flashes whatever is in `target/` with no check it is the recovery build — and the natural sequence makes it fatal.** The header's "build the no-light-sleep image first" advice (`recover.sh:91-92`) is unenforced; `flash.sh` builds the default light-sleep ELF into `target/` before flashing, so a failed flash leaves `target/` holding exactly the light-sleep binary that broke the console, and `recover.sh` writes it back. Write `release/no-light-sleep/` artifacts, or build `--features no-light-sleep` as step 1, or refuse unless the ELF is the recovery build.** | `tools/recover.sh:86,158` | M |
+| L-T3 | **[OPEN] `recover.sh`'s write path is text-gated, not exit-code-gated — asymmetric with its own erase path.** Success is `grep -q 'Flashing has completed'` on captured text (line 163) with the espflash exit status discarded (line 158); the erase path (`:147`) is `if !`-gated. If the espflash wording changes, a *successful* write is reported failed, the loop erases the just-written flash again, and after 8 attempts reports FAILED on a recovered board. Gate on exit status; keep the grep as display.** | `tools/recover.sh:158,163` | S |
+| L-T4 | **[OPEN] `release.sh`'s `SOURCES` omits two tracked files that change the produced binary.** `.cargo/config.toml` (pins ESP_IDF_VERSION, partitions.csv delivery, `espidf_time64` rustflag, MCU) and `components_esp32c3.lock` (pins joltwallet/littlefs 1.22.3 under a floating `^1.14` in Cargo.toml). Because the dirty guard and the release/flash.sh staleness check both consume `SOURCES`, a change to either passes the guard and gets an image stamped with a commit that does not contain it. Same class as the just-fixed untracked-files bug.** | `tools/release.sh:35` | M |
+| L-T5 | **[OPEN] `flash.sh` (both root and release) lets an explicit `/dev/ttyACM<n>` bypass the by-id MAC check.** The guard only runs in the by-id default branch; `flash.sh`'s own usage advertises `./flash.sh /dev/ttyACM1`. The board-identity guarantee the repo's release script engineered around is silently dropped on the explicit path.** | `flash.sh:61-73`, `release/flash.sh:34,54-68` | M |
+| L-T6 | **[OPEN] `watch.py` raw-crashes on bad input and on the common port error.** `int(sys.argv[2])` raises an unhandled ValueError for non-numeric input (`watch.py:21`), and `s.open()` sits *outside* the try (`watch.py:29`), so the most common runtime error (port missing/busy) produces a raw traceback instead of the script's "port dropped" message. Wrap arg parsing and include `open()` in the try.** | `tools/watch.py:21,29` | S |
+| L-T7 | **[OPEN] `build.rs` PBM parser panics with unhelpful slice messages on malformed assets.** `assert_eq!(&raw[..2], b"P4", …)` (line 82) panics with "range end index 2" on an empty/1-byte file instead of the friendly not-a-PBM message; a CRLF-terminated header (line 108-114) leaves `\n` as the first payload byte and fails the length assert with a misleading message. Use `raw.starts_with(b"P4")`, and treat `\r\n` as one separator.** | `build.rs:82,108-114` | S |
+| L-T8 | **[OPEN] `flash.sh`'s usage line claims "build + flash + monitor" but it never monitors** — it stops and prints "Monitor with: espflash monitor". Stale leftover from the pre-runner `--monitor` era.** | `flash.sh:5,113-114` | S |
+
+### Doc drift — new
+
+| ID | What | Where | Effort |
+|---|---|---|---|
+| L-D9 | **[OPEN] The "every rejection knob wide open" over-promise L-N2 corrected in `session.rs`/`effects.rs` status lines was **not** carried to every operator surface.** On-device help `console.rs:395`, `doc/console.md:165`, and `doc/console.md:376` still say `sensitive on` "opens every knob" — but `Point::OPEN` is `NF_LEV=0` alone; `WDTH`, `SREJ` and `MIN_NUM_LIGH` keep their settings. An operator told the override opens everything is misled. Same class as the L-D sweep; these three were missed. (`console.md:372` also says the tuner "starts mid-range on the two volume knobs (NF_LEV, WDTH)" — stale.)** | `src/console.rs:395`, `doc/console.md:165,372,376` | S |
+| L-D10 | **[OPEN] `defence.rs` method docs still describe the dead 4-register space** after the L-D1/L-D6 header sweep fixed only the module header. `tightened()` (`defence.rs:347-364`) describes the cheapest-first walk across NF_LEV/WDTH/MIN_NUM_LIGH and "climbing off `wd 7`"; `relaxed()` (`defence.rs:377-392`) says "settled at 448 (`wd 7, sr 0, ms 0`)" and "447 = `wd 6, sr 15, ms 3`"; `percent()` (`defence.rs:406-423`) gives "the same point now reads 25%" and "MIN_NUM_LIGH overrides everything". The implementation is one 3-bit `NF_LEV`, raw+1/raw−1, `100·nf/7`, monotonic. A reader will confidently diagnose states that cannot exist.** | `src/defence.rs:347-423` | M |
+| L-D11 | **[OPEN] `tuning.rs` prose still carries the old 13-notch ladder.** `climb()`'s doc (`tuning.rs:429-443`) says "40 notches against a ladder exactly 40 notches deep" (the ladder is 8; behavior is right — `notches` caps at MAX — only the numbers are stale); `hold()` (`tuning.rs:407-414`) says "each notch of MIN_NUM_LIGH hides the following strikes" (pinned at 1; only NF_LEV is walked).** | `src/tuning.rs:407-443` | S |
+| L-D12 | **[FIXED] `uptime.rs:10-12` doctrine line is now false.** "Every interval in this firmware is `now.saturating_sub(then)`" — everything moved to `due`/`since` and this site (`listen.rs:411`, `power.rs:161`, `battery.rs:558`) disproves it.** | `src/uptime.rs:10-12` | S |
+| L-D13 | **[OPEN] `press.rs` constant comments moved with the constants but not the words.** `ACCEPT_MS` doc (`press.rs:43-46`) says "the long gesture at ten" (LONG_MS is 5_000, `press.rs:61`); `STUCK_MS` (`press.rs:65-67`) says "ten seconds of slack over LONG_MS" (actual slack 25 s).** | `src/press.rs:43-67` | S |
+| L-D14 | **[OPEN] `specs.md:1176-1178` says "`tools/check.sh` prints" the check count, but the script prints none on success** (only FAIL lines and "all checks passed"). Minor, and the count now changes with every test added.** | `doc/specs.md:1176-1178` | S |
+
+### Corrections to my own first-pass estimates (from the owner's 0.13.x sweep, confirmed)
+
+- **L-D3 — my ~90 B/record was high.** The measured strike row is **74 B**, event row 57 B → the 2,031,616 B partition holds **~27 000 strikes**, not my ~22-23k. The owner's numbers are right.
+- **L-G5 — I over-reached on `restore()`.** It is genuinely policy (prefer RTC, else NVS if `>= PLAUSIBLE_EPOCH`), not arithmetic worth a seam. `civil.rs` covers the real calendar math. Agreed, declined as I proposed.
+- **L-G4 — the merger host test "corrected my own assumption rather than the code"**, and L-N1 (the Overhead-vs-kilometre average) is real and recorded. Agreed.
+- **L-D6/L-N2 — `force_max_sensitivity` sets only `NF_LEV=0`; "every knob at zero" was an over-promise** in the code doc too. This pass found the operator-facing leftover (L-D9).
+
 ## Closed
 
 | ID | What | Closed by |
@@ -127,12 +190,17 @@ No entries from this pass. (The earlier *verbal* `FINE_MINUTES` 5-vs-15 confusio
 
 ## Suggested order
 
-1. **L-B1** (49.7-day freeze — real runtime bug on any long deployment) and **L-B4** (storm-time data loss on a full FS) first — both are correctness, under S/M effort.
-2. **L-B2** (day-axis) — pure constant fix plus an honest host test tying `bucket_minutes()` to `FINE_MINUTES`.
-3. **L-G1** and **L-G2** (recover.sh infinite loop, release.sh untracked-files hole) — tooling, cheap.
-4. **L-B3** (sensitive-on gauge) — panel honesty; has the console vocabulary to copy.
-5. **L-G4 / L-G5** (merge clock, verdict) — extract and host-test, the highest-leverage test additions.
-6. **L-D1** through **L-D8** — a single doc sweep updating the 7-bit→3-bit world, the 15-min→5-min buckets, capacity, and the stale comments.
+The whole first pass (L-B1..L-B4, L-G1..L-G9, L-D1..L-D8) is **fixed** as of 0.13.x.
+Working order for the second pass's findings:
+
+1. **L-P1** (power.rs wrap — a real field-power bug that silently disables light sleep after ~50 days) — one-line `uptime::since` fix, hot path.
+2. **L-T1, L-T5, L-T3** (recover.sh by-id bypass, flash.sh by-id bypass, recover.sh text-gated write) — destructive-path guardrails, cheap.
+3. **L-T4** (release.sh SOURCES omission — same class as the untracked-files bug, tracked-but-unlisted build inputs).
+4. **L-P3** (strokes column unparsed — replayed storms undercount the per-strike table) — M.
+5. **L-P2** (press.rs dead subsystem) — deliberate decision: wire in or delete.
+6. **L-P8** (noise caption/JAMMED freeze during `sensitive on`) — the unfinished half of L-B3.
+7. **L-P5, L-P6, L-P4, L-P7** (intensity overflow, defence-while-frozen, log N−1 tail, stale allow) — small correctness/behaviour items.
+8. **L-D9..L-D14, L-T2, L-T6, L-T7, L-T8** — doc drift and tooling cosmetics in one sweep.
 
 ---
 
@@ -234,3 +302,26 @@ Two things the sweep turned up that were not in the findings:
 
 * **`force_max_sensitivity` over-promised.** Its doc said "every rejection knob at zero"; `Point::OPEN` sets `NF_LEV = 0` and leaves `WDTH`, `SREJ` and `MIN_NUM_LIGH` at their stored settings. Documented as it is rather than changed — opening the others is what `srej 0` and `wdth 0` are for, and widening `sensitive on` silently would be a behaviour change hiding in a doc fix. **Raised as L-N2.**
 * **`wdth` had no row in `console.md`'s command table** though the console has accepted it, aliased `watchdog`, for some time. Added.
+
+## Verification pass, 2026-08-28 — grounds before fixes
+
+The owner asked for strong grounds before acting on the second pass. Every one of
+its 22 findings was re-checked against the source independently rather than taken
+on report. **All 22 confirmed**; two were sharpened and two more were found.
+
+| Finding | Ground |
+|---|---|
+| L-P1 | **Reproduced, not argued.** `power::decide` extracted to a pure `src/policy.rs`, and `tests/host/policy.rs` written against the unchanged logic first: it failed 3 of 12 — Awake an hour, a day and a week past the wrap. The fix turns those green. Traced the caller to confirm the wrap is real: `power::decide(now_ms() / 1000, …)` and `now_ms()` is a u32 millisecond counter, so `uptime_s` wraps at 49.7 days. |
+| L-P5 | Threshold computed exactly: overflow above **256 003**, not ~255 934. The console parses an unbounded `u32` (`console.rs:349`). Fixed by clamping to the physical ceiling — a 20-bit energy field, 62 500 milli — rather than widening to `u64`, because a faithful `u64` answer is still an energy no strike can have. |
+| L-P7 | Proved by removing the `#[allow(dead_code)]` and rebuilding: no warning appeared, so `clear()` is live via `Command::Clear`. |
+| L-P4 | Read the arm: budget 1 prints the notice and returns **before** appending, so `events 1` logs nothing and `events N` logs N−1. |
+| L-P3, L-P6, L-P8 | Confirmed at the named lines. L-P8's mechanism verified end to end: `due()` is `!self.frozen && …`, `noise_per_min` is written only inside `step`, and the screen reads it at `screen.rs:181` → `ui.rs:259,285`. |
+| L-T1 | Confirmed and it is the dangerous one. The guard is `[[ "$PORT" == /dev/serial/by-id/* && "$PORT" != *"$BOARD_MAC"* ]]` — **both** must hold to refuse, so a bare `/dev/ttyACM0` fails the first and proceeds to `esptool erase-flash`. The comment directly above claims the opposite. |
+| L-T2 | Confirmed the fatal sequence: `flash.sh:77` runs a bare `cargo build --release` into the same `target/…/release` that `recover.sh:86` reads, so a failed flash leaves exactly the light-sleep binary that broke the console, and recover writes it back. |
+| L-T3, L-T5, L-T6, L-T7, L-T8 | Confirmed at the named lines. |
+| L-T4 | Confirmed both omissions matter: `.cargo/config.toml` pins `ESP_IDF_VERSION`, the `espidf_time64` rustflag, the MCU and the partitions.csv delivery globs; `components_esp32c3.lock` pins littlefs by hash. Both tracked, neither in `SOURCES`. |
+| L-D9..L-D11, L-D13 | Confirmed. L-D9, L-D10 and L-D11 are **misses in the 0.13.6 sweep** — it fixed module headers and one method each, leaving the rest. |
+| L-D14 | Confirmed, and it is a **regression introduced by the 0.13.6 sweep**: `check.sh` prints per-file counts and no total. |
+
+Corrections to the second pass's own figures: L-P5's overflow threshold is 256 003,
+not ~255 934. Everything else it reported was accurate.
