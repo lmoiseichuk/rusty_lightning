@@ -60,10 +60,24 @@ for row in "${VARIANTS[@]}"; do
     # **Refuse to stamp a dirty tree.** The commit in a VERSION file is a promise
     # that the sources are recoverable; building from uncommitted work breaks it
     # silently, and the image looks exactly as trustworthy as any other.
-    if ! git diff --quiet HEAD -- $SOURCES 2>/dev/null; then
+    # **`git diff` cannot see a file git has never heard of.**
+    #
+    # This checked `git diff --quiet HEAD` alone, which ignores untracked files
+    # entirely -- so a tree whose only change was a NEW source file passed the
+    # guard and got stamped with a commit that does not contain it. The image
+    # would then be unreproducible, and `flash.sh` would call it fresh, because
+    # its staleness check compares the same set.
+    #
+    # Not hypothetical: `src/csv.rs` and `tests/host/csv.rs` were both untracked
+    # when this was found, and both are compiled into the binary.
+    #
+    # `--porcelain` reports tracked and untracked alike, so the guard now sees
+    # what the compiler sees.
+    dirty="$(git status --porcelain -- $SOURCES 2>/dev/null)"
+    if [[ -n "$dirty" ]]; then
         echo "working tree is dirty -- commit first." >&2
         echo "Every image is stamped with a commit, and flash.sh trusts that stamp." >&2
-        git status --short -- $SOURCES >&2
+        echo "$dirty" >&2
         exit 1
     fi
 

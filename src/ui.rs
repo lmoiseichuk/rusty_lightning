@@ -966,15 +966,24 @@ impl ChartPeriod {
 
     /// Minutes per bucket, matching the ring this period draws from.
     ///
-    /// Duplicated from `history`'s constants rather than imported, because this
-    /// module is the *layout* and importing the rings to draw an axis would tie
-    /// the two together for one number each. They are asserted equal in
-    /// `tests/host/history.rs`.
+    /// **Taken from `history`, not duplicated from it.**
+    ///
+    /// These were written out by hand, with a comment claiming they were
+    /// "asserted equal in `tests/host/history.rs`". They were not: that test
+    /// only checked `FINE_MINUTES == 5` and never mentioned this function. And
+    /// the day value had drifted to 15 against a ring of 5-minute buckets, so
+    /// the axis divided by three times the real width: a gridline every 24
+    /// buckets was labelled `-6h` when it was 120 real minutes, and the `-12h`
+    /// and `-18h` labels pointed at columns a 6h40m window does not contain.
+    ///
+    /// Importing the constants costs this module a dependency on `history` and
+    /// removes the only way for the two to disagree. That is the better trade —
+    /// the comment was already claiming the dependency existed.
     fn bucket_minutes(self) -> u32 {
         match self {
-            ChartPeriod::Day => 15,
-            ChartPeriod::Week => 60,
-            ChartPeriod::Month => 6 * 60,
+            ChartPeriod::Day => crate::history::FINE_MINUTES,
+            ChartPeriod::Week => crate::history::MEDIUM_MINUTES,
+            ChartPeriod::Month => crate::history::COARSE_MINUTES,
         }
     }
 

@@ -366,12 +366,29 @@ impl Log {
             return Ok(0);
         }
         let mut file = OpenOptions::new().create(true).append(true).open(PATH)?;
+
+        // **Write first, drain only what was written.**
+        //
+        // This iterated `self.pending.drain(..)`, which removes each line as the
+        // iterator advances — so a `writeln!` error returned immediately with
+        // every *remaining* buffered line already drained and gone. The module
+        // promises it "cannot lose data already recorded", and that was the one
+        // path where it did.
+        //
+        // It is not a remote failure either. The log has no rotation and no size
+        // bound, so "filesystem full" is a real end state, and it is reached
+        // during a storm — the moment the buffered lines are worth most.
+        //
+        // Counting first and draining after means a failed sync keeps everything
+        // it could not write, and the next sync tries again.
         let mut written = 0;
-        for line in self.pending.drain(..) {
+        for line in &self.pending {
             writeln!(file, "{line}")?;
+            written += 1;
+        }
+        for line in self.pending.drain(..) {
             self.bytes += line.len() as u32 + 1;
             self.records += 1;
-            written += 1;
         }
         file.flush()?;
         // The call that makes the difference: without it the data sits in the

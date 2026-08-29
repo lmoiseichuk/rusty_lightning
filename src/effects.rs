@@ -352,7 +352,25 @@ pub fn handle(
         if let Some(on) = effects.sensitivity {
             rt.tuning.frozen = on;
             let outcome = match on {
-                true => session::force_max_sensitivity(hw.sensor, hw.i2c),
+                true => {
+                    let applied = session::force_max_sensitivity(hw.sensor, hw.i2c);
+                    // **Tell the tuner where the chip actually is.**
+                    //
+                    // `force_max_sensitivity` programs the registers and
+                    // returns; nothing told `Tuning` its point had moved. So the
+                    // gauge went on reporting the pre-override level -- "3/7
+                    // 43%" while the chip sat wide open -- and because `frozen`
+                    // stops `step` from running, the noise caption and the
+                    // JAMMED warning froze with it.
+                    //
+                    // A panel that reports a level the hardware is not at is
+                    // worse than one that reports nothing: it is the number
+                    // somebody will use to decide whether the device is working.
+                    if applied.is_ok() {
+                        rt.tuning.observe_forced_point(crate::defence::Point::OPEN);
+                    }
+                    applied
+                }
                 false => rt.tuning.open(hw.sensor, hw.i2c, now_ms),
             };
             match outcome {

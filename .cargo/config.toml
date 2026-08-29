@@ -3,7 +3,14 @@ target = "riscv32imc-esp-espidf"
 
 [target.riscv32imc-esp-espidf]
 linker = "ldproxy"
-runner = "espflash flash --partition-table partitions.csv --monitor"
+# **Point at flash.sh, not at a partial espflash line.**
+#
+# This was `espflash flash --partition-table partitions.csv --monitor`, which
+# never passes `--bootloader` -- so `cargo run` wrote the app under whatever
+# bootloader espflash happens to ship. That is precisely the vendor-mismatch
+# trap `flash.sh` was written to close, and having it reachable through the most
+# ordinary command in Rust made the script's warning worth very little.
+runner = "./flash.sh"
 rustflags = ["--cfg", "espidf_time64"]
 
 [unstable]

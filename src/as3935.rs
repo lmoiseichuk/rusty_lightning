@@ -397,12 +397,22 @@ impl As3935 {
     }
 
     /// Spike rejection, 0–15. Same trade as the watchdog, on a different stage.
-    /// **Deliberately uncalled.** The reference never writes `SREJ`, and forcing
-    /// it from its power-on 2 to 0 was one of the changes that left the chip
-    /// unable to validate a strike. Kept because it is a complete, correct
-    /// operation and the datasheet exposes the field — but nothing should call
-    /// it without evidence from a storm.
-    #[allow(dead_code)]
+    ///
+    /// **Called at every boot** — `boot.rs` reads the stored level and writes it,
+    /// and the `srej` console command sets it. This comment used to say the
+    /// opposite: "deliberately uncalled", and that "the reference never writes
+    /// SREJ". Both were false, and the second was checkable — the reference
+    /// implementation writes it too.
+    ///
+    /// The correction matters because of what the old comment invited. Somebody
+    /// trusting it would conclude this register is untouched, and the obvious
+    /// next step from there — "so let us start writing it" — is exactly the
+    /// change that once left the chip unable to validate a strike at all. The
+    /// warning was real; the claim it rested on was not.
+    ///
+    /// What survives, and is the part worth keeping: **forcing this from its
+    /// power-on default cost strike validation once.** The default is what a
+    /// storm has been seen to work at. Move it only with evidence from a storm.
     pub fn set_spike_rejection(&self, i2c: &mut I2cDriver<'_>, level: u8) -> Result<(), EspError> {
         self.modify(i2c, REG_CONFIG2, MASK_SPIKE_REJECT, level & 0x0F)
     }

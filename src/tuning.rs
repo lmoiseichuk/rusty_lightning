@@ -271,7 +271,27 @@ impl Tuning {
             // The search owns this window; it has already moved the point.
             _ if sweeping => None,
             _ if dipping => self.judge_dip(sensor, i2c),
-            _ if self.window.strikes > 0 && !quiet => {
+            // **Any window that heard a strike, not just a noisy one.**
+            //
+            // This was `strikes > 0 && !quiet`, so a quiet window containing
+            // strikes fell through to `relax` and stepped the point. Both docs
+            // promise the unconditional rule -- "contains a strike -> hold,
+            // never escalate" -- and the unconditional rule is the right one for
+            // a reason neither document gives:
+            //
+            // A window that heard a strike is not evidence about the *band* at
+            // all. A near flash throws harmonics that arrive as disturbers and
+            // raises the noise floor for its duration, so whatever that window
+            // measured describes the weather rather than the room. Stepping on
+            // it -- in either direction -- is acting on a measurement that was
+            // never about the thing being tuned.
+            //
+            // The old arm did prevent the worst case: a noisy strike window
+            // cannot climb, because this arm is tested before the climb. What it
+            // allowed was the quiet strike window relaxing, which changes the
+            // instrument in the middle of the storm it is supposed to be
+            // measuring.
+            _ if self.window.strikes > 0 => {
                 self.hold(totals);
                 None
             }
@@ -556,6 +576,19 @@ impl Tuning {
     /// walk converges from mid-range in at most four windows, and unlike a sweep
     /// it is never deliberately mis-set on the way. The stored point is
     /// overwritten immediately so a reboot cannot resurrect the old one.
+    /// Record that something outside the tuner moved the point.
+    ///
+    /// **So the gauge cannot lie.** `sensitive on` programs the chip directly
+    /// and freezes the walk; without this the panel kept showing the level the
+    /// tuner last chose, which is not where the hardware is. The stored point is
+    /// deliberately left alone: an override is for a storm happening now, and it
+    /// must not survive a power cut.
+    pub fn observe_forced_point(&mut self, point: defence::Point) {
+        self.point = point;
+        self.window.clear();
+        self.window_started_ms = crate::now_ms();
+    }
+
     pub fn gain_changed(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>, why: &str) {
         // **`sensitive on` outranks this.** The override exists for a storm
         // happening now, and someone who has pinned the chip wide open and then
@@ -591,6 +624,20 @@ impl Tuning {
 
         // The old span was measured under the old gain too.
         self.forget_span();
+
+        // **And the window itself, which was the one thing left carrying old
+        // evidence.** The sweep, the dip, the point and the span were all
+        // discarded above, but the counters accumulating right now were not --
+        // so up to a full window of events gathered at the *old* gain would have
+        // been judged as though it described the new one, and the indoor and
+        // outdoor front ends differ by about four times.
+        //
+        // That is the same reasoning as everything above it; this was simply
+        // missed. Restarting the window costs one window of tuning and buys a
+        // verdict that is about the gain now in force.
+        self.window.clear();
+        self.window_started_ms = crate::now_ms();
+        session::restart_statistics(sensor, i2c, "gain changed -- old evidence discarded");
     }
 
     /// Whether it is time to stop defending and listen.

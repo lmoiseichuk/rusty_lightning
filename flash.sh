@@ -45,7 +45,32 @@
 # the board.
 set -euo pipefail
 
-PORT="${1:-/dev/ttyACM0}"
+# **Cargo hands the runner the built binary; a person hands it a port.**
+#
+# `.cargo/config.toml` points `runner` here, so `cargo run` invokes this script
+# with the path to the ELF. That is not a port, and treating it as one would
+# fail in a confusing way -- so an argument that is an existing regular file is
+# recognised as cargo's and dropped. What gets flashed is decided below from the
+# target directory either way, which is the same thing cargo just built.
+if [[ -n "${1:-}" && -f "${1:-}" ]]; then
+    shift
+fi
+
+# **By MAC, never by ttyACM<n>.** The numbering shuffles between plug-ins and has
+# pointed at a different board before.
+if [[ -n "${1:-}" ]]; then
+    PORT="$1"
+else
+    found="$(ls /dev/serial/by-id/ 2>/dev/null | grep -m1 'B0:A6:04:06:E6:D4' || true)"
+    if [[ -z "$found" ]]; then
+        echo "The lightning board is not on /dev/serial/by-id." >&2
+        echo "If it is plugged in and missing, check the power switch: in battery" >&2
+        echo "mode with no cell fitted, USB does not reach the rail and the board" >&2
+        echo "never enumerates." >&2
+        exit 1
+    fi
+    PORT="/dev/serial/by-id/$found"
+fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIR="$HERE/target/riscv32imc-esp-espidf/release"
 

@@ -52,7 +52,35 @@
 # separate conversion step.
 set -uo pipefail
 
-PORT="${1:-/dev/ttyACM0}"
+# **Find the board by its MAC, never by ttyACM<n>.**
+#
+# This defaulted to a bare `/dev/ttyACM0`, and this is the one script in the repo
+# that erases a whole chip. The numbering shuffles between plug-ins -- it has
+# already pointed at a different board -- so the default was one port shuffle
+# away from erasing somebody else's log. `release/flash.sh` looks the board up by
+# MAC and this had no equivalent.
+readonly BOARD_MAC="B0:A6:04:06:E6:D4"
+
+if [[ -n "${1:-}" ]]; then
+    PORT="$1"
+else
+    found="$(ls /dev/serial/by-id/ 2>/dev/null | grep -m1 "$BOARD_MAC" || true)"
+    if [[ -z "$found" ]]; then
+        echo "The lightning board ($BOARD_MAC) is not on /dev/serial/by-id." >&2
+        echo "Pass a port explicitly if you are sure, or check the power switch:" >&2
+        echo "in battery mode with no cell fitted the board never enumerates." >&2
+        exit 1
+    fi
+    PORT="/dev/serial/by-id/$found"
+fi
+
+# An explicit port is still checked, because being explicit is not the same as
+# being right.
+if [[ "$PORT" == /dev/serial/by-id/* && "$PORT" != *"$BOARD_MAC"* ]]; then
+    echo "⚠ $PORT is not the lightning board ($BOARD_MAC)." >&2
+    echo "This script ERASES THE WHOLE CHIP. Refusing." >&2
+    exit 1
+fi
 MAX_ATTEMPTS="${2:-8}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$HERE/target/riscv32imc-esp-espidf/release"
@@ -84,12 +112,31 @@ last_error=""
 attempt=0
 port_seen=0
 
+# **The wait is bounded too.** This loop used to `continue` without touching
+# `attempt`, so a port that never appears spun here for ever -- directly against
+# this script's own promise to "stop with a diagnosis rather than looping
+# forever", and making its "port never appeared" message unreachable. A separate
+# counter, because waiting for a port and failing to talk to one are different
+# failures and deserve different diagnoses.
+waited=0
+readonly MAX_WAIT=150   # 150 x 2 s = five minutes
+
 while (( attempt < MAX_ATTEMPTS )); do
     if [[ ! -e "$PORT" ]]; then
+        if (( waited >= MAX_WAIT )); then
+            echo
+            echo "[$(stamp)] $PORT never appeared after $(( MAX_WAIT * 2 )) s." >&2
+            echo "The board is not enumerating. Check the power switch position:" >&2
+            echo "in battery mode with no cell fitted, USB does not reach the rail" >&2
+            echo "and the board will not boot at all." >&2
+            exit 1
+        fi
+        waited=$((waited + 1))
         printf "\r[%s] waiting for %s -- SAFE to power-cycle    " "$(stamp)" "$PORT"
         sleep 2
         continue
     fi
+    waited=0
     port_seen=1
     attempt=$((attempt + 1))
     echo
