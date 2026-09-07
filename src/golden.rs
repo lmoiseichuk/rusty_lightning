@@ -189,6 +189,18 @@ pub struct Floor {
     /// this rung" implies swamped at every rung below it, and only the highest
     /// needs keeping.
     pub swamped_at: Option<u8>,
+    /// The most open rung this room has been measured to hear *lightning* at.
+    ///
+    /// The mirror of `swamped_at`, and it earns its place for the same reason:
+    /// a quiet window is not evidence that a more open rung has become
+    /// habitable. Drowning says a rung is too open; a strike says a rung
+    /// works. Between them the walk is bracketed by measurement rather than by
+    /// the absence of weather -- which is the whole trap this device is about,
+    /// because an auto-tune that minimises noise has deafness as its optimum.
+    ///
+    /// Kept as the *most open* rung that worked, so later strikes at a deafer
+    /// setting do not ratchet the floor upward.
+    pub heard_at: Option<u8>,
 }
 
 impl Floor {
@@ -199,6 +211,18 @@ impl Floor {
                 Some(previous) => previous.max(nf),
                 None => nf,
             }),
+            ..self
+        }
+    }
+
+    /// Fold in a rung that produced lightning.
+    pub fn heard(self, nf: u8) -> Floor {
+        Floor {
+            heard_at: Some(match self.heard_at {
+                Some(previous) => previous.min(nf),
+                None => nf,
+            }),
+            ..self
         }
     }
 
@@ -208,9 +232,13 @@ impl Floor {
     /// — an unlearned device is not restricted, because a floor invented
     /// without evidence is just a deafer default.
     pub fn lowest(self) -> u8 {
-        match self.swamped_at {
+        let drowned = match self.swamped_at {
             Some(nf) => nf.saturating_add(1).min(MAX_NF),
             None => 0,
+        };
+        match self.heard_at {
+            Some(heard) => drowned.max(heard),
+            None => drowned,
         }
     }
 
@@ -227,7 +255,10 @@ impl Floor {
     /// explicit recalibration, which is the operator saying the room is not
     /// what it was.
     pub fn forget() -> Floor {
-        Floor { swamped_at: None }
+        Floor {
+            swamped_at: None,
+            heard_at: None,
+        }
     }
 }
 

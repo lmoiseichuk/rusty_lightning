@@ -161,7 +161,24 @@ impl Tuning {
             sweep: None,
             quiet_per_min,
             last_strike_ms: None,
-            floor: crate::golden::Floor::default(),
+            // **Seeded from the record.** Without this the walk relaxes straight
+            // back past the point boot just resumed to -- measured 2026-09-07:
+            // boot raised nf 0 to nf 1 on the strength of the record, and the
+            // first quiet window put it back at nf 0 seventy-four seconds later.
+            // The dip still probes below, so exploration is not lost.
+            floor: {
+                let here_outdoor = matches!(
+                    crate::settings::location(),
+                    Some(crate::as3935::Location::Outdoor)
+                );
+                let base = crate::golden::Floor::default();
+                match crate::settings::golden()
+                    .filter(|record| record.combo.outdoor == here_outdoor)
+                {
+                    Some(record) => base.heard(record.combo.nf as u8),
+                    None => base,
+                }
+            },
             dip_restore: None,
             // Starts now, so a board that reboots mid-storm does not dip
             // immediately on top of the weather it just came up in.

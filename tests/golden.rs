@@ -181,6 +181,40 @@ fn main() {
     );
     check("forgetting clears it", Floor::forget().lowest() == 0);
 
+    // -- a rung that heard lightning is a floor too -------------------------
+    check(
+        "a heard rung floors the walk there",
+        Floor::default().heard(1).lowest() == 1,
+    );
+    check(
+        "and relaxing from one above it is allowed",
+        Floor::default().heard(1).may_relax_from(2),
+    );
+    check(
+        "but relaxing off it is not",
+        !Floor::default().heard(1).may_relax_from(1),
+    );
+    check(
+        "the most open rung that worked is the one kept",
+        Floor::default().heard(3).heard(1).lowest() == 1,
+    );
+    check(
+        "a later strike at a deafer rung does not ratchet it up",
+        Floor::default().heard(1).heard(4).lowest() == 1,
+    );
+    check(
+        "drowning and hearing take the stricter of the two",
+        Floor::default().swamped(2).heard(1).lowest() == 3,
+    );
+    check(
+        "and hearing wins when it is the stricter",
+        Floor::default().swamped(0).heard(3).lowest() == 3,
+    );
+    check(
+        "forgetting clears the heard rung as well",
+        Floor::forget().heard_at.is_none(),
+    );
+
     println!("\n  what counts as drowning");
     // Ordinary noise is the walk's business; only drowning is a fact about the
     // room worth remembering, or the floor ratchets up until the device is deaf.
