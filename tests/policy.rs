@@ -39,28 +39,28 @@ fn main() {
     println!("== policy ==");
 
     println!("\n  the grace period");
-    check("boot is awake", decide(0, None) == Policy::Awake);
+    check("boot is awake", decide(0, None, None, Supply::Unknown) == Policy::Awake);
     check(
         "still awake one second before the grace ends",
-        decide(GRACE_S - 1, None) == Policy::Awake,
+        decide(GRACE_S - 1, None, None, Supply::Unknown) == Policy::Awake,
     );
     check(
         "frugal once the grace ends with nobody about",
-        decide(GRACE_S, None) == Policy::Frugal,
+        decide(GRACE_S, None, None, Supply::Unknown) == Policy::Frugal,
     );
 
     println!("\n  console activity");
     check(
         "a console seen just now holds it awake",
-        decide(GRACE_S, Some(GRACE_S)) == Policy::Awake,
+        decide(GRACE_S, Some(GRACE_S), None, Supply::Unknown) == Policy::Awake,
     );
     check(
         "awake one second before the console window closes",
-        decide(GRACE_S + CONSOLE_AWAKE_S - 1, Some(GRACE_S)) == Policy::Awake,
+        decide(GRACE_S + CONSOLE_AWAKE_S - 1, Some(GRACE_S), None, Supply::Unknown) == Policy::Awake,
     );
     check(
         "frugal once the console window closes",
-        decide(GRACE_S + CONSOLE_AWAKE_S, Some(GRACE_S)) == Policy::Frugal,
+        decide(GRACE_S + CONSOLE_AWAKE_S, Some(GRACE_S), None, Supply::Unknown) == Policy::Frugal,
     );
 
     println!("\n  across the counter wrap");
@@ -81,13 +81,13 @@ fn main() {
         if now < GRACE_S {
             check(
                 &format!("{label}: grace period, awake as designed"),
-                decide(now, Some(seen)) == Policy::Awake,
+                decide(now, Some(seen), None, Supply::Unknown) == Policy::Awake,
             );
             continue;
         }
         check(
             &format!("{label}: frugal, the console window is long closed"),
-            decide(now, Some(seen)) == Policy::Frugal,
+            decide(now, Some(seen), None, Supply::Unknown) == Policy::Frugal,
         );
     }
 
@@ -95,9 +95,47 @@ fn main() {
     // at second 100 past the wrap keeps it awake for ten minutes from then.
     check(
         "a console used after the wrap still holds it awake",
-        decide(WRAP_S + 400, Some(WRAP_S + 100)) == Policy::Awake,
+        decide(WRAP_S + 400, Some(WRAP_S + 100), None, Supply::Unknown) == Policy::Awake,
     );
 
+
+    // -- weather holds the port open the way a person does --------------------
+    check(
+        "a strike holds awake",
+        decide(GRACE_S + 1, None, Some(GRACE_S), Supply::Unknown) == Policy::Awake,
+    );
+    check(
+        "a strike stops holding after STORM_AWAKE_S",
+        decide(GRACE_S + STORM_AWAKE_S, None, Some(GRACE_S), Supply::Unknown) == Policy::Frugal,
+    );
+    check(
+        "the strike window survives the 49.7-day wrap",
+        decide(WRAP_S + 400, None, Some(WRAP_S + 100), Supply::Unknown) == Policy::Awake,
+    );
+
+    // -- the cell outranks the weather ---------------------------------------
+    // Light sleep does not stop the sensor being heard; it costs the USB port.
+    // 13x current is a week against half a day, so a storm is not worth the
+    // whole battery when nothing is plugged in.
+    check(
+        "discharging sleeps even mid-storm",
+        decide(GRACE_S + 1, None, Some(GRACE_S), Supply::Discharging) == Policy::Frugal,
+    );
+    check(
+        "discharging does not override a person at the console",
+        decide(GRACE_S + 1, Some(GRACE_S), None, Supply::Discharging) == Policy::Awake,
+    );
+    check(
+        "charging stays awake with no storm and no console",
+        decide(GRACE_S + CONSOLE_AWAKE_S, None, None, Supply::Charging) == Policy::Awake,
+    );
+    check(
+        "an unknown supply behaves exactly as before",
+        decide(GRACE_S + CONSOLE_AWAKE_S, None, None, Supply::Unknown) == Policy::Frugal,
+    );
+
+    // Both counters are read here, after the last check -- reading `passed`
+    // earlier silently undercounts anything appended below it.
     let passed = PASS.load(Ordering::Relaxed);
     let failed = FAIL.load(Ordering::Relaxed);
     println!("\n{passed} passed, {failed} failed");

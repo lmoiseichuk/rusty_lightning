@@ -38,7 +38,7 @@ const KEY_TZ_MINUTES: &[u8] = b"tz_min\0";
 /// unexpected power cut costs at most that much apparent time. Against NVS's
 /// endurance that is roughly 35 000 writes a year spread by wear levelling —
 /// negligible, and the value is one entry.
-pub const SAVE_INTERVAL_S: u32 = 15 * 60;
+pub const SAVE_INTERVAL_S: u32 = 5 * 60;
 
 /// A time we are confident enough in to stamp records with.
 ///
@@ -86,7 +86,7 @@ pub fn restore() -> Option<u64> {
     // button reboot -- so the system clock is often still correct when this
     // runs. Restoring on top of it does not recover lost time; it *destroys*
     // good time, replacing a live clock with whatever NVS last saved, which is
-    // up to `SAVE_INTERVAL_S` -- fifteen minutes -- stale.
+    // up to `SAVE_INTERVAL_S` -- five minutes -- stale.
     //
     // Observed: the clock was set, the board reflashed twice within four
     // minutes, and each boot rewound it to the moment of the set. Every strike

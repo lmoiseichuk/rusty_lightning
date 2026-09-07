@@ -26,7 +26,7 @@ use esp_idf_hal::sys::{self, EspError};
 // The policy *decision* lives in `policy`, which is free of ESP-IDF so it can
 // be host-tested; re-exported so callers still say `power::decide` and
 // `power::Policy`. This module keeps what needs the registers.
-pub use crate::policy::{decide, Policy};
+pub use crate::policy::{decide, Policy, Supply};
 
 /// Apply the policy for a supply.
 ///

@@ -106,10 +106,23 @@ pub fn configure(
     // describes a front end seeing roughly four times what the outdoor one
     // does, and carrying it across is how a good point becomes a deaf one.
     let here_outdoor = matches!(settings::location(), Some(crate::as3935::Location::Outdoor));
-    let known_good = settings::golden().filter(|record| {
-        record.strikes >= crate::golden::TRUSTED_STRIKES
-            && record.combo.outdoor == here_outdoor
-    });
+    let here = settings::golden().filter(|record| record.combo.outdoor == here_outdoor);
+    let known_good = here.filter(|record| record.strikes >= crate::golden::TRUSTED_STRIKES);
+
+    // **An untrusted record still outranks a point that is merely more open.**
+    // A record with one strike is not evidence a setting hears *lightning* --
+    // that is why `TRUSTED_STRIKES` is two -- but it is the only evidence in the
+    // device that anything was ever heard at all, and the stored point carries
+    // none. Resuming below it is how the tuner deadlocks: the second strike can
+    // only be earned at the record's own noise floor, and a boot that starts
+    // deafer than that never earns it. Measured here on 2026-09-07 with a storm
+    // overhead: golden `nf 1` with one strike, stored `nf 0`, seven disturbers
+    // and no strikes in ninety seconds.
+    //
+    // A floor, not a promotion. Starting *less* open cannot admit more man-made
+    // impulses than starting at the bottom would, and the tuner is still free to
+    // walk wherever the noise takes it.
+    let floor = here.map(|record| defence::Point::new(record.combo.nf as u16));
 
     let point = match (known_good, settings::defence_point()) {
         (Some(record), stored) => {
@@ -131,10 +144,26 @@ pub fn configure(
                 }
             }
         }
-        (None, Some(stored)) => {
-            println!("as:   resumed defence point from NVS");
-            stored
-        }
+        (None, Some(stored)) => match floor {
+            // The stored point is deafer than, or level with, the one that has
+            // heard something: nothing to raise it to.
+            Some(heard) if stored.raw() >= heard.raw() => {
+                println!("as:   resumed defence point from NVS");
+                stored
+            }
+            Some(heard) => {
+                println!(
+                    "as:   NVS had nf {}, raising to nf {} -- lightning has been heard there",
+                    stored.raw(),
+                    heard.raw()
+                );
+                heard
+            }
+            None => {
+                println!("as:   resumed defence point from NVS");
+                stored
+            }
+        },
         (None, None) => {
             // Not `OPEN`. A never-calibrated device booting fully open drowns --
             // measured here at 7-9 noise events per batch, continuously -- and

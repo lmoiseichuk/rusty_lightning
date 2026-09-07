@@ -152,7 +152,12 @@ pub fn handle(
                     // and identically so: this runs *because* a console command
                     // just arrived, and the caller stamps that variable with
                     // this same instant immediately before calling in.
-                    let want = power::decide(now_ms / 1000, Some(now_ms / 1000));
+                    let want = power::decide(
+                        now_ms / 1000,
+                        Some(now_ms / 1000),
+                        None,
+                        power::Supply::Unknown,
+                    );
                     match power::apply(want) {
                         Ok(()) => {
                             *rt.policy = want;

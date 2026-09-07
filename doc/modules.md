@@ -84,7 +84,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 796 |
+| `listen` | The event loop. | -- | 819 |
 
 ### The sensor and what it hears
 
@@ -125,7 +125,7 @@ this table is generated from it.
 | `commands` | What the console commands actually do (§5). | -- | 482 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 531 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 407 |
+| `effects` | Applying the console's hardware effects. | -- | 412 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
 | `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 202 |
@@ -136,9 +136,9 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 274 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 303 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
-| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 69 |
+| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
 | `power` | Clock and sleep policy (§7). | -- | 126 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 165 |
 | `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |

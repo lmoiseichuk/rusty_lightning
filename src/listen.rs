@@ -229,6 +229,9 @@ pub fn listen(
     let mut console = console::Console::new();
     // Uptime at the last console input, and at the last clock save.
     let mut last_console_s: Option<u32> = None;
+    // Uptime at the last strike, so weather can hold the awake policy the way a
+    // person at the console does -- see `policy::STORM_AWAKE_S`.
+    let mut last_strike_s: Option<u32> = None;
     let mut last_clock_save_s: u32 = 0;
     let mut last_log_sync_ms: u32 = 0;
     match power::apply(policy) {
@@ -382,6 +385,7 @@ pub fn listen(
         // cleared by the redraw that shows it.
         if batch.strikes > 0 {
             screen.strike_seen = true;
+            last_strike_s = Some(now_ms() / 1000);
         }
         report(&batch);
 
@@ -617,9 +621,28 @@ pub fn listen(
             // drops mid-request -- the page half-loads and the phone decides
             // the network is broken. The portal is at most a minute, so this
             // costs a minute of radio rather than a policy exception.
+            // **Only a moving cell is a conclusion.** `Flow::Idle` cannot tell a
+            // full cell on USB from a resting one -- both are flat -- so it is
+            // folded into `Unknown` and the person-based rules decide instead.
+            // Giving `Idle` a vote is how §7's three failed schemes flattened a
+            // battery in two days.
+            let supply_hint = match fuel.reading.as_ref() {
+                Some(reading) => match crate::battery::flow(reading, fuel.trend.as_ref()) {
+                    crate::battery::Flow::Discharging => power::Supply::Discharging,
+                    crate::battery::Flow::Charging => power::Supply::Charging,
+                    _ => power::Supply::Unknown,
+                },
+                None => power::Supply::Unknown,
+            };
+
             let want = match portal {
                 Some(_) => power::Policy::Awake,
-                None => power::decide(now_ms() / 1000, last_console_s),
+                None => power::decide(
+                    now_ms() / 1000,
+                    last_console_s,
+                    last_strike_s,
+                    supply_hint,
+                ),
             };
             if freq_override.is_none() && want != policy {
                 match power::apply(want) {
