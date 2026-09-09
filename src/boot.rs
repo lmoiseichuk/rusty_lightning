@@ -128,9 +128,22 @@ pub fn configure(
         (Some(record), stored) => {
             let golden = defence::Point::new(record.combo.nf as u16);
             match stored {
-                // The tuner is already at least as open as the record; it has
-                // learned something better and keeps it.
-                Some(stored) if stored.raw() <= golden.raw() => {
+                // **Deafer than the record, not more open than it.** This read
+                // `stored <= golden` and called that "learned something
+                // better", which assumes the ladder is monotonic in
+                // sensitivity. It is not: the bottom is the swamped end, and
+                // nf 0 has been measured here at 300-480 noise/min with zero
+                // strikes. So a stored point *below* the record is not an
+                // improvement on it, it is the deafness this whole module
+                // exists to escape.
+                //
+                // Measured 2026-09-09, after a power cut: golden had earned its
+                // trust at nf 1 with three strikes, and boot resumed to nf 0
+                // anyway -- through this arm, which the promotion had just made
+                // reachable. Above the record the tuner really has learned
+                // something: the room is noisier than it was, and that is worth
+                // keeping.
+                Some(stored) if stored.raw() >= golden.raw() => {
                     println!("as:   resumed defence point from NVS");
                     stored
                 }
