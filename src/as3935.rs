@@ -314,10 +314,14 @@ impl As3935 {
 
     /// Let disturber events raise the IRQ, or suppress them.
     ///
-    /// Kept **enabled** by default, which looks wrong for a lightning detector
-    /// and is not: §4.2's noise-floor auto-tune is driven by disturber events.
-    /// Mask them and the sensor goes quiet, the auto-tune never raises the
-    /// floor, and the first real storm arrives into a mis-tuned receiver.
+    /// **Masked by default** -- see the measurement in `boot::configure`. The
+    /// bit is `MASK_DIST`, and it gates `INT_D` and nothing else: `INT_NH` and
+    /// `INT_L` still reach the pin, so the noise-floor auto-tune keeps the only
+    /// input it actually uses (`Tuning::observe` folds noise alone).
+    ///
+    /// This doc said the opposite until 2026-09-10, on the strength of a tuner
+    /// that no longer exists. Kept as a note because the claim is plausible,
+    /// was believed for weeks, and is the sort of thing that gets re-invented.
     pub fn set_disturber_enabled(
         &self,
         i2c: &mut I2cDriver<'_>,

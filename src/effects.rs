@@ -210,16 +210,15 @@ pub fn handle(
             }
         }
         if let Some(mask) = effects.mask_disturbers {
-            // **Masked means the auto-tune goes blind**, which is why this is a
-            // command and not a default: §4.2's noise floor is driven by
-            // disturber events, so with them suppressed the tuner sees a quiet
-            // band whatever the sky is doing.
+            // **`mask off` is the experiment now, not `mask on`.** Boot masks
+            // disturbers -- see `boot::configure` for the measurement -- so the
+            // interesting thing to ask this command for is the disturber log
+            // back, which is the only record of whether real flashes are
+            // arriving here classified as not-lightning.
             //
-            // What it buys, and the reason to be able to try it: a close storm
-            // produces hundreds of disturbers a minute, each raising the IRQ,
-            // and the poll then reports finding events "with no interrupt --
-            // the edge was missed". Whether real returns are being lost in that
-            // flood is not answerable by argument.
+            // Unmasking costs what boot's note describes: at four disturbers a
+            // second the poll starts reporting events "with no interrupt -- the
+            // edge was missed", and a strike shares that wire.
             match hw.sensor.set_disturber_enabled(hw.i2c, !mask) {
                 Ok(()) => {
                     println!(
@@ -229,8 +228,8 @@ pub fn handle(
                             false => "raise",
                         }
                     );
-                    if mask {
-                        println!("mask: the noise-floor auto-tune is blind while this is on");
+                    if !mask {
+                        println!("mask: expect missed edges in a close storm -- see boot::configure");
                     }
                 }
                 Err(e) => println!("mask: could not change it -- {e}"),

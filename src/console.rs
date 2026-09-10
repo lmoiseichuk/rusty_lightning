@@ -467,7 +467,7 @@ pub fn print_help() {
     );
     println!("                             stored in NVS; omit to keep the current one");
     println!("  sensitive on|off      noise floor to 0, auto-tune frozen");
-    println!("  mask on|off           stop disturbers raising the IRQ -- see the note in as3935");
+    println!("  mask on|off           disturbers raise the IRQ. Masked by default; `off` to log them");
     println!("  ap [off|<ssid> <pass>] raise the access point and web UI; `off` drops it");
     println!("  golden [clear]        the settings that last heard lightning");
     println!("  import <e>,<d>,<en>,<n> append one historical record: epoch, distance, energy, strokes");

@@ -43,10 +43,36 @@ pub fn configure(
     sensor.power_up(i2c)?;
     sensor.set_location(i2c, location)?;
 
-    // Disturbers stay ENABLED. It looks wrong for a lightning detector and is
-    // not: §4.2's noise auto-tune is driven by disturber events, so masking
-    // them leaves the floor pinned wherever it started.
-    sensor.set_disturber_enabled(i2c, true)?;
+    // **Disturbers are MASKED, and the reason they were not has expired.**
+    //
+    // For most of this device's life the comment here said disturbers had to
+    // stay enabled because §4.2's noise auto-tune was driven by them. That was
+    // true of an earlier tuner and is not true of this one: `Tuning::observe`
+    // folds `batch.noise` alone into the verdict, and its own note says why --
+    // `NF_LEV` gates the noise floor and cannot touch a disturber, so climbing
+    // on disturbers spent the ladder's whole range on a question the knob does
+    // not answer. Masking suppresses `INT_D` only; `INT_NH` still raises the
+    // IRQ, and `INT_NH` is the tuner's entire input. Nothing goes blind.
+    //
+    // What masking buys was measured here on 2026-09-10, in a live storm, at
+    // `nf 1` / `wd 0` / outdoor gain, one audible strike every thirty seconds:
+    //
+    // ```text
+    // unmasked:  1 strike, 380 disturbers, several missed edges  (95 s)
+    // masked:    2 strikes,  0 disturbers, 0 missed edges        (95 s)
+    // ```
+    //
+    // The missed edges are the mechanism. At four disturbers a second every one
+    // raises the IRQ, and the poll then finds events with the edge already
+    // gone -- so the flood is not merely noise in the log, it is contention on
+    // the one wire a *strike* also has to arrive over. Twice the strikes is
+    // what falls out of not spending the interrupt path on returns the chip has
+    // already classified as not-lightning.
+    //
+    // The cost is real and is the disturber log: `mask off` is how to run the
+    // "are real flashes arriving here as disturbers" experiment, and that
+    // question is still open. It is an experiment, so it is a command.
+    sensor.set_disturber_enabled(i2c, false)?;
     sensor.clear_irq_display(i2c)?;
     FreeRtos::delay_ms(500);
 

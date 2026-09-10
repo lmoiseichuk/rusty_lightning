@@ -89,13 +89,16 @@ pub struct Effects {
     pub dump_registers: bool,
     /// `Some(indoor)` when `mode` was used.
     pub set_indoor: Option<bool>,
-    /// `mask on` stops disturbers raising the IRQ.
+    /// `mask on` stops disturbers raising the IRQ; `mask off` lets them back.
     ///
-    /// **Off by default and that is deliberate** -- the noise-floor auto-tune
-    /// is driven by disturber events, so masking them leaves it blind. Exposed
-    /// as a command because a close storm produces hundreds a minute, the IRQ
-    /// path then misses edges, and whether real returns are being lost among
-    /// them is a question only a measurement can answer.
+    /// **On by default since 2026-09-10** -- see `boot::configure` for the
+    /// storm measurement that moved it. The auto-tune is unaffected either way,
+    /// since it folds noise and not disturbers.
+    ///
+    /// `mask off` is therefore the interesting direction: it restores the
+    /// disturber log, which is the only evidence about whether real flashes
+    /// reach this board classified as not-lightning. It costs missed edges in a
+    /// close storm, so it is an experiment and not a resting state.
     pub mask_disturbers: Option<bool>,
     /// Set by `freq`. Handled by the caller, which owns the policy loop — doing
     /// it here would be undone on the next tick.
