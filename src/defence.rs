@@ -141,21 +141,42 @@ pub const NOISE_FLOOR: usize = 0;
 
 /// What `WDTH` is programmed to unless the operator says otherwise.
 ///
-/// **Two, from `deep_demo.py` — the record of what actually worked at this
-/// site.** `setWatchdogThreshold(2)` beside `setSpikeRejection(0)`; the storm of
-/// 2026-08-19 established that pairing, with the note that the watchdog is the
-/// filter which earns its keep on this board.
+/// **Zero, measured against a storm on 2026-09-10** -- outdoor gain, `nf 1`,
+/// `srej 1`, one audible strike every thirty seconds:
 ///
-/// **A setting rather than a field, for the reason in the module header.** The
-/// watchdog is an amplitude gate: raising it discards weaker arrivals, and the
-/// weakest arrivals are the distant strikes this device exists to see before
-/// the thunder. Leaving it in the search meant every quiet spell bought silence
-/// with exactly the returns that were the point.
+/// ```text
+/// wd 2:  0 strikes,  11 disturbers  (100 s)
+/// wd 0:  2 strikes, 294 disturbers   (90 s)
+/// ```
 ///
-/// It is still adjustable, because a site with a different noise floor may
-/// genuinely need more of it — but by a person who has decided to trade
-/// distance for quiet, and not by a loop optimising for quiet alone.
-pub const WATCHDOG_DEFAULT: u8 = 2;
+/// Not "fewer strikes". *No* strikes, through a storm loud enough to count by
+/// ear. The watchdog is an amplitude gate ahead of every classifier on the
+/// chip, so at 2 the returns were discarded before anything could decide what
+/// they were -- which is why nothing downstream could have recovered them and
+/// why the log looked like calm weather.
+///
+/// **It was two because of a pairing this firmware no longer runs.**
+/// `deep_demo.py` set `setWatchdogThreshold(2)` beside `setSpikeRejection(0)`,
+/// and the 2 was inherited from that record while the 0 was deliberately left
+/// behind -- `SPIKE_REJECTION_DEFAULT` is 1 here, for reasons written there.
+/// Half of a measured pair is not a measured value.
+///
+/// **The disturber mask is what makes zero affordable.** The 294 above is the
+/// bill for opening the gate, and until `boot::configure` started masking
+/// `INT_D` that flood cost missed edges on the wire strikes share. The two
+/// defaults changed together and belong together: one admits weak returns, the
+/// other keeps the interrupt path free enough to carry them.
+///
+/// This is also what the module header already argued for -- `wd` carries 80 %
+/// of the harm against `nf`'s 20 %, and the weakest arrivals are the distant
+/// strikes this device exists to see before the thunder. Taking `WDTH` out of
+/// the tuner's reach stopped a loop from spending them; it left a hand-written
+/// 2 spending them just as effectively.
+///
+/// Still adjustable, and still upward: a site with a different noise floor may
+/// genuinely need some, chosen by a person who has decided to trade distance
+/// for quiet.
+pub const WATCHDOG_DEFAULT: u8 = 0;
 
 /// The range `wdth <n>` accepts. The register is four bits.
 pub const WATCHDOG_MAX: u8 = 15;
