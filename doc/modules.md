@@ -136,7 +136,7 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 316 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 355 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
 | `power` | Clock and sleep policy (§7). | -- | 126 |

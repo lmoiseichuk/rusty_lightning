@@ -194,7 +194,33 @@ pub fn configure(
     // which is the whole fix: while the tuner could write it, it walked it to
     // zero on every quiet spell and the chip began reporting man-made impulses
     // as lightning.
-    let spike = defence::spike_rejection_for_autorun(crate::settings::spike_rejection());
+    // **A trusted record carries all three of its settings, not just `nf`.**
+    // `golden` stores the whole combination that produced lightning here --
+    // noise floor, watchdog and spike rejection -- and until now boot restored
+    // only the noise floor. The other two came from separate NVS settings that
+    // nothing reconciled against the record, so the device could boot knowing
+    // the right watchdog and not using it.
+    //
+    // Measured 2026-09-10 during a live storm, one audible strike every thirty
+    // seconds: at the stored `wd 2` it logged **0 strikes and 11 disturbers in
+    // 100 s**; at the record's own `wd 0`, **2 strikes and 294 disturbers in
+    // 90 s**. The watchdog gates on amplitude, so it was discarding the
+    // returns before anything could classify them -- and `defence`'s own
+    // weighting says `wd` carries 80 % of the harm against `nf`'s 20 %.
+    //
+    // **The more permissive of the two wins, never the deafer.** A person who
+    // has set something more sensitive by hand keeps it; a stored value deafer
+    // than the measured one is overruled. Spike rejection still passes through
+    // `spike_rejection_for_autorun`, so a record made at `srej 0` cannot
+    // reopen the scar that took it out of the tuner's reach.
+    let heard = known_good.map(|record| record.combo);
+    let stored_spike = crate::settings::spike_rejection();
+    let spike = defence::spike_rejection_for_autorun(match heard {
+        // Unset means "whatever the record says"; set means the more
+        // permissive of the two.
+        Some(combo) => Some(stored_spike.map_or(combo.srej, |s| s.min(combo.srej))),
+        None => stored_spike,
+    });
     if spike < defence::SPIKE_REJECTION_AUTO_MIN {
         println!("as:   ⚠ spike rejection is 0 -- set by hand, not chosen by the device.");
         println!("as:     man-made impulses validate as lightning here; `srej 1` to restore.");
@@ -209,8 +235,21 @@ pub fn configure(
     // search space for a sharper reason than spike rejection did: it gates on
     // amplitude, so the tuner spending it cost the distant strikes this device
     // exists to report before the thunder arrives.
-    let watchdog = crate::settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
-    println!("as:   watchdog threshold {watchdog}");
+    let stored_watchdog = crate::settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
+    let watchdog = match heard {
+        Some(combo) => stored_watchdog.min(combo.wdth),
+        None => stored_watchdog,
+    };
+    match heard {
+        Some(combo) if combo.wdth < stored_watchdog => println!(
+            "as:   watchdog threshold {watchdog} -- lowered from {stored_watchdog}, \
+             lightning has been heard at it"
+        ),
+        _ => println!("as:   watchdog threshold {watchdog}"),
+    }
+    if let Err(e) = sensor.set_watchdog_threshold(i2c, watchdog) {
+        println!("as:   could not set the watchdog threshold -- {e}");
+    }
     // `reset` issues PRESET_DEFAULT, which restores registers -- the datasheet
     // treats discarding the statistics as a separate operation, so until this
     // line no power cycle in the device's life had ever cleared them.
