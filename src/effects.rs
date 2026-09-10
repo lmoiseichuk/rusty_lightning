@@ -209,6 +209,34 @@ pub fn handle(
                 None => println!("sleep: could not read the current config -- unchanged"),
             }
         }
+        if let Some(mask) = effects.mask_disturbers {
+            // **Masked means the auto-tune goes blind**, which is why this is a
+            // command and not a default: §4.2's noise floor is driven by
+            // disturber events, so with them suppressed the tuner sees a quiet
+            // band whatever the sky is doing.
+            //
+            // What it buys, and the reason to be able to try it: a close storm
+            // produces hundreds of disturbers a minute, each raising the IRQ,
+            // and the poll then reports finding events "with no interrupt --
+            // the edge was missed". Whether real returns are being lost in that
+            // flood is not answerable by argument.
+            match hw.sensor.set_disturber_enabled(hw.i2c, !mask) {
+                Ok(()) => {
+                    println!(
+                        "mask: disturbers {} the IRQ",
+                        match mask {
+                            true => "no longer raise",
+                            false => "raise",
+                        }
+                    );
+                    if mask {
+                        println!("mask: the noise-floor auto-tune is blind while this is on");
+                    }
+                }
+                Err(e) => println!("mask: could not change it -- {e}"),
+            }
+        }
+
         if let Some(indoor) = effects.set_indoor {
             *rt.location = match indoor {
                 true => Location::Indoor,

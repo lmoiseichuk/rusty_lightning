@@ -48,6 +48,7 @@ pub const COMMANDS: &[(&str, Arity)] = &[
     ("events", Arity::One),
     ("strike", Arity::One),
     ("sensitive", Arity::Choice(&["on", "off"])),
+    ("mask", Arity::Choice(&["on", "off"])),
     ("scope", Arity::Choice(&["day", "week", "month"])),
 ];
 

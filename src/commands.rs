@@ -89,6 +89,14 @@ pub struct Effects {
     pub dump_registers: bool,
     /// `Some(indoor)` when `mode` was used.
     pub set_indoor: Option<bool>,
+    /// `mask on` stops disturbers raising the IRQ.
+    ///
+    /// **Off by default and that is deliberate** -- the noise-floor auto-tune
+    /// is driven by disturber events, so masking them leaves it blind. Exposed
+    /// as a command because a close storm produces hundreds a minute, the IRQ
+    /// path then misses edges, and whether real returns are being lost among
+    /// them is a question only a measurement can answer.
+    pub mask_disturbers: Option<bool>,
     /// Set by `freq`. Handled by the caller, which owns the policy loop — doing
     /// it here would be undone on the next tick.
     pub freq: Option<crate::console::FreqRequest>,
@@ -467,6 +475,7 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             effects.sensitivity = Some(on);
             effects.redraw_now = true;
         }
+        Command::MaskDisturbers(on) => effects.mask_disturbers = Some(on),
         Command::Freq(request) => effects.freq = Some(request),
         Command::Sleep(on) => effects.light_sleep = Some(on),
         Command::Battery => effects.read_battery = true,

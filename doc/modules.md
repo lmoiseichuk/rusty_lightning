@@ -122,13 +122,13 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 482 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 531 |
+| `commands` | What the console commands actually do (§5). | -- | 491 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 540 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 412 |
+| `effects` | Applying the console's hardware effects. | -- | 440 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 202 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 203 |
 | `webui` | The page the access point serves. | -- | 245 |
 
 ### The board underneath
