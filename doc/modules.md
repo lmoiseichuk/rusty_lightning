@@ -107,7 +107,7 @@ this table is generated from it.
 | `clock` | Wall-clock time without a network (§5). | -- | 194 |
 | `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
-| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 575 |
+| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 619 |
 | `settings` | What survives a power cut, and nothing else. | -- | 418 |
 | `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 
@@ -123,7 +123,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 596 |
+| `commands` | What the console commands actually do (§5). | -- | 619 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 471 |

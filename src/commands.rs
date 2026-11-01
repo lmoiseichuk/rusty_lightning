@@ -367,10 +367,33 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             Some(log) => {
                 let asked = request.unwrap_or(0);
                 let armed = log.arm_events(asked);
-                match armed {
-                    0 if asked == 0 => println!("events: off -- only lightning is logged (saved)"),
+                // **What the save means depends on the direction**, so it is
+                // said here, where the direction is known, and never claimed
+                // when it did not happen. A failed arm is lost by a restart; a
+                // failed *disarm* is undone by one, which is the case that
+                // used to print "(saved)" regardless.
+                let saved = match (&armed.saved, armed.rows) {
+                    (Ok(()), _) => "(saved)".to_string(),
+                    (Err(e), 0) => format!(
+                        "-- but NOT saved ({e}): a restart before the next sync would arm {} row(s) again",
+                        armed.on_disk
+                    ),
+                    (Err(e), _) => format!(
+                        "-- but NOT saved ({e}): a restart before the next sync would resume {}",
+                        match armed.on_disk {
+                            0 => "nothing".to_string(),
+                            left => format!("{left} row(s)"),
+                        }
+                    ),
+                };
+                match armed.rows {
+                    0 if asked == 0 => println!("events: off -- only lightning is logged {saved}"),
                     0 => {
-                        println!("events: no room -- nothing armed");
+                        // "(saved)" would read as though something were armed.
+                        match armed.saved {
+                            Ok(()) => println!("events: no room -- nothing armed"),
+                            Err(_) => println!("events: no room -- nothing armed {saved}"),
+                        }
                         report_room(log.free_bytes());
                         println!("events: `dump` to keep what is there, then `clear` to make room");
                     }
@@ -379,7 +402,7 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                             println!("events: asked for {asked}, the log has room for {rows}");
                             report_room(log.free_bytes());
                         }
-                        println!("events: logging disturbers and noise for the next {rows} row(s) (saved)");
+                        println!("events: logging disturbers and noise for the next {rows} row(s) {saved}");
                         // The rate is what makes the budget necessary, so it is
                         // quoted where the decision is made rather than left in
                         // a doc comment nobody reads at the console. Six to ten

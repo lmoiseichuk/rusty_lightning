@@ -80,6 +80,16 @@ impl Kind {
 /// How often buffered lines are flushed and synced.
 pub const SYNC_INTERVAL_MS: u32 = 60_000;
 
+/// What [`Log::arm_events`] did, for the console to report truthfully.
+pub struct Armed {
+    /// The budget now in force: what was asked, or less if it did not fit.
+    pub rows: u32,
+    /// Whether NVS took it. `Err` leaves the save to the next sync.
+    pub saved: Result<(), sys::EspError>,
+    /// What NVS holds now, so what a restart before that sync would resume.
+    pub on_disk: u32,
+}
+
 pub struct Log {
     /// Records written, counted at open from the file itself.
     records: u32,
@@ -187,14 +197,16 @@ impl Log {
         // the restart are on the disk now and the reserve still has to stand.
         let stored = crate::settings::event_budget().unwrap_or(0);
         let resumed = crate::budget::capped(stored, log.free_bytes());
+        log.event_budget = resumed;
+        log.saved_budget = stored;
         if resumed < stored {
             println!(
                 "log:  events: {stored} row(s) were left, the log has room for {resumed} -- armed {resumed}"
             );
-            let _ = crate::settings::store_event_budget(resumed);
+            // Through the one save path, so a refusal here is retried by the
+            // first sync rather than leaving NVS holding the larger count.
+            log.save_budget();
         }
-        log.event_budget = resumed;
-        log.saved_budget = resumed;
 
         // **The second way a log goes missing, and the one the first check
         // cannot see.** If the filesystem was formatted by something other than
@@ -332,16 +344,27 @@ impl Log {
     /// Arm event logging for up to `rows` more non-lightning events.
     ///
     /// Returns the budget actually set, which is less than asked when the log
-    /// has no room for it -- see [`crate::budget::capped`]. Zero turns it off.
-    /// Saved at once, so a restart a second later still has it.
-    pub fn arm_events(&mut self, rows: u32) -> u32 {
+    /// has no room for it -- see [`crate::budget::capped`] -- and whether NVS
+    /// took it. Zero turns it off. Saved at once, so a restart a second later
+    /// still has it.
+    ///
+    /// **Not printed here**, because what a failed save means depends on the
+    /// direction: an arm that did not save is lost by a restart, but a *disarm*
+    /// that did not save is worse -- the restart brings the old window back.
+    /// The caller says which; [`Armed::on_disk`] is what a restart would find.
+    pub fn arm_events(&mut self, rows: u32) -> Armed {
         let armed = crate::budget::capped(rows, self.free_bytes());
         self.event_budget = armed;
-        match crate::settings::store_event_budget(armed) {
-            Ok(()) => self.saved_budget = armed,
-            Err(e) => println!("events: armed, but NOT saved -- a restart will lose it ({e})"),
-        }
-        armed
+        let saved = match crate::settings::store_event_budget(armed) {
+            Ok(()) => {
+                self.saved_budget = armed;
+                Ok(())
+            }
+            // `saved_budget` keeps what NVS still holds, so the next sync sees
+            // the two apart and tries again -- see `sync`.
+            Err(e) => Err(e),
+        };
+        Armed { rows: armed, saved, on_disk: self.saved_budget }
     }
 
     pub fn event_budget(&self) -> u32 {
@@ -428,7 +451,16 @@ impl Log {
     /// Returns how many records were written, so the caller can say so — a
     /// silent flush is indistinguishable from a lost one.
     pub fn sync(&mut self) -> Result<u32, std::io::Error> {
+        // **The budget before the early return, not after it.** It was saved
+        // only on a sync that wrote rows -- so once the budget reached zero no
+        // rows came, every sync returned here, and a save that had failed was
+        // never tried again. RAM said "off", NVS still held the old count, and
+        // the next restart -- a console connection is one -- quietly armed a
+        // window somebody had stopped. Nothing pending means every row the
+        // budget paid for is on disk, which is the only moment the two may be
+        // written to agree.
         if self.pending.is_empty() {
+            self.save_budget();
             return Ok(0);
         }
         let mut file = OpenOptions::new().create(true).append(true).open(PATH)?;
@@ -466,16 +498,28 @@ impl Log {
         // Written on the sync rather than the append, so it costs one NVS write
         // a minute at most, matching what is already on disk.
         let _ = crate::settings::store_logged_records(self.records);
-        // **The budget is saved with the sync that writes the rows it paid
-        // for**, so after a restart the count on disk and the count left agree:
-        // rows still pending when power went are lost *and* still owed. Only on
-        // a change -- an idle minute writes nothing.
-        // A failed write leaves the two apart, so the next sync tries again.
-        let moved = self.event_budget != self.saved_budget;
-        if moved && crate::settings::store_event_budget(self.event_budget).is_ok() {
-            self.saved_budget = self.event_budget;
-        }
+        self.save_budget();
         Ok(written)
+    }
+
+    /// Write the event budget to NVS if it has moved since it last was.
+    ///
+    /// **Saved with the sync that writes the rows it paid for**, so after a
+    /// restart the count on disk and the count left agree: rows still pending
+    /// when power went are lost *and* still owed. Only on a change -- an idle
+    /// minute writes nothing. A failed write leaves the two apart, so the next
+    /// sync, idle or not, tries again.
+    fn save_budget(&mut self) {
+        if self.event_budget == self.saved_budget {
+            return;
+        }
+        match crate::settings::store_event_budget(self.event_budget) {
+            Ok(()) => self.saved_budget = self.event_budget,
+            Err(e) => println!(
+                "log:  events: could not save {} row(s) left ({e}) -- NVS still says {}; retried each sync",
+                self.event_budget, self.saved_budget
+            ),
+        }
     }
 
     /// Erase the log and start again.
