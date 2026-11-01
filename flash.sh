@@ -109,5 +109,8 @@ espflash flash --port "$PORT" --non-interactive --before usb-reset \
     "$DIR/lightning"
 
 echo
-echo "flashed. Monitor with:"
+echo "flashed. Set the clock -- flashing stops the RTC -- with the tool that waits for"
+echo "the console, since opening the port restarts the board:"
+echo "    $HERE/tools/send.py --port $PORT --clock"
+echo "Monitor with:"
 echo "    espflash monitor --port $PORT"

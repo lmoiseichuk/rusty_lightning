@@ -84,7 +84,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 891 |
+| `listen` | The event loop. | -- | 896 |
 
 ### The sensor and what it hears
 

@@ -277,6 +277,11 @@ pub fn listen(
     // reported, rather than either being repeated every second.
     let mut irq_failures: u32 = 0;
 
+    // The marker a script waits for before it types: from here on the console
+    // is being read. Everything before this line is the boot, and a command
+    // sent during it is sent to nobody. `tools/send.py` waits for it.
+    println!("con:  listening -- type `help`");
+
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
         // interrupt when it fires, so a loop that forgets this hears exactly one

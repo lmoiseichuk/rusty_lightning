@@ -33,37 +33,62 @@ picocom -b 115200 --imap lfcrlf /dev/ttyACM0
 this every line after the first starts at the column the last one ended on.
 Leave with `Ctrl-A` `Ctrl-X`.
 
-### Scripted — `stty` plus plain redirection
+### Scripted — `tools/send.py`
+
+**The one to use for anything a script sends**, because it is the only form
+here that survives the restart an open causes (below):
+
+```sh
+./tools/send.py --clock                          # set the clock to the host's
+./tools/send.py status regs                      # each command, and its answer
+./tools/send.py --until "# end" dump \
+    | sed -n '/^# lightning strike log/,/^# end/p' > storm.csv
+```
+
+It holds the port open for the whole conversation, so there is one restart at
+most; if the banner scrolls past it waits for `con:  listening` — the line the
+loop prints as it starts reading — before typing; if the board was already
+running it sends a bare newline first, to wake a light-sleeping USB PHY. It
+finds the board by MAC from `devices.list` and refuses any other, because
+`clear` is a command too. `--clock` reads the epoch as it sends it, not when the
+shell expanded `$(date +%s)` fifteen seconds of boot earlier.
+
+### By hand — `stty` plus plain redirection
 
 Useful when you want the output in a file rather than on a screen:
 
 ```sh
 stty -F /dev/ttyACM0 115200 raw -echo -echoe -echok
-cat /dev/ttyACM0 &            # reader in the background
-echo status > /dev/ttyACM0    # writer
+cat /dev/ttyACM0 &            # reader in the background -- this open restarts it
+# ... wait for `con:  listening` in the reader's output ...
+echo status > /dev/ttyACM0    # writer: the reader holds the port, so no restart
 ```
 
 `raw` is the important flag. Without it the line discipline buffers, translates
 newlines and interprets `Ctrl-` characters, so commands arrive mangled or not at
 all. `-echo` stops your own typing coming back at you.
 
+**Start the reader first and leave it running.** It is the reader's open that
+restarts the board; an `echo` while it holds the port is a second open and
+changes nothing. An `echo` with no reader is the first open: it restarts the
+board and its line arrives during the boot, read by nobody — and `echo` still
+exits 0.
+
 Stop the reader with `kill %1` when done.
 
-### Scripted, reliably — Python
+### Python, for your own scripts
 
-What the development scripts in this repo use. `pyserial` handles the port
-lifecycle properly, and it is the only approach that reads and writes at once
-without fighting the shell:
+`pyserial` handles the port lifecycle properly, and it reads and writes at once
+without fighting the shell. `tools/send.py` is the worked example; the shape is:
 
 ```python
-import serial, time
+import serial
 
-port = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
-time.sleep(2)                      # let the port settle after opening
-port.reset_input_buffer()
+port = serial.Serial('/dev/ttyACM0', 115200, timeout=1)   # restarts the board
+for line in iter(port.readline, None):                    # wait for the loop
+    if b'con:  listening' in line:
+        break
 port.write(b'status\n')
-time.sleep(3)                      # give the device time to answer
-print(port.read(port.in_waiting or 1).decode(errors='replace'))
 ```
 
 ---
@@ -78,8 +103,18 @@ real command — or pin the clock (below), which stops it happening at all.
 
 **Opening the port resets the device, every time.** This used to say `picocom
 --noreset` avoids it; measured on 2026-11-01 it does not — the board restarts
-with `rst:0x15` (`USB`) on every open, with DTR and RTS both held low. If you see
-the banner scroll past every time you connect, that is why, not a crash.
+with `rst:0x15` (`USB`) on every open, from `picocom --noreset` and from pyserial
+with DTR and RTS both held low. A bare `echo > /dev/ttyACM0` was not tried, and
+nothing suggests it differs: the kernel raises both lines on the first open
+whoever asks. If you see the banner scroll past every time you connect, that is
+why, not a crash.
+
+**So a command sent at the open is lost.** The restarted board does not read
+its console until the boot is done — the banner's two-second wait, the sensor
+and antenna checks, the five-second logo — and says so with
+`con:  listening -- type \`help\``. Type after that line. One-shot
+`echo cmd > /dev/ttyACM0` is the pattern this breaks, which is why every recipe
+on this page now uses `tools/send.py` or a reader that holds the port.
 
 Two consequences shape the rest of this page. **Nothing that lives only in RAM
 survives looking at it** — so `mask` and an armed `events` budget are kept in
@@ -164,8 +199,13 @@ which is why it no longer gives a number.)
 Setting the clock from the host, which is almost always what you want:
 
 ```sh
-echo "date $(date +%s)" > /dev/ttyACM0
+./tools/send.py --clock
 ```
+
+Not `echo "date $(date +%s)" > /dev/ttyACM0`: that open restarts the board and
+the line arrives during the boot, so the clock stays wherever NVS left it — and
+`date` behind a fifteen-second boot would be fifteen seconds slow even if it
+landed. `send.py` waits for the console and reads the epoch as it sends.
 
 ### Diagnostics
 
@@ -206,10 +246,15 @@ record of when flashes actually happened — a phone recording with a clock in
 shot is enough; a Blitzortung screenshot is better.
 
 ```sh
-echo "events 20000" > /dev/ttyACM0    # arm it before the storm
+./tools/send.py "events 20000"         # arm it before the storm -- capped to what fits, and saved
 # ... let the storm run ...
-echo "dump"         > /dev/ttyACM0 > storm.csv
+./tools/send.py --until "# end" dump \
+    | sed -n '/^# lightning strike log/,/^# end/p' > storm.csv
 ```
+
+The old recipe here, `echo "dump" > /dev/ttyACM0 > storm.csv`, never worked:
+the second redirection replaces the first, so `dump` went into the file and
+nothing went to the board.
 
 **It is a budget, not a switch, and that is deliberate.** This log does not
 rotate and has no size bound: it grows until the filesystem is full and then
@@ -479,7 +524,8 @@ be rebuilt from CSV on every wake, and this device has no reason to use it.
 
 ```sh
 stty -F /dev/ttyACM0 115200 raw -echo
-cat /dev/ttyACM0 &
+cat /dev/ttyACM0 &                         # this open restarts the board
+# ... wait for `con:  listening` ...
 
 echo "date $(date +%s)" > /dev/ttyACM0   # the clock is only as fresh as its last save
 echo "freq 160"         > /dev/ttyACM0   # stay reachable
@@ -490,8 +536,12 @@ echo "status"           > /dev/ttyACM0   # and that it is hearing something
 
 echo "dump"             > /dev/ttyACM0   # the whole log when you are done
 echo "freq auto"        > /dev/ttyACM0   # hand the clock back before you walk away
-kill %1
+kill %1                                    # the last close; the next open restarts it again
 ```
+
+With the reader holding the port, each `echo` is a second open and restarts
+nothing. Started without it, every one of these lines would restart the board
+and be lost in the boot — which is what `tools/send.py` exists to avoid.
 
 The device writes every strike to `/lfs/strikes.csv` on its own filesystem
 whether or not anything is connected, so nothing is lost by disconnecting. `dump`

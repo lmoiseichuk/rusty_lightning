@@ -246,17 +246,42 @@ rate, and no amount of averaging fixes it.
 
 ## 9. The measurement that settles most of it
 
-Arm the log, sweep the rungs by hand, and read the three curves nobody has:
+Arm the log, sweep the rungs by hand, and read the three curves nobody has.
+
+**One open of the port for the whole sweep.** Opening it restarts the board, and
+the two settings a sweep depends on — the frozen tuner and the hand-placed rung —
+live in RAM on purpose, so a second open part-way would undo them. A reader that
+holds the port makes every `echo` a second open, which restarts nothing:
 
 ```sh
-echo "events 20000" > /dev/ttyACM0     # log disturbers and noise too, capped to what fits
-echo "place 0"      > /dev/ttyACM0     # then 1..7, ten minutes each
-echo "dump"         > /dev/ttyACM0 > sweep.csv
+stty -F /dev/ttyACM0 115200 raw -echo
+cat /dev/ttyACM0 > sweep.log &                   # this open restarts the board
+until grep -q 'con:  listening' sweep.log; do sleep 1; done
+
+echo "freq 160"     > /dev/ttyACM0               # stay awake: light sleep drops the port
+echo "events 20000" > /dev/ttyACM0               # log disturbers and noise, capped to what fits
+echo "mask off"     > /dev/ttyACM0               # or the disturber curve is empty by construction
+echo "sensitive on" > /dev/ttyACM0               # freeze the tuner, or it walks off each rung
+for nf in 0 1 2 3 4 5 6 7; do
+    echo "defence $nf" > /dev/ttyACM0; sleep 600 # ten minutes a rung
+done
+echo "sensitive off" > /dev/ttyACM0
+echo "mask on"       > /dev/ttyACM0              # saved, so put it back
+echo "freq auto"     > /dev/ttyACM0
+kill %1
+
+./tools/send.py --until "# end" dump | sed -n '/^# lightning strike log/,/^# end/p' > sweep.csv
 ```
 
+(This recipe used to say `place 0`, which is not a console word — `defence` is —
+and sent each line with its own `echo`, so every line restarted the board and
+was lost in its boot.)
+
 Offline that yields, per rung: the noise rate, the disturber rate, and how often
-the rescue poll found what the interrupt missed. Every argument on this page is a
-claim about one of those three curves.
+the poll found an event with INT low. Every argument on this page is a claim
+about one of those three curves — and on 0.21.0 and later the third should be
+zero, since the level interrupt leaves the poll nothing to miss; a rung where it
+is not is a rung where the IRQ wire is failing.
 
 If the disturber rate is flat across all eight rungs, the liveness idea carries
 no information in this room. If it *falls* with rising `NF_LEV`, then the knob is

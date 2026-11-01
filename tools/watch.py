@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""Read the console WITHOUT touching DTR/RTS.
+"""Read the console, touching DTR/RTS as little as pyserial allows.
+
+    ./tools/watch.py [port] [seconds]
 
 The ESP32-C3's USB-Serial/JTAG maps the host's CDC control lines onto the reset
 and boot straps, so a monitor that asserts them reboots the board it is trying
 to observe -- and then faithfully reports the reset it caused. pyserial asserts
 DTR on open by default, which is enough to do it.
 
-Clearing both lines *before* open() is what makes this a passive observer, and
-that is the whole point of the file: it is the only way to see what a plug-in
-event actually does without being the cause of it.
+**Clearing both lines before open() does not make this passive after all.**
+Written as the one way to watch a plug-in without causing a reset, and measured
+on 2026-11-01 to cause one anyway: `rst:0x15` on every open, with DTR and RTS
+both cleared -- and `picocom --noreset` did the same. Which transition does it
+is not settled: the kernel raises both lines on the first open of the port
+whoever asks, and pyserial then lowers them one at a time. Either way, whatever
+this shows begins with a restart this script caused; the restart before that is
+the one in the banner's `boot: before that, newest first:` line, which is why
+that line exists.
 
-    ./tools/watch.py [port] [seconds]
+To type commands rather than only watch, use `tools/send.py`, which waits for
+the console to be listening first.
 """
 import sys
 import time

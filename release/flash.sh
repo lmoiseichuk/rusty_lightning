@@ -128,8 +128,13 @@ cat <<EOF
 then falls back to whatever NVS last saved, up to fifteen minutes stale. A
 strike stamped in between would carry a timestamp minutes early.
 
-    echo "date \$(date +%s)" > $PORT
+    $HERE/send.py --port $PORT --clock
 
-Watch it:
+Not \`echo "date ..." > port\`: opening the port restarts the board, and a line
+written at the open reaches it while it boots, before anything reads the
+console. send.py holds the port, waits for \`con:  listening\`, and reads the
+epoch as it sends it.
+
+Watch it -- and every open restarts it, so the banner you see is that restart's:
     espflash monitor --port $PORT
 EOF

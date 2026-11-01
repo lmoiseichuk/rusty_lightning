@@ -44,8 +44,10 @@ cd "$HERE"
 SOURCES="src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defaults rust-toolchain.toml littlefs_bindings.h assets .cargo/config.toml components_esp32c3.lock"
 
 # `release/flash.sh` sources this, so a release tree carries its own identity
-# check rather than depending on the checkout it was built in.
-SHARED_INTO_RELEASE="tools/board.sh devices.list.example"
+# check rather than depending on the checkout it was built in. `send.py` goes
+# with it because flash.sh's last instruction -- set the clock -- names it, and
+# it finds the board through the `board.sh` beside it.
+SHARED_INTO_RELEASE="tools/board.sh tools/send.py devices.list.example"
 
 TARGET_TRIPLE="riscv32imc-esp-espidf"
 BINARY="lightning"

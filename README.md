@@ -45,7 +45,7 @@ number in a commit message is a number nobody reads again.
 ```sh
 cp devices.list.example devices.list     # name your board, once
 ./flash.sh                               # build and flash, by MAC not by ttyACM
-echo "date $(date +%s)" > /dev/ttyACM0   # set the clock -- flashing stops the RTC
+./tools/send.py --clock                  # set the clock -- flashing stops the RTC
 ```
 
 **`devices.list` is why the first line exists.** Every script that can write to a
@@ -57,10 +57,15 @@ device identity is committed and a clone is somebody else's bench, not this one.
 Then open the console at 115200 and type `help`. Or hold **BOOT** for five
 seconds and point a phone at the screen.
 
+**Opening the port restarts the board**, so anything typed before it prints
+`con:  listening` goes nowhere — which is why the clock is set with
+`tools/send.py`, which waits for that line, and not with `echo > /dev/ttyACM0`.
+
 ```sh
 tools/check.sh          # the host checks, then the release build
 tools/release.sh        # stamped images into release/
 tools/power.sh          # cut and restore USB power, when the port stops appearing
+tools/send.py           # type console commands once the board is listening
 tools/modules.py        # regenerate the module map
 ```
 
