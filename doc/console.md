@@ -621,8 +621,8 @@ nothing.
 `devices.list` in the checkout root, one `name  MAC` pair per line:
 
 ```
-lightning   B0:A6:04:06:E6:D4
-panel-c5    10:BD:A3:CF:3D:A0
+lightning   AA:BB:CC:DD:EE:FF
+panel-c5    11:22:33:44:55:66
 ```
 
 The first entry is the default; `BOARD=panel-c5 ./flash.sh` picks another, and
@@ -635,9 +635,9 @@ somebody acts on where a bare MAC is one they squint at:
 
 ```
 ⚠ /dev/ttyACM0 is not the configured board.
-  it resolves to: /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_10:BD:A3:CF:3D:A0-if00
+  it resolves to: /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_11:22:33:44:55:66-if00
   which is:       panel-c5
-  expected MAC:   B0:A6:04:06:E6:D4
+  expected MAC:   AA:BB:CC:DD:EE:FF
 Refusing: flashing the wrong board replaces its firmware
 ```
 
