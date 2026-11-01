@@ -140,6 +140,14 @@ pub enum Command {
     /// `mask on|off` keeps disturbers off the IRQ or lets them on, and saves
     /// it; a bare `mask` reports.
     MaskDisturbers(Option<bool>),
+    /// `panel sleep on|off` powers the e-paper down between refreshes, or
+    /// leaves it up, and saves it; `panel` or `panel sleep` reports.
+    ///
+    /// Two words rather than reusing `sleep`, which is the MCU's light sleep
+    /// and a different question: that one is about whether the USB port
+    /// survives, this one about whether the panel's step-up converter runs
+    /// beside the antenna.
+    PanelSleep(Option<bool>),
     /// Typed, but not understood. Still counts as activity.
     Unknown,
 }
@@ -373,6 +381,12 @@ pub fn parse(line: &str) -> Command {
             Some("off") => Command::MaskDisturbers(Some(false)),
             _ => Command::Unknown,
         },
+        "panel" | "epd" => match (arg, arg2) {
+            (None, _) | (Some("sleep"), None) => Command::PanelSleep(None),
+            (Some("sleep"), Some("on")) => Command::PanelSleep(Some(true)),
+            (Some("sleep"), Some("off")) => Command::PanelSleep(Some(false)),
+            _ => Command::Unknown,
+        },
         "sensitive" | "sens" => match arg {
             Some("on") => Command::Sensitive(true),
             Some("off") => Command::Sensitive(false),
@@ -486,6 +500,7 @@ pub fn print_help() {
     println!("  import <e>,<d>,<en>,<n> append one historical record: epoch, distance, energy, strokes");
     println!("  freq [auto|40|80|160] read the clock, or pin it");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
+    println!("  panel sleep [on|off]  power the e-paper down between refreshes (default on); saved");
     println!();
     println!("Typing anything also keeps the device awake for 10 minutes.");
     println!("Otherwise it light-sleeps and the USB port goes with it.");

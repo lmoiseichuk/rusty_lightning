@@ -76,6 +76,7 @@ pub fn handle(
                 minute,
                 uptime_minutes: now_ms / 60_000,
                 max_sensitivity: rt.tuning.frozen,
+                panel_sleep: rt.screen.panel_sleep,
             },
         );
         if effects.clock_saved {
@@ -246,6 +247,21 @@ pub fn handle(
                     }
                 }
                 Err(e) => println!("mask: could not change it -- {e}"),
+            }
+        }
+
+        if let Some(on) = effects.panel_sleep {
+            // Held on the screen, which is what passes it to every refresh, and
+            // saved so the comparison outlives the restart the next console
+            // connection causes. The redraw `commands` asked for applies it.
+            rt.screen.panel_sleep = on;
+            let saved = match settings::store_panel_sleep(on) {
+                Ok(()) => "saved".to_string(),
+                Err(e) => format!("NOT saved -- {e}"),
+            };
+            match on {
+                true => println!("panel: powered down between refreshes ({saved}) -- from this redraw"),
+                false => println!("panel: left powered between refreshes ({saved}) -- from this redraw"),
             }
         }
 

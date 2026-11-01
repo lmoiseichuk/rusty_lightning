@@ -42,6 +42,7 @@ const KEY_RESTARTS: &[u8] = b"restarts\0";
 const KEY_MASK: &[u8] = b"mask\0";
 /// Event rows still to log. A count, not a switch -- see `Log::event_budget`.
 const KEY_EVENTS: &[u8] = b"events\0";
+const KEY_PANEL_SLEEP: &[u8] = b"epd_sleep\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -403,4 +404,15 @@ pub fn store_event_budget(rows: u32) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u32(KEY_EVENTS, rows)?;
     nvs.commit()
+}
+
+/// Whether the panel is powered down between refreshes. `None` on a device
+/// never told, where it is -- see `display::Panel::sleep` for why that is the
+/// default and what the other setting is kept for.
+pub fn panel_sleep() -> Option<bool> {
+    get_switch(KEY_PANEL_SLEEP)
+}
+
+pub fn store_panel_sleep(on: bool) -> Result<(), EspError> {
+    store_switch(KEY_PANEL_SLEEP, on)
 }

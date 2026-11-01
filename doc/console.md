@@ -132,9 +132,12 @@ sleep would quietly cost the battery, and you would not find out for weeks.
 Type `help` on the device for the current list. Everything below also counts as
 console activity, which is what holds the awake window open.
 
-Six commands answer to a second name, so a half-remembered one usually still
-works: `time`→`date`, `chart`→`scope`, `point`→`defence`, `cal`→`calibrate`,
-`sens`→`sensitive`, `batt`→`battery`.
+Several commands answer to a second name, so a half-remembered one usually
+still works: `?`→`help`, `time`→`date`, `chart`→`scope`, `point`→`defence`,
+`cal`→`calibrate`, `spike`→`srej`, `watchdog`→`wdth`, `gold`→`golden`,
+`portal`→`ap`, `cs`→`clearstats`, `sens`→`sensitive`, `batt`→`battery`,
+`epd`→`panel`. (This line used to say "six" while the parser knew twelve —
+which is why it no longer gives a number.)
 
 ### Looking around
 
@@ -183,6 +186,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `mask [on\|off]` | whether disturbers may raise the IRQ. Masked by default; `mask off` is the experiment that logs them. Saved, so it outlives a restart; bare, it reports |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
 | `sleep on\|off` | light sleep alone, leaving the clock where it is |
+| `panel sleep [on\|off]` | power the e-paper down after every refresh (`on`, the default) or leave it powered (`off`, how it ran until 0.21.0). Saved; redraws at once so the new setting is in force immediately. Bare `panel` reports. See below |
 | `strike [km] [intensity]` | inject a synthetic strike |
 
 ---
@@ -435,6 +439,23 @@ validates the waveform, so no spark generator, piezo igniter or lighter will
 ever produce a `Lightning` classification — a lighter raises the disturber count
 and nothing else. The simulator exercises recording, scoring, logging and
 charting without one.
+
+**`panel sleep` is an experiment with a default.** Until 0.21.0 the e-paper
+controller was never powered down: after its first refresh it left its booster
+running, and on this board that booster is an inductor switcher (L1, Q1 on the
+driver board) a few centimetres from a receiver tuned to 500 kHz — the first
+item on the AS3935 datasheet's list of noise sources to avoid. On 2026-11-01 the
+receiver indoors heard six to ten disturbers a second, back to back, through
+audible thunder, and in September it logged thousands of false `overhead`
+strikes landing 6–9 s after a real one — about when that strike's redraw lands.
+Neither is proven to be the panel; both are what it would look like.
+
+So the panel now powers down after each refresh and is woken before the next.
+The wake is the same reset-and-init every boot does before the logo, about a
+fifth of a second plus the booster's start-up; each redraw that paid it says
+`woke in N ms` on the console. `panel sleep off` puts the old behaviour back,
+so the comparison is one command on the same board in the same weather — and it
+is saved, so the console connection that sets it does not undo it.
 
 **`sleep` is separate from `freq`** because they answer different questions: the
 clock is about speed, light sleep is about whether the USB port survives. Deep

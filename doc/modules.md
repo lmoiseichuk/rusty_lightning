@@ -108,25 +108,25 @@ this table is generated from it.
 | `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
 | `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 575 |
-| `settings` | What survives a power cut, and nothing else. | -- | 406 |
+| `settings` | What survives a power cut, and nothing else. | -- | 418 |
 | `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 
 ### The glass
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `display` | The 7.5" panel — hardware only (§6). | -- | 335 |
-| `screen` | When the panel is redrawn, and what goes on it. | -- | 270 |
+| `display` | The 7.5" panel — hardware only (§6). | -- | 425 |
+| `screen` | When the panel is redrawn, and what goes on it. | -- | 286 |
 | `ui` | Screen layout (§6). | -- | 1452 |
 
 ### Talking to a person
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 574 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 553 |
+| `commands` | What the console commands actually do (§5). | -- | 594 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 568 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 452 |
+| `effects` | Applying the console's hardware effects. | -- | 468 |
 | `portal` | The access point and the web server it carries. | -- | 615 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
 | `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 203 |
@@ -164,6 +164,7 @@ program' is not information.
 | `commands` | `as3935` `battery` `budget` `clock` `console` `credentials` `golden` `history` `log` `power` `session` `settings` `strike` `system` `ui` |
 | `console` | `defence` `query` `session` `strike` |
 | `credentials` | `storage` |
+| `display` | `uptime` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
 | `history` | `strike` |
 | `log` | `as3935` `budget` `clock` `csv` `history` `settings` |
@@ -171,7 +172,7 @@ program' is not information.
 | `policy` | `uptime` |
 | `portal` | `clock` `credentials` `history` `log` `session` `strike` `system` `tuning` `uptime` `webui` |
 | `power` | `policy` `storage` |
-| `screen` | `as3935` `battery` `clock` `defence` `display` `history` `power` `session` `system` `ui` `uptime` |
+| `screen` | `as3935` `battery` `clock` `defence` `display` `history` `power` `session` `settings` `system` `ui` `uptime` |
 | `session` | `as3935` `clock` `defence` `golden` `history` `log` `merger` `settings` `uptime` |
 | `settings` | `as3935` `battery` `defence` `golden` `storage` |
 | `system` | `settings` |
@@ -180,7 +181,7 @@ program' is not information.
 | `webui` | `portal` `query` |
 
 **Depends on nothing in this crate** — the bottom of the stack, and
-where a change is cheapest: `budget`, `civil`, `csv`, `defence`, `display`, `golden`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `uptime`, `verdict`.
+where a change is cheapest: `budget`, `civil`, `csv`, `defence`, `golden`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `uptime`, `verdict`.
 <!-- end generated -->
 
 ## How a strike travels

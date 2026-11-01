@@ -134,6 +134,25 @@ type PanelDriver<'d> = Epd7in5<
 pub struct Panel<'d> {
     epd: PanelDriver<'d>,
     spi: SpiDeviceDriver<'d, SpiDriver<'d>>,
+    /// Whether the controller has been sent to deep sleep since its last
+    /// init, so the next [`Panel::show`] has to wake it first.
+    ///
+    /// Set after any attempt to sleep, successful or not: a power-down that
+    /// failed half way leaves the controller in a state nothing here can name,
+    /// and the wake is a hardware reset followed by the boot-time init, which
+    /// is correct from any of them.
+    asleep: bool,
+}
+
+/// What one [`Panel::show`] did, for the console line that reports it.
+pub struct Refresh {
+    /// How long the panel was busy refreshing. Zero means BUSY never fell:
+    /// nothing was drawn.
+    pub busy_ms: u32,
+    /// How long waking it took first, when it had been put to sleep.
+    pub woke_ms: Option<u32>,
+    /// Whether it was powered down again afterwards.
+    pub asleep: bool,
 }
 
 impl<'d> Panel<'d> {
@@ -182,7 +201,7 @@ impl<'d> Panel<'d> {
             // map them to, and the caller only needs "the panel did not come up".
             .map_err(|_| EspError::from_infallible::<{ esp_idf_hal::sys::ESP_FAIL }>())?;
 
-        Ok(Self { epd, spi })
+        Ok(Self { epd, spi, asleep: false })
     }
 
     /// A blank framebuffer, on the heap.
@@ -237,13 +256,52 @@ impl<'d> Panel<'d> {
     ///
     /// Full refresh every time. §6 leaves partial refresh open for this panel;
     /// until that is settled, full is the one known to produce a correct image.
-    pub fn show(&mut self, frame: &Display7in5) -> Result<u32, EspError> {
+    ///
+    /// ## Waking before, and sleeping after
+    ///
+    /// With `sleep_after` the controller is powered down once the refresh has
+    /// finished, and woken again at the start of the next call. See
+    /// [`Panel::sleep`] for why, and what the wake costs. Everything between
+    /// -- the frame, the refresh, the wait -- is the same either way, so the
+    /// two settings can be compared on what they change and nothing else.
+    pub fn show(&mut self, frame: &Display7in5, sleep_after: bool) -> Result<Refresh, EspError> {
         let mut delay = Delay::new_default();
+
+        let woke_ms = match self.asleep {
+            true => Some(self.wake()?),
+            false => None,
+        };
+
         self.epd
             .update_and_display_frame(&mut self.spi, frame.buffer(), &mut delay)
             .map_err(|_| EspError::from_infallible::<{ esp_idf_hal::sys::ESP_FAIL }>())?;
+        let busy_ms = Self::wait_for_refresh();
 
-        Ok(Self::wait_for_refresh())
+        if sleep_after {
+            if let Err(e) = self.sleep() {
+                println!("epd:  could not power the panel down -- {e}");
+            }
+            // Either way: see `asleep` for why a failed power-down still counts.
+            self.asleep = true;
+        }
+
+        Ok(Refresh { busy_ms, woke_ms, asleep: self.asleep })
+    }
+
+    /// Bring the controller out of deep sleep. Returns how long it took, in ms.
+    ///
+    /// `epd-waveshare`'s `wake_up` for this panel *is* its `init`: a hardware
+    /// reset, then the power settings, `PowerOn`, and a wait for BUSY. So a
+    /// wake is exactly what every boot already does before the logo -- the
+    /// one path on this board that has drawn correctly from the first day.
+    fn wake(&mut self) -> Result<u32, EspError> {
+        let started = crate::now_ms();
+        let mut delay = Delay::new_default();
+        self.epd
+            .wake_up(&mut self.spi, &mut delay)
+            .map_err(|_| EspError::from_infallible::<{ esp_idf_hal::sys::ESP_FAIL }>())?;
+        self.asleep = false;
+        Ok(crate::uptime::since(crate::now_ms(), started))
     }
 
     /// Block until the panel finishes refreshing. Returns the busy time in ms.
@@ -292,14 +350,46 @@ impl<'d> Panel<'d> {
         busy_ms
     }
 
-    /// Put the panel to sleep. The image stays on the glass with no power.
+    /// Power the controller down. The image stays on the glass with no power.
     ///
-    /// Not called on the redraw path, deliberately. `Epd7in5::sleep` issues
-    /// `DeepSleep`, and coming back from it needs a full re-init — so sleeping
-    /// between redraws would add a wake-and-init to every refresh of a device
-    /// that is usually USB-powered (§7). It is kept because battery operation
-    /// will want it, and because the panel holds its image either way.
-    #[allow(dead_code)]
+    /// `Epd7in5::sleep` waits for BUSY, sends `PowerOff` -- which stops the
+    /// panel's step-up converter -- waits again, then `DeepSleep`.
+    ///
+    /// ## Why the redraw path now calls it
+    ///
+    /// **This was deliberately never called**, on the argument that sleeping
+    /// between redraws adds a wake-and-init to every refresh of a device that
+    /// is usually on USB. What that argument did not weigh is what stays
+    /// running instead. Without `PowerOff` the UC8179 leaves its booster on
+    /// after the first refresh, and on Seeed's driver board that booster is an
+    /// inductor switcher -- L1 (10 µH) and Q1, driven from the controller's GDR
+    /// pin -- a few centimetres from a receiver tuned to 500 kHz. The AS3935
+    /// datasheet's list of noise sources to avoid starts with "inductor based
+    /// DC-DC converters". On 2026-11-01 the receiver indoors heard six to ten
+    /// disturbers a second with a floor of 60-80 ms between them -- a
+    /// continuous local source -- and in September it logged 9,542 strikes,
+    /// 99 % `overhead`, arriving 6-9 s after another strike: just when a
+    /// strike's own redraw lands. Neither is proven to be the panel. Both are
+    /// what it would look like.
+    ///
+    /// So `panel sleep on` -- the default -- calls this after every refresh,
+    /// and `panel sleep off` restores the old behaviour, so the two can be
+    /// compared on the same board in the same weather.
+    ///
+    /// ## What the wake costs, from the driver rather than a bench
+    ///
+    /// `wake_up` is `init`: the reset holds RST high 10 ms, low 2 ms, then
+    /// waits 200 ms. `Delay` hands anything from a millisecond up to
+    /// `vTaskDelay`, which rounds to the 10 ms tick, so that is 190-220 ms of
+    /// fixed cost. Then `PowerOn` and a wait for BUSY, polled every 10 ms, for
+    /// however long the booster takes to come up -- which nothing here has
+    /// measured. So: a fifth of a second plus the booster's start, once per
+    /// refresh, against a refresh of 3.8 s. At the five-minute baseline that
+    /// is a few seconds an hour. The console prints the real figure with every
+    /// redraw that paid it.
+    ///
+    /// The power-down itself is `PowerOff` and its BUSY wait, polled the same
+    /// way, then one command byte.
     pub fn sleep(&mut self) -> Result<(), EspError> {
         let mut delay = Delay::new_default();
         self.epd

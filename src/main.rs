@@ -420,11 +420,21 @@ fn main() {
     // a batch window -- so without this the panel holds whatever was on it from
     // the last run, which reads exactly like a board that did not boot.
     if let Some(panel) = panel.as_mut() {
+        // Powered down between refreshes unless told otherwise -- see
+        // `display::Panel::sleep`. Said here so a boot log names which half of
+        // the comparison it belongs to.
+        let panel_sleep = settings::panel_sleep().unwrap_or(true);
+        match panel_sleep {
+            true => println!("epd:  powered down between refreshes (`panel sleep off` keeps it up)"),
+            false => println!("epd:  ⚠ left powered between refreshes (`panel sleep off`, saved)"),
+        }
         let mut frame = display::Panel::frame();
         ui::logo(&mut frame);
-        match panel.show(&frame) {
-            Ok(0) => println!("epd:  logo sent, but BUSY never fell -- nothing was drawn"),
-            Ok(busy_ms) => println!("epd:  logo drawn, panel busy {busy_ms} ms"),
+        match panel.show(&frame, panel_sleep) {
+            Ok(refresh) if refresh.busy_ms == 0 => {
+                println!("epd:  logo sent, but BUSY never fell -- nothing was drawn")
+            }
+            Ok(refresh) => println!("epd:  logo drawn, panel busy {} ms", refresh.busy_ms),
             Err(e) => println!("epd:  logo FAILED -- {e}"),
         }
         FreeRtos::delay_ms(LOGO_DWELL_MS);

@@ -40,6 +40,8 @@ pub struct Ctx<'a> {
     pub uptime_minutes: u32,
     /// Whether the §4.2 ladder is currently overridden and frozen.
     pub max_sensitivity: bool,
+    /// Whether the panel is powered down between refreshes.
+    pub panel_sleep: bool,
 }
 
 /// What the caller must do as a result.
@@ -100,6 +102,9 @@ pub struct Effects {
     /// reach this board classified as not-lightning. It costs missed edges in a
     /// close storm, so it is an experiment and not a resting state.
     pub mask_disturbers: Option<bool>,
+    /// `Some(on)` when `panel sleep on|off` was used. Applied by the caller,
+    /// which owns the screen the setting lives on.
+    pub panel_sleep: Option<bool>,
     /// Set by `freq`. Handled by the caller, which owns the policy loop — doing
     /// it here would be undone on the next tick.
     pub freq: Option<crate::console::FreqRequest>,
@@ -330,6 +335,10 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             // The two experiments that now survive a restart, so the line that
             // says what the device is doing has to say whether one is running.
             println!(
+                "status: panel {} between refreshes",
+                if ctx.panel_sleep { "powered down" } else { "left POWERED" }
+            );
+            println!(
                 "status: disturbers {}, events {}",
                 match crate::session::DISTURBERS_MASKED.load(core::sync::atomic::Ordering::Relaxed) {
                     true => "masked".to_string(),
@@ -530,6 +539,17 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             effects.redraw_now = true;
         }
         Command::MaskDisturbers(Some(on)) => effects.mask_disturbers = Some(on),
+        Command::PanelSleep(Some(on)) => {
+            effects.panel_sleep = Some(on);
+            // A redraw now, so the new setting is in force at once rather than
+            // after the next baseline -- an A/B whose B starts five minutes
+            // late is a comparison of the wrong five minutes.
+            effects.redraw_now = true;
+        }
+        Command::PanelSleep(None) => match ctx.panel_sleep {
+            true => println!("panel: powered down between refreshes -- `panel sleep off` keeps it up"),
+            false => println!("panel: left powered between refreshes -- `panel sleep on` to power it down"),
+        },
         // Reported from what was last written rather than read off the chip:
         // the bit shares `0x03` with the interrupt reason, and reading that
         // register clears a pending event. See `session::DISTURBERS_MASKED`.

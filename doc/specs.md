@@ -822,6 +822,25 @@ Refine later from the logged database once enough storms are recorded.
 >
 > A **button press bypasses the floor**: it is deliberate, rare, and the person is standing there.
 > A setting that takes half a minute to appear reads as a button that does not work.
+
+> #### ⚠ AS BUILT, 0.21.0: the panel is powered down between refreshes
+>
+> `epd-waveshare`'s refresh never sends `PowerOff`, and this firmware never called its `sleep`, so
+> from the first refresh onward the UC8179 kept its booster running — on Seeed's driver board an
+> inductor switcher (L1 10 µH, Q1, D1/D2/D5) driven from the controller's GDR pin, beside a receiver
+> tuned to 500 kHz. The AS3935 datasheet lists "inductor based DC-DC converters" first among the
+> noise sources to avoid. That makes it the leading suspect for two things measured on this board —
+> six to ten disturbers a second indoors with 60–80 ms between them, and false `overhead` strikes
+> arriving 6–9 s after a real one, which is when that strike's redraw lands — and nothing proves it
+> yet.
+>
+> `panel sleep on`, the default, sends `PowerOff` and `DeepSleep` after every refresh and wakes the
+> controller before the next; `off` keeps the old behaviour for comparison. The wake *is* the boot
+> init — reset, power settings, `PowerOn` — so it is the one sequence already proven on every start.
+> From the driver: 190–220 ms of reset delays at the 10 ms tick, plus the booster's power-on, which
+> is unmeasured; every redraw that paid it prints `woke in N ms`. Against a 3.8 s refresh at most
+> every five minutes in quiet weather, that is noise in the power budget. The frame, the refresh and
+> the redraw policy are unchanged either way.
 - 800×480×1bpp = 48 KB framebuffer — fits the C3's SRAM easily.
 ### Layout (three zones, top → bottom)
 

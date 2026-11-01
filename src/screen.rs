@@ -94,6 +94,11 @@ pub struct Screen {
     /// floors: a person pressing the button gets an immediate refresh, a strike
     /// gets a short one, and everything else waits its turn.
     pub strike_seen: bool,
+    /// Power the panel down after each refresh -- `panel sleep on|off`.
+    ///
+    /// Held here because the redraw is the one place it acts, and `effects`
+    /// already reaches the screen; restored from NVS at start, default on.
+    pub panel_sleep: bool,
     pub period: ui::ChartPeriod,
     /// Scratch for the chart series, sized for the longest ring so one buffer
     /// serves all three periods — the shorter ones use a prefix.
@@ -122,6 +127,7 @@ impl Screen {
             last_draw_ms: 0,
             user_acted: false,
             strike_seen: false,
+            panel_sleep: crate::settings::panel_sleep().unwrap_or(true),
             period: ui::ChartPeriod::Day,
             scores: [0u32; history::LONGEST_LEN],
         }
@@ -210,12 +216,22 @@ impl Screen {
         }
 
         let started = now_ms;
-        match panel.show(&frame) {
-            Ok(0) => println!("epd:  *** sent, but BUSY never fell -- nothing was drawn ***"),
-            Ok(busy_ms) => println!(
-                "epd:  redrawn ({why}) -- {} ms total, panel busy {} ms",
+        match panel.show(&frame, self.panel_sleep) {
+            Ok(refresh) if refresh.busy_ms == 0 => {
+                println!("epd:  *** sent, but BUSY never fell -- nothing was drawn ***")
+            }
+            // The wake is reported when one happened, because it is the whole
+            // cost of `panel sleep on` and the driver's figure for it is a
+            // reading of the code, not a measurement.
+            Ok(refresh) => println!(
+                "epd:  redrawn ({why}) -- {} ms total, {}panel busy {} ms{}",
                 crate::uptime::since(crate::now_ms(), started),
-                busy_ms
+                match refresh.woke_ms {
+                    Some(ms) => format!("woke in {ms} ms, "),
+                    None => String::new(),
+                },
+                refresh.busy_ms,
+                if refresh.asleep { ", powered down" } else { "" }
             ),
             Err(e) => println!("epd:  draw FAILED -- {e}"),
         }
