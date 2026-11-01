@@ -115,8 +115,8 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `display` | The 7.5" panel — hardware only (§6). | -- | 425 |
-| `screen` | When the panel is redrawn, and what goes on it. | -- | 286 |
+| `display` | The 7.5" panel — hardware only (§6). | -- | 566 |
+| `screen` | When the panel is redrawn, and what goes on it. | -- | 291 |
 | `ui` | Screen layout (§6). | -- | 1452 |
 
 ### Talking to a person

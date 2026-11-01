@@ -453,10 +453,20 @@ Neither is proven to be the panel; both are what it would look like.
 So the panel now powers down after each refresh and is woken before the next.
 The wake is the same reset-and-init every boot does before the logo, about a
 fifth of a second plus the booster's start-up; each redraw that paid it says
-`woke in N ms` on the console. `panel sleep off` puts the old behaviour back,
-so the comparison is one command on the same board in the same weather — and it
-is saved, so the console connection that sets it does not undo it, and it is on
-the web page for a board running on its cell with no cable to connect.
+`woke in N ms` and `powered down in N ms` on the console. `panel sleep off` puts
+the old behaviour back, so the comparison is one command on the same board in
+the same weather — and it is saved, so the console connection that sets it does
+not undo it, and it is on the web page for a board running on its cell with no
+cable to connect.
+
+**It is not free in a storm.** Nothing reads the sensor while the panel is
+woken, refreshed or put down, and the chip keeps only the latest event. In quiet
+weather that is a few seconds an hour; in a storm a strike earns a redraw five
+seconds after the last one, so the quarter second each adds comes to 100 s an
+hour or more on top of the refreshes themselves. If the panel turns out not to
+be the noise source, `panel sleep off` refunds it. A controller that never
+releases BUSY during a wake or a power-down is given up on after two seconds
+(`epd:  ⚠ wake: BUSY held past 2000 ms`) rather than holding the loop for good.
 
 **`sleep` is separate from `freq`** because they answer different questions: the
 clock is about speed, light sleep is about whether the USB port survives. Deep

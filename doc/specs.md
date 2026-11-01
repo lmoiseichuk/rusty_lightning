@@ -838,9 +838,27 @@ Refine later from the logged database once enough storms are recorded.
 > controller before the next; `off` keeps the old behaviour for comparison. The wake *is* the boot
 > init — reset, power settings, `PowerOn` — so it is the one sequence already proven on every start.
 > From the driver: 190–220 ms of reset delays at the 10 ms tick, plus the booster's power-on, which
-> is unmeasured; every redraw that paid it prints `woke in N ms`. Against a 3.8 s refresh at most
-> every five minutes in quiet weather, that is noise in the power budget. The frame, the refresh and
-> the redraw policy are unchanged either way.
+> is unmeasured, and after the refresh a power-down with two BUSY waits of its own; every redraw that
+> paid them prints `woke in N ms` and `powered down in N ms`. The frame, the refresh and the redraw
+> policy are unchanged either way.
+>
+> **The cost is loop time, and how much depends on the weather.** Nothing reads the sensor while the
+> panel is woken, refreshed or put down, and the AS3935 keeps only the latest event, so it is time in
+> which a second event replaces the first. At the five-minute baseline the wake adds a few seconds an
+> hour. In a storm a strike earns a redraw five seconds after the last one finished, so redraws come
+> about every nine seconds — some four hundred an hour, the refreshes alone holding the loop about
+> 43 % of it — and a quarter of a second more on each is 100 s an hour or more, taking that to about
+> 45 %. That is the price of the comparison while it runs; `off` refunds it.
+>
+> **And the driver's BUSY waits have no timeout** — `epd-waveshare` polls for as long as the
+> controller holds it. With `PowerOn` once at boot that was one exposure; with a wake on every
+> redraw, a booster that could not reach regulation on a sagging cell would hold the loop for ever,
+> with the console dead and the last screen on the glass. `display::BusyPin` therefore reads BUSY as
+> idle once a driver call has waited `DRIVER_WAIT_LIMIT_MS` (2 s), and the console says so
+> (`epd:  ⚠ wake: BUSY held past 2000 ms`): a frame sent to a busy controller is a frame not drawn,
+> which is reported, where a loop that never comes back reports nothing. A BUSY stuck low for good
+> still costs each redraw its bounds — these and the refresh's own 15 s — but the loop, and the
+> console, run between them.
 - 800×480×1bpp = 48 KB framebuffer — fits the C3's SRAM easily.
 ### Layout (three zones, top → bottom)
 

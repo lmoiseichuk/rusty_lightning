@@ -220,9 +220,10 @@ impl Screen {
             Ok(refresh) if refresh.busy_ms == 0 => {
                 println!("epd:  *** sent, but BUSY never fell -- nothing was drawn ***")
             }
-            // The wake is reported when one happened, because it is the whole
-            // cost of `panel sleep on` and the driver's figure for it is a
-            // reading of the code, not a measurement.
+            // The wake and the power-down are reported when they happened,
+            // because together they are the whole cost of `panel sleep on`, and
+            // the driver's figure for them is a reading of the code, not a
+            // measurement.
             Ok(refresh) => println!(
                 "epd:  redrawn ({why}) -- {} ms total, {}panel busy {} ms{}",
                 crate::uptime::since(crate::now_ms(), started),
@@ -231,7 +232,11 @@ impl Screen {
                     None => String::new(),
                 },
                 refresh.busy_ms,
-                if refresh.asleep { ", powered down" } else { "" }
+                match (refresh.slept_ms, refresh.asleep) {
+                    (Some(ms), _) => format!(", powered down in {ms} ms"),
+                    (None, true) => ", powered down".to_string(),
+                    (None, false) => String::new(),
+                }
             ),
             Err(e) => println!("epd:  draw FAILED -- {e}"),
         }

@@ -478,7 +478,16 @@ fn main() {
             Ok(refresh) if refresh.busy_ms == 0 => {
                 println!("epd:  logo sent, but BUSY never fell -- nothing was drawn")
             }
-            Ok(refresh) => println!("epd:  logo drawn, panel busy {} ms", refresh.busy_ms),
+            // The first power-down of the boot is timed like every later one,
+            // so the cost of `panel sleep on` is on the banner from the start.
+            Ok(refresh) => println!(
+                "epd:  logo drawn, panel busy {} ms{}",
+                refresh.busy_ms,
+                match refresh.slept_ms {
+                    Some(ms) => format!(", powered down in {ms} ms"),
+                    None => String::new(),
+                }
+            ),
             Err(e) => println!("epd:  logo FAILED -- {e}"),
         }
         FreeRtos::delay_ms(LOGO_DWELL_MS);
