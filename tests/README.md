@@ -29,6 +29,7 @@ cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civ
 | `defence.rs` | §4.2's noise-rejection ladder: rung boundaries, monotonicity, saturation |
 | `history.rs` | §4.3's strike rings: the score formula against the spec's observed figures, bucketing, gap clearing, and that "overhead"/"out of range" are counted but not averaged |
 | `merger.rs` | folding the strokes of one flash into a single strike, and what a merged flash reports |
+| `pace.rs` | walks over the whole log: a one-tick block every tenth of the task watchdog's timeout, both read from `sdkconfig.defaults`, and the dump that reset the board walked again at its measured rate |
 | `press.rs` | the button gesture boundaries: too short, gain flip, portal, stuck |
 | `uptime.rs` | interval arithmetic across the 49.7-day millisecond wrap |
 | `verdict.rs` | the noise verdict: what counts as quiet, and that only noise feeds it |

@@ -475,6 +475,13 @@ unsafe extern "C" fn handle_do(request: *mut sys::httpd_req_t) -> sys::esp_err_t
 /// the device has tens of kilobytes free; reading it into a `String` to send it
 /// would be an allocation failure at exactly the moment somebody is trying to
 /// rescue the data. `httpd_resp_send_chunk` writes as it reads.
+///
+/// **Paced like the console's `dump`** -- see [`crate::pace`]. This runs on
+/// the server's task, priority 5 against the main loop's 1, so while it keeps
+/// the CPU neither the loop nor the idle task runs. It does block whenever
+/// lwIP's send buffer is full and waits for the phone to acknowledge, but how
+/// often that happens depends on the link, and nothing has measured how fast
+/// this board can read the file onto it -- so it is not left to the network.
 unsafe extern "C" fn handle_log(request: *mut sys::httpd_req_t) -> sys::esp_err_t {
     use std::io::Read;
     unsafe {
@@ -496,6 +503,7 @@ unsafe extern "C" fn handle_log(request: *mut sys::httpd_req_t) -> sys::esp_err_
         };
 
         let mut buffer = [0u8; 1024];
+        let mut pace = crate::pace::Pace::new(crate::now_ms());
         loop {
             match file.read(&mut buffer) {
                 Ok(0) => break,
@@ -513,6 +521,7 @@ unsafe extern "C" fn handle_log(request: *mut sys::httpd_req_t) -> sys::esp_err_
                 }
                 Err(_) => break,
             }
+            crate::log::yield_when_due(&mut pace);
         }
         // A zero-length chunk is what terminates a chunked response.
         sys::httpd_resp_send_chunk(request, core::ptr::null(), 0)

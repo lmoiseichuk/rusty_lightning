@@ -14,6 +14,11 @@ CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=y
+# The IDF's default, written out because `src/pace.rs` is derived from it: a
+# walk over the whole log blocks for a tick every tenth of this, and
+# `tests/pace.rs` reads the number from here to hold it to that. It watches
+# the idle task only, so it fires when anything keeps the CPU this long.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
 
 # No Bluetooth. WiFi is deferred (§5) but left buildable.
 CONFIG_BT_ENABLED=n

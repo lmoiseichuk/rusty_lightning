@@ -20,6 +20,7 @@ mod i2c_scan;
 mod listen;
 mod log;
 mod merger;
+mod pace;
 mod policy;
 mod portal;
 mod power;

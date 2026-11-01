@@ -297,18 +297,38 @@ impl Log {
     /// Count what is already on disk.
     ///
     /// Derived from the file rather than kept in a separate counter, so the two
-    /// cannot disagree after a crash. Done once at open.
+    /// cannot disagree after a crash. Done at open, and after `clear`.
+    ///
+    /// **Paced, like every walk over the whole file** -- see [`crate::pace`].
+    /// This one runs at boot, where a task watchdog reset is not one lost dump
+    /// but a board that restarts at the same line every time it starts.
     fn recount(&mut self) {
         self.bytes = std::fs::metadata(PATH).map(|m| m.len() as u32).unwrap_or(0);
-        self.records = File::open(PATH)
-            .map(|file| {
-                BufReader::new(file)
-                    .lines()
-                    .skip(1) // the header
-                    .filter(|line| line.as_ref().map(|l| !l.trim().is_empty()).unwrap_or(false))
-                    .count() as u32
-            })
-            .unwrap_or(0);
+        self.records = 0;
+        let Ok(file) = File::open(PATH) else {
+            return;
+        };
+        let mut pace = crate::pace::Pace::new(crate::now_ms());
+        // `skip(1)` is the header.
+        for line in BufReader::new(file).lines().skip(1) {
+            match line {
+                Ok(text) if text.trim().is_empty() => {}
+                Ok(_) => self.records += 1,
+                // A line that is not UTF-8 has been read past already, and is
+                // skipped -- as the count always did.
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {}
+                // **Any other error ends the count.** It is the read itself
+                // failing, and `lines()` does not end on an error: it returns
+                // it and tries the same read again next time, so a failure
+                // that persists repeats for ever. The iterator chain this
+                // replaced counted until the iterator ended -- for a failing
+                // read, never. Unpaced that was a watchdog reset at every
+                // boot; paced it would be a boot that never finished. The
+                // dump and the replay stop at the first error already.
+                Err(_) => break,
+            }
+            yield_when_due(&mut pace);
+        }
     }
 
     pub fn len(&self) -> u32 {
@@ -536,12 +556,39 @@ impl Log {
     }
 }
 
+/// Block for one tick if `pace` says a walk over the log has kept the CPU long
+/// enough.
+///
+/// Called once per step of every walk over the whole file -- the three in this
+/// module and the web page's `/log.csv` -- and almost always it only reads the
+/// clock and returns. See [`crate::pace`] for the watchdog this keeps quiet and
+/// for the arithmetic.
+///
+/// **A block, not a yield.** `std::thread::yield_now` is `sched_yield`, which
+/// ESP-IDF implements as `vTaskDelay(0)` -- see [`crate::pace::BLOCK_TICKS`]
+/// for why that never lets the idle task in. Only blocking does, which is the
+/// same reason `as3935::settle` takes its tick before it spins.
+pub fn yield_when_due(pace: &mut crate::pace::Pace) {
+    if pace.due(crate::now_ms()) {
+        // SAFETY: a plain FreeRTOS call from task context, as in
+        // `as3935::settle`. Back at the next tick interrupt.
+        unsafe { sys::vTaskDelay(crate::pace::BLOCK_TICKS) };
+    }
+}
+
 /// Stream the file to the console.
 ///
 /// A copy rather than a re-render: the stored form is already the output form,
 /// which is the point of keeping CSV on disk. Anything reading this — a
 /// terminal, `netcat`, or later an HTTP handler — gets identical bytes.
+///
+/// **Paced, and that is the only thing the pacing changes.** Until 0.21.2 this
+/// loop never blocked while the host kept up, so at about 1.32 MB -- some
+/// 17,800 rows -- it outlasted the task watchdog and reset the board in the
+/// middle of the dump. See [`crate::pace`]. Not a byte of the output moves:
+/// the tools and the scripts that read it parse every line, `# end` included.
 pub fn dump_csv(log: &Log) {
+    let mut pace = crate::pace::Pace::new(crate::now_ms());
     println!("# lightning strike log, {} records", log.len());
     if !log.pending.is_empty() {
         println!("# ({} not yet synced, shown after the file)", log.pending.len());
@@ -550,14 +597,17 @@ pub fn dump_csv(log: &Log) {
         Ok(file) => {
             for line in BufReader::new(file).lines().map_while(Result::ok) {
                 println!("{line}");
+                yield_when_due(&mut pace);
             }
         }
         Err(e) => println!("# could not read {PATH}: {e}"),
     }
     // Buffered lines are shown too. They are real strikes that happened; the
-    // only thing not yet true of them is that they are on flash.
+    // only thing not yet true of them is that they are on flash. Paced as
+    // well: a minute of an armed `events` window is hundreds of them.
     for line in &log.pending {
         println!("{line}");
+        yield_when_due(&mut pace);
     }
     println!("# end");
 }
@@ -579,6 +629,10 @@ pub fn dump_csv(log: &Log) {
 /// a torn final line, and one bad row must not cost the other thousand.
 /// The visitor also receives the stroke count, which the file carries and the
 /// replay used to discard.
+///
+/// **Paced, like every walk over the whole file** -- see [`crate::pace`]. It
+/// runs at boot, before the console is up, where a watchdog reset would repeat
+/// on every start.
 pub fn for_each<F>(mut visit: F)
 where
     F: FnMut(u64, Strike, u32),
@@ -599,7 +653,10 @@ where
         return;
     };
 
+    let mut pace = crate::pace::Pace::new(crate::now_ms());
     for line in lines {
+        // First, so the event rows the `continue` below skips are paced too.
+        yield_when_due(&mut pace);
         match crate::csv::parse_row(&line, &columns) {
             crate::csv::Row::Strike { epoch, energy_raw, distance, strokes } => visit(
                 epoch,

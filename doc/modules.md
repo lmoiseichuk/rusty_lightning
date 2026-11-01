@@ -10,7 +10,7 @@ share code with — which is why this project has modules where the moisture
 project next door has crates.
 
 <!-- generated: map -->
-**35 modules**, of which **13 are free of ESP-IDF** and so can be
+**36 modules**, of which **14 are free of ESP-IDF** and so can be
 compiled and tested by bare `rustc` on this machine:
 
 ```
@@ -23,13 +23,13 @@ defence                              clock
 golden                               commands
 history                              console
 merger                               credentials
-policy                               display
-press                                effects
-query                                i2c_scan
-strike                               listen
-uptime                               log
-verdict                              portal
-                                     power
+pace                                 display
+policy                               effects
+press                                i2c_scan
+query                                listen
+strike                               log
+uptime                               portal
+verdict                              power
                                      screen
                                      session
                                      settings
@@ -40,7 +40,7 @@ verdict                              portal
                                      webui
 ```
 
-**Every one of them is covered** by the 12 files in `tests/` — a module that can be host-tested is.
+**Every one of them is covered** by the 13 files in `tests/` — a module that can be host-tested is.
 
 `tools/check.sh` prints the check total. It is deliberately not repeated
 here: a count kept in two places is a count that disagrees with itself,
@@ -107,7 +107,7 @@ this table is generated from it.
 | `clock` | Wall-clock time without a network (§5). | -- | 194 |
 | `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
-| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 619 |
+| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 676 |
 | `settings` | What survives a power cut, and nothing else. | -- | 418 |
 | `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 
@@ -127,7 +127,7 @@ this table is generated from it.
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 471 |
-| `portal` | The access point and the web server it carries. | -- | 631 |
+| `portal` | The access point and the web server it carries. | -- | 640 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
 | `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 409 |
 | `webui` | The page the access point serves. | -- | 281 |
@@ -139,10 +139,11 @@ this table is generated from it.
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
 | `boot` | Bring-up: everything that happens once, before the loop. | -- | 423 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
+| `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
 | `power` | Clock and sleep policy (§7). | -- | 223 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
-| `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
+| `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
 
 **Unclassified** (add them to `ROLES` in `tools/modules.py`): `golden`
 
@@ -167,10 +168,11 @@ program' is not information.
 | `display` | `uptime` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
 | `history` | `strike` |
-| `log` | `as3935` `budget` `clock` `csv` `history` `settings` |
+| `log` | `as3935` `budget` `clock` `csv` `history` `pace` `settings` |
 | `merger` | `strike` `uptime` |
+| `pace` | `uptime` |
 | `policy` | `uptime` |
-| `portal` | `clock` `credentials` `history` `log` `session` `strike` `system` `tuning` `uptime` `webui` |
+| `portal` | `clock` `credentials` `history` `log` `pace` `session` `strike` `system` `tuning` `uptime` `webui` |
 | `power` | `policy` `storage` |
 | `screen` | `as3935` `battery` `clock` `defence` `display` `history` `power` `session` `settings` `system` `ui` `uptime` |
 | `session` | `as3935` `clock` `defence` `golden` `history` `log` `merger` `settings` `uptime` |

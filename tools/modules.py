@@ -62,6 +62,7 @@ ROLES = {
     "policy": "platform",
     "system": "platform",
     "uptime": "platform",
+    "pace": "platform",
     "i2c_scan": "platform",
 }
 
