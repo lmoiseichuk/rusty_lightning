@@ -141,6 +141,13 @@ a line, parsed to `Unknown`, and the page silently did nothing. The list now
 carries each command's arity, and a boot check runs every entry through the real
 parser and names any it rejects. It found a sixth on its first run.
 
+It checked the list and not the page, and the page's buttons were strings of
+their own: four of them and a field went on sending words the list drops, so the
+same dead buttons came back one layer out. The page is now built from tables in
+`query`, and **a button the allow-list would drop is a compile error** — a
+constant assertion over the tables — while the boot check runs every line the
+page can send through the parser.
+
 ## Where the numbers come from
 
 Counts in this repository are **counted, not asserted**. `tools/check.sh` prints

@@ -455,7 +455,8 @@ The wake is the same reset-and-init every boot does before the logo, about a
 fifth of a second plus the booster's start-up; each redraw that paid it says
 `woke in N ms` on the console. `panel sleep off` puts the old behaviour back,
 so the comparison is one command on the same board in the same weather — and it
-is saved, so the console connection that sets it does not undo it.
+is saved, so the console connection that sets it does not undo it, and it is on
+the web page for a board running on its cell with no cable to connect.
 
 **`sleep` is separate from `freq`** because they answer different questions: the
 clock is about speed, light sleep is about whether the USB port survives. Deep
@@ -504,6 +505,29 @@ command table, one parser and one set of range checks; the web UI is a second
 way of typing into them rather than a second implementation of them. That is why
 nothing on the page can do anything `help` does not list, and why a setting's
 valid range is the same in both places without either knowing about the other.
+
+**And a button that would do nothing does not build.** Until 0.21.0 the buttons
+were strings written into the page, checked by nothing: `indoor gain`, `outdoor
+gain`, `sync`, `reboot` and a `quiet` field all sent words the allow-list drops,
+so each one silently did nothing. The page is now built from the tables in
+`src/query.rs` — `ACTIONS`, `FIELDS`, `TOGGLES` — and a constant assertion
+refuses to compile any entry the allow-list would not pass. The boot check then
+runs every line the page can send through the console's real parser and says
+`web:  every command the page can send parses`, or names the ones it cannot.
+The gain buttons now send `mode indoor` / `mode outdoor`; `sync`, `reboot` and
+`quiet` are gone, because no such commands exist — the quiet threshold is
+`calibrate`'s second argument. The time-zone field takes hours, like `tz`.
+
+**The page cannot freeze the receiver wide open.** "Open up and freeze" was
+exactly `sensitive on` — the noise floor pinned at 0, which is the swamped end
+of the ladder, measured here at 300–480 noise a minute and no strikes indoors.
+It is a console command now; the allow-list lets only `sensitive off` through
+from the network, and the page shows that button only while it is needed.
+
+**`mask` and `panel sleep` are toggles on the page**, and the page shows why the
+board last restarted and the restarts before that. That is the point of having
+them there: a board running on its cell outdoors has no cable, and connecting
+one to change a setting — or to read why it restarted — restarts it again.
 
 A few consequences worth knowing:
 

@@ -423,6 +423,8 @@ pub fn listen(
             fuel.reading.map(|r| r.percent as u32).unwrap_or(0),
             strike_log.as_ref().map(|log| log.len()).unwrap_or(0),
             strike_log.as_ref().map(|log| log.used_bytes()).unwrap_or(0),
+            strike_log.as_ref().map(|log| log.event_budget()).unwrap_or(0),
+            screen.panel_sleep,
             portal.as_ref().map(|running| &running.credentials),
         );
 

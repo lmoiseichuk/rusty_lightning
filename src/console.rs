@@ -523,16 +523,26 @@ pub fn print_help() {
 /// Reported rather than fatal: a device that refuses to start because a web
 /// button is broken is worse than one that says so and goes on watching for
 /// lightning.
+///
+/// **Both lists, since 0.21.0.** This checked the allow-list and nothing else,
+/// while the page's buttons were string literals of their own -- and four of
+/// them, plus a field, named words the allow-list drops. The page is now built
+/// from `query`'s tables, a constant assertion refuses to compile an entry the
+/// allow-list would drop, and this runs every line the page can actually send
+/// through the parser too. Between them: a button the list drops does not
+/// build, and a word the list lets through but the parser does not know is
+/// named on the first boot.
 pub fn verify_web_commands() {
     let mut bad = 0;
-    for line in crate::query::samples() {
+    for line in crate::query::samples().chain(crate::query::page_lines()) {
         if matches!(parse(&line), Command::Unknown) {
             println!("web:  ⚠ the page can send `{line}`, which this console does not know");
             bad += 1;
         }
     }
-    if bad > 0 {
-        println!("web:  {bad} web command(s) would do nothing -- see `query::COMMANDS`");
+    match bad {
+        0 => println!("web:  every command the page can send parses"),
+        bad => println!("web:  {bad} web command(s) would do nothing -- see `query::COMMANDS`"),
     }
 }
 

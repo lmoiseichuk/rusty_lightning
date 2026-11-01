@@ -84,7 +84,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 832 |
+| `listen` | The event loop. | -- | 834 |
 
 ### The sensor and what it hears
 
@@ -124,13 +124,13 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `commands` | What the console commands actually do (§5). | -- | 594 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 568 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 468 |
-| `portal` | The access point and the web server it carries. | -- | 615 |
+| `portal` | The access point and the web server it carries. | -- | 631 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 203 |
-| `webui` | The page the access point serves. | -- | 245 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 409 |
+| `webui` | The page the access point serves. | -- | 281 |
 
 ### The board underneath
 

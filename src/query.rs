@@ -30,6 +30,15 @@
 /// It cannot be derived from `console::parse`, which is a `match` over string
 /// literals with no list to read. So it is checked instead: `verify` runs every
 /// entry through the real parser at boot and reports any the console rejects.
+///
+/// **That check verified this list and nothing else.** The page's own buttons
+/// were string literals in `webui`, and four of them -- `indoor`, `outdoor`,
+/// `sync`, `reboot` -- plus a `quiet` field went on naming words that are not
+/// here, so the allow-list dropped them before the parser ever saw them: the
+/// same five dead buttons this comment records being fixed, back again in the
+/// one place nothing checked. The page is now built from [`ACTIONS`],
+/// [`FIELDS`] and [`TOGGLES`] below, and the crate refuses to compile if any of
+/// them is not something this list lets through -- see `page_is_allowed`.
 pub const COMMANDS: &[(&str, Arity)] = &[
     ("mode indoor", Arity::None),
     ("mode outdoor", Arity::None),
@@ -47,10 +56,188 @@ pub const COMMANDS: &[(&str, Arity)] = &[
     ("tz", Arity::One),
     ("events", Arity::One),
     ("strike", Arity::One),
-    ("sensitive", Arity::Choice(&["on", "off"])),
+    // **`off` only.** `sensitive on` freezes the noise floor at 0, which is the
+    // swamped end of the ladder, not the sensitive one -- measured here at
+    // 300-480 noise a minute and no strikes indoors. The page offered it as
+    // "open up and freeze", one tap from a phone. It stays a console command,
+    // where somebody has read `help` first; from the network the only thing
+    // the page may do with it is let go.
+    ("sensitive", Arity::Choice(&["off"])),
     ("mask", Arity::Choice(&["on", "off"])),
+    ("panel sleep", Arity::Choice(&["on", "off"])),
     ("scope", Arity::Choice(&["day", "week", "month"])),
 ];
+
+// --- what the page offers ------------------------------------------------------
+
+/// A button that sends one fixed command line.
+pub struct Action {
+    pub command: &'static str,
+    /// The argument, or empty for a command that takes none.
+    pub value: &'static str,
+    pub label: &'static str,
+}
+
+/// A text box whose contents become the command's one argument.
+pub struct Field {
+    pub command: &'static str,
+    pub label: &'static str,
+    pub hint: &'static str,
+}
+
+/// An on/off setting, shown as one button that says where it is and offers the
+/// other way.
+pub struct Toggle {
+    pub command: &'static str,
+    /// The button while the setting is on; pressing it sends `off`.
+    pub while_on: &'static str,
+    /// The button while it is off; pressing it sends `on`.
+    pub while_off: &'static str,
+}
+
+/// The page's action buttons.
+pub const ACTIONS: &[Action] = &[
+    Action { command: "mode indoor", value: "", label: "indoor gain" },
+    Action { command: "mode outdoor", value: "", label: "outdoor gain" },
+    Action { command: "calibrate", value: "", label: "calibrate the noise floor" },
+    Action { command: "clearstats", value: "", label: "clear the distance estimate" },
+];
+
+/// Shown only while `sensitive on` is in force, which only the console can do.
+pub const RELEASE: Action = Action {
+    command: "sensitive",
+    value: "off",
+    label: "release the auto-tune",
+};
+
+/// The page's settings. `quiet` is gone: there is no such command -- the
+/// threshold is `calibrate`'s second argument -- so the field never did
+/// anything. `tz` takes **hours**, which is what the console's `tz` takes;
+/// the field said minutes and offered `-300`, which the console refuses.
+pub const FIELDS: &[Field] = &[
+    Field { command: "tz", label: "time zone (hours)", hint: "-5" },
+    Field { command: "defence", label: "noise floor 0-7", hint: "3" },
+    Field { command: "srej", label: "spike rejection 0-15", hint: "1" },
+    Field { command: "wdth", label: "watchdog 0-15", hint: "0" },
+    Field { command: "merge", label: "merge window ms", hint: "1000" },
+    Field { command: "events", label: "log N noise/disturber rows", hint: "5000" },
+];
+
+/// The two experiments, as toggles: the page is the only way to change them on
+/// a board running from its cell, where connecting a cable restarts it.
+pub const TOGGLES: &[Toggle] = &[
+    Toggle {
+        command: "mask",
+        while_on: "disturbers masked -- unmask them",
+        while_off: "disturbers UNMASKED -- mask them",
+    },
+    Toggle {
+        command: "panel sleep",
+        while_on: "panel sleeps between refreshes -- keep it powered",
+        while_off: "panel left powered -- power it down",
+    },
+];
+
+/// Whether a line `cmd value` would get through [`command_from_query`].
+///
+/// A `const fn`, so the answer is known when the firmware is compiled. Written
+/// with `while` loops and byte comparisons because those are what a constant
+/// context allows -- iterators and `==` on `str` are not available there.
+const fn allowed(command: &str, value: &str) -> bool {
+    let mut index = 0;
+    while index < COMMANDS.len() {
+        let (name, arity) = COMMANDS[index];
+        if same(name, command) {
+            return match arity {
+                Arity::None => value.is_empty(),
+                Arity::One => !value.is_empty() && !has_whitespace(value),
+                Arity::Choice(choices) => {
+                    let mut choice = 0;
+                    while choice < choices.len() {
+                        if same(choices[choice], value) {
+                            return true;
+                        }
+                        choice += 1;
+                    }
+                    false
+                }
+            };
+        }
+        index += 1;
+    }
+    false
+}
+
+/// `a == b` for a constant context.
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < a.len() {
+        if a[index] != b[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+const fn has_whitespace(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// Every button, field and toggle on the page, checked against [`COMMANDS`].
+///
+/// A field is checked with a stand-in argument, since its real one is typed.
+const fn page_is_allowed() -> bool {
+    let mut index = 0;
+    while index < ACTIONS.len() {
+        if !allowed(ACTIONS[index].command, ACTIONS[index].value) {
+            return false;
+        }
+        index += 1;
+    }
+    let mut index = 0;
+    while index < FIELDS.len() {
+        if !allowed(FIELDS[index].command, "1") {
+            return false;
+        }
+        index += 1;
+    }
+    let mut index = 0;
+    while index < TOGGLES.len() {
+        if !allowed(TOGGLES[index].command, "on") || !allowed(TOGGLES[index].command, "off") {
+            return false;
+        }
+        index += 1;
+    }
+    allowed(RELEASE.command, RELEASE.value)
+}
+
+// **A dead button is a compile error.** Evaluated when the crate is built --
+// for the firmware and for the host checks alike -- so a page entry naming a
+// word `COMMANDS` does not let through stops the build rather than shipping a
+// button that silently does nothing. `const _` rather than a named constant
+// because an unnamed one is always evaluated, used or not.
+//
+// What it cannot see is whether the *console* knows the word: `console::parse`
+// is a `match`, not a list a constant can read. `console::verify_web_commands`
+// checks that at boot, against the real parser, for every line `page_lines`
+// can produce.
+const _: () = assert!(
+    page_is_allowed(),
+    "a web page button, field or toggle names a command query::COMMANDS does not allow"
+);
 
 /// How many arguments a command takes, and of what shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,6 +315,25 @@ pub fn samples() -> impl Iterator<Item = String> {
         // The first choice, which is a real value by construction.
         Arity::Choice(allowed) => format!("{name} {}", allowed[0]),
     })
+}
+
+/// Every console line the page itself can send, for the boot check.
+///
+/// The same lines the buttons compose, so the check runs what a person can
+/// actually press rather than a sample of what the allow-list would accept.
+/// Fields carry the stand-in argument `1`, which every one of them accepts.
+pub fn page_lines() -> impl Iterator<Item = String> {
+    let actions = ACTIONS.iter().chain(core::iter::once(&RELEASE)).map(|action| {
+        match action.value {
+            "" => action.command.to_string(),
+            value => format!("{} {value}", action.command),
+        }
+    });
+    let fields = FIELDS.iter().map(|field| format!("{} 1", field.command));
+    let toggles = TOGGLES.iter().flat_map(|toggle| {
+        [format!("{} on", toggle.command), format!("{} off", toggle.command)]
+    });
+    actions.chain(fields).chain(toggles)
 }
 
 /// Decode `%20` and `+`.

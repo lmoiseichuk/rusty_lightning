@@ -65,14 +65,19 @@ fn card(key: &str, value: &str) -> String {
     )
 }
 
-/// A one-button form that queues a console command.
+/// A one-button form that queues a console command, with its argument if it
+/// takes one.
 ///
 /// `GET` rather than `POST` because the whole page is one screen of a captive
 /// portal and a GET survives the back button; the redirect in the handler is
 /// what stops a reload repeating the action.
-fn action(command: &str, label: &str) -> String {
+fn action(command: &str, value: &str, label: &str) -> String {
+    let argument = match value {
+        "" => String::new(),
+        value => format!("<input type=hidden name=v value='{}'>", escape(value)),
+    };
     format!(
-        "<form action=/do><input type=hidden name=cmd value='{}'><button>{}</button></form>",
+        "<form action=/do><input type=hidden name=cmd value='{}'>{argument}<button>{}</button></form>",
         escape(command),
         escape(label)
     )
@@ -160,7 +165,17 @@ pub fn page(state: &Snapshot) -> String {
     out.push_str(&card("free memory", &format!("{} KB", state.free_ram_kb)));
     out.push_str(&card("log", &format!("{} records", state.log_records)));
     out.push_str(&card("log size", &format!("{} KB", state.log_bytes / 1024)));
+    // The restart is here because a board on its cell has no console to print
+    // it to: the page is the only place an unplug's reason can be read without
+    // connecting a cable, and connecting one restarts the board again.
+    out.push_str(&card("restarted by", state.restart));
     out.push_str("</div>");
+    if !state.earlier_restarts.is_empty() {
+        out.push_str(&format!(
+            "<p class=sub>restarts before that, newest first: {}</p>",
+            escape(&state.earlier_restarts)
+        ));
+    }
 
     // --- the log ------------------------------------------------------------
     out.push_str("<h2>Recent strikes</h2>");
@@ -187,32 +202,53 @@ pub fn page(state: &Snapshot) -> String {
     );
 
     // --- settings -----------------------------------------------------------
+    //
+    // **Built from `query`'s tables, not written here.** Every command the page
+    // can send is named once, in `query::ACTIONS`, `FIELDS` and `TOGGLES`, and
+    // the crate does not compile if one of them is not in the allow-list. This
+    // file supplies only what a table cannot: the values on display now.
     out.push_str("<h2>Settings</h2>");
-    out.push_str(&field("tz", "time zone (minutes)", &state.tz_minutes.to_string(), "-300"));
-    out.push_str(&field("quiet", "quiet threshold /min", &state.quiet_per_min.to_string(), "60"));
-    out.push_str(&field("defence", "noise floor 0-7", &state.defence_raw.to_string(), "3"));
-    out.push_str(&field("srej", "spike rejection 0-15", "", "2"));
-    out.push_str(&field("wdth", "watchdog 0-15", "", "2"));
-    out.push_str(&field("merge", "merge window ms", "", "1000"));
-    out.push_str(&field("events", "log N noise/disturber rows", "", "500"));
+    for entry in crate::query::FIELDS {
+        let current = match entry.command {
+            // Hours, which is what `tz` takes; the offset is stored in minutes.
+            "tz" => (state.tz_minutes / 60).to_string(),
+            "defence" => state.defence_raw.to_string(),
+            "events" => state.events_left.to_string(),
+            // The others are not in the snapshot; an empty box with a hint is
+            // honest where a guessed value would not be.
+            _ => String::new(),
+        };
+        out.push_str(&field(entry.command, entry.label, &current, entry.hint));
+    }
+    out.push_str(
+        "<p class=sub>The quiet threshold is set by <code>calibrate</code>'s second \
+         argument on the console. <code>events</code> is capped to what the log can hold.</p>",
+    );
 
     out.push_str("<h2>Actions</h2><div class=grid>");
-    for (command, label) in [
-        ("indoor", "indoor gain"),
-        ("outdoor", "outdoor gain"),
-        ("calibrate", "calibrate the noise floor"),
-        ("sync", "flush the log to flash"),
-        ("clearstats", "clear the distance estimate"),
-        ("reboot", "reboot"),
-    ] {
-        out.push_str(&action(command, label));
+    for entry in crate::query::ACTIONS {
+        out.push_str(&action(entry.command, entry.value, entry.label));
     }
-    out.push_str(&format!(
-        "<form action=/do><input type=hidden name=cmd value=sensitive>\
-         <input type=hidden name=v value='{}'><button>{}</button></form>",
-        if state.frozen { "off" } else { "on" },
-        if state.frozen { "release the auto-tune" } else { "open up and freeze" },
-    ));
+    // **No "open up and freeze".** That button was exactly `sensitive on`,
+    // which freezes the noise floor at 0 -- the swamped end of the ladder, not
+    // the sensitive one. It is a console command now; the page offers only the
+    // way back, and only while it is needed.
+    if state.frozen {
+        let release = &crate::query::RELEASE;
+        out.push_str(&action(release.command, release.value, release.label));
+    }
+    for toggle in crate::query::TOGGLES {
+        let on = match toggle.command {
+            "mask" => state.masked,
+            "panel sleep" => state.panel_sleep,
+            _ => false,
+        };
+        let (value, label) = match on {
+            true => ("off", toggle.while_on),
+            false => ("on", toggle.while_off),
+        };
+        out.push_str(&action(toggle.command, value, label));
+    }
     out.push_str("</div>");
 
     // --- the network itself -------------------------------------------------

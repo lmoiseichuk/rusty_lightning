@@ -54,9 +54,15 @@ fn main() {
         "the argument order does not matter",
         command_from_query("v=5&cmd=defence").as_deref() == Some("defence 5"),
     );
+    // **Only `off` from the network.** `sensitive on` freezes nf at 0, the
+    // swamped end of the ladder; the page offered it as "open up and freeze".
     check(
-        "sensitive takes on or off",
-        command_from_query("cmd=sensitive&v=on").as_deref() == Some("sensitive on"),
+        "the page may release the auto-tune",
+        command_from_query("cmd=sensitive&v=off").as_deref() == Some("sensitive off"),
+    );
+    check(
+        "but not freeze it wide open",
+        command_from_query("cmd=sensitive&v=on").is_none(),
     );
 
     println!("\n  and what it refuses");
@@ -83,7 +89,7 @@ fn main() {
         samples().all(|line| !line.trim().is_empty()),
     );
     check(
-        "sensitive refuses anything but on and off",
+        "sensitive refuses anything else",
         command_from_query("cmd=sensitive&v=maybe").is_none(),
     );
 
@@ -127,6 +133,81 @@ fn main() {
             }
         }),
     );
+
+    // --- what the page itself sends ------------------------------------------
+    //
+    // The allow-list was checked at boot and the page was not, so four buttons
+    // and a field went on naming words the list drops. The page is now built
+    // from tables, a constant assertion refuses to compile one the list would
+    // drop, and these walk every entry through the real query path -- encoded
+    // the way a browser submits a form -- to the exact line it should produce.
+    println!("\n  every button, field and toggle on the page");
+    let form = |command: &str, value: &str| {
+        let query = format!("cmd={}&v={}", command.replace(' ', "+"), value);
+        command_from_query(&query)
+    };
+    let mut every_action_arrives = true;
+    for action in ACTIONS.iter().chain(std::iter::once(&RELEASE)) {
+        let want = match action.value {
+            "" => action.command.to_string(),
+            value => format!("{} {value}", action.command),
+        };
+        if form(action.command, action.value).as_deref() != Some(want.as_str()) {
+            println!("       dead: `{}` `{}`", action.command, action.value);
+            every_action_arrives = false;
+        }
+    }
+    check("every action arrives as the line it names", every_action_arrives);
+    check(
+        "every field arrives with what was typed",
+        FIELDS.iter().all(|field| {
+            form(field.command, "7").as_deref() == Some(format!("{} 7", field.command).as_str())
+        }),
+    );
+    check(
+        "every toggle arrives both ways",
+        TOGGLES.iter().all(|toggle| {
+            form(toggle.command, "on").as_deref() == Some(format!("{} on", toggle.command).as_str())
+                && form(toggle.command, "off").as_deref()
+                    == Some(format!("{} off", toggle.command).as_str())
+        }),
+    );
+    check(
+        "the boot check sees every line the page can send",
+        page_lines().count() == ACTIONS.len() + 1 + FIELDS.len() + 2 * TOGGLES.len(),
+    );
+    check(
+        "and every one of them gets through the allow-list",
+        page_lines().all(|line| {
+            let (command, value) = match COMMANDS.iter().find(|(name, _)| {
+                line == *name || line.starts_with(&format!("{name} "))
+            }) {
+                Some((name, _)) => (*name, line[name.len()..].trim()),
+                None => return false,
+            };
+            form(command, value).as_deref() == Some(line.as_str())
+        }),
+    );
+    // The five that were dead, by name, so they cannot come back as labels on
+    // new entries either.
+    let words: Vec<&str> = ACTIONS
+        .iter()
+        .map(|action| action.command)
+        .chain(FIELDS.iter().map(|field| field.command))
+        .chain(TOGGLES.iter().map(|toggle| toggle.command))
+        .collect();
+    check(
+        "none of the old dead words is on the page",
+        ["indoor", "outdoor", "sync", "reboot", "quiet"]
+            .iter()
+            .all(|dead| !words.contains(dead)),
+    );
+    check(
+        "and nothing on the page can send `sensitive on`",
+        page_lines().all(|line| line != "sensitive on"),
+    );
+    check("the time zone field is in hours", FIELDS.iter().any(|f| f.command == "tz" && f.label.contains("hours")));
+    check("panel sleep goes both ways", form("panel sleep", "off").as_deref() == Some("panel sleep off"));
 
     println!("\n  percent decoding");
     check("plain text is unchanged", percent_decode("hello") == "hello");

@@ -62,6 +62,15 @@ pub struct Snapshot {
     pub log_records: u32,
     pub log_bytes: u32,
     pub frozen: bool,
+    /// Whether disturbers are kept off the IRQ, for the `mask` toggle.
+    pub masked: bool,
+    /// Whether the panel is powered down between refreshes, for its toggle.
+    pub panel_sleep: bool,
+    /// Event rows still to log; zero when `events` is off.
+    pub events_left: u32,
+    /// Why this boot happened, and the restarts before it, newest first.
+    pub restart: &'static str,
+    pub earlier_restarts: String,
     pub tz_minutes: i32,
     pub recent: Vec<RecentRow>,
     pub credentials: Option<(String, String, bool)>,
@@ -540,6 +549,8 @@ pub fn publish_from(
     battery_percent: u32,
     log_records: u32,
     log_bytes: u32,
+    events_left: u32,
+    panel_sleep: bool,
     credentials: Option<&Credentials>,
 ) {
     let epoch = crate::clock::now().unwrap_or(0);
@@ -606,6 +617,11 @@ pub fn publish_from(
         log_records,
         log_bytes,
         frozen: tuning.frozen,
+        masked: crate::session::DISTURBERS_MASKED.load(core::sync::atomic::Ordering::Relaxed),
+        panel_sleep,
+        events_left,
+        restart: crate::system::this_restart(),
+        earlier_restarts: crate::system::earlier_restarts(),
         tz_minutes: crate::clock::tz_minutes(),
         recent,
         credentials: credentials.map(|c| {
