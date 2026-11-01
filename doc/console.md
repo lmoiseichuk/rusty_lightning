@@ -82,7 +82,8 @@ with `rst:0x15` (`USB`) on every open, with DTR and RTS both held low. If you se
 the banner scroll past every time you connect, that is why, not a crash.
 
 Two consequences shape the rest of this page. **Nothing that lives only in RAM
-survives looking at it.** And **the restart that matters is usually the
+survives looking at it** — so `mask` and an armed `events` budget are kept in
+NVS and come back on their own, and the banner says so. And **the restart that matters is usually the
 one before the banner you are reading**: an unplug or a brownout on the cell
 happens with nobody attached, and connecting to ask resets the board again. The
 banner therefore prints the earlier reasons too —
@@ -144,7 +145,7 @@ works: `time`→`date`, `chart`→`scope`, `point`→`defence`, `cal`→`calibra
 | `status` | sensor state — mode, defence level, session counts, last hour, antenna. The screen's second line. |
 | `date` | the current time, in local time |
 | `dump` | the whole strike log as CSV, including records not yet synced to flash |
-| `events [rows]` | also log disturbers and noise, for that many rows (default 20000); `events off` stops |
+| `events [rows\|off]` | also log disturbers and noise, for at most that many rows — capped to what the log can hold. Saved, so it counts down across restarts. Bare, it reports what is left and what would fit; `events off` stops |
 
 ### Setting things
 
@@ -179,6 +180,7 @@ echo "date $(date +%s)" > /dev/ttyACM0
 | `defence <raw>` | set the tuning point by hand, 0–7. `0` is fully receptive |
 | `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
 | `sensitive on\|off` | the noise floor to 0 — the most receptive the tuner's own space goes — with the auto-tune frozen |
+| `mask [on\|off]` | whether disturbers may raise the IRQ. Masked by default; `mask off` is the experiment that logs them. Saved, so it outlives a restart; bare, it reports |
 | `freq [auto\|40\|80\|160]` | read the clock, or pin it |
 | `sleep on\|off` | light sleep alone, leaving the clock where it is |
 | `strike [km] [intensity]` | inject a synthetic strike |
@@ -207,13 +209,37 @@ echo "dump"         > /dev/ttyACM0 > storm.csv
 
 **It is a budget, not a switch, and that is deliberate.** This log does not
 rotate and has no size bound: it grows until the filesystem is full and then
-writes fail. Indoors the device sees about eight events a second, so logging
-everything writes ~31,000 rows an hour against roughly an hour of free flash.
-The budget stops it before that and says so, which makes it safe to leave armed
-through a storm nobody is watching — which is when the measurement is wanted.
+writes fail — strikes included. Indoors with disturbers unmasked the device
+sees six to ten events a second, so logging everything writes 20,000–36,000
+rows an hour. The budget stops it before that and says so, which makes it safe
+to leave armed through a storm nobody is watching — which is when the
+measurement is wanted.
 
-Not persisted, like `sensitive on`: a device that came back from a power cut
-silently filling its flash would be the same kind of trap.
+**Every budget is capped to what fits.** A row costs at most 65 bytes (the
+longest the format can write), and 256 KB of free space is never spent on event
+rows — about 3,500 strike records, kept so that a full event window cannot stop
+the log recording lightning. Ask for more and you get what fits, with the
+figures:
+
+```
+events 20000
+events: asked for 20000, the log has room for 9351
+events: room for 9351 row(s) -- 849 KB free, 256 KB kept back so strikes can still be written
+events: logging disturbers and noise for the next 9351 row(s) (saved)
+```
+
+Bare `events` arms nothing; it reports what is left and what would fit. It
+used to arm 20,000 rows, which on a log with 0.87 MB free was the one command
+that could fill it.
+
+**Saved, and counting down across restarts.** It was RAM-only, on the argument
+that a device back from a power cut silently filling its flash would be a trap.
+That changed for two reasons: opening the console port restarts the board, so
+an armed window ended the moment anybody connected to look at it; and the trap
+was the *filling*, which the cap now rules out, and the *silence*, which the
+boot banner now breaks (`log:  events armed -- N row(s) left`). The count is
+written with the minute's sync that writes the rows it paid for, so a restart
+re-arms exactly the rows that were lost with the unsynced buffer.
 
 The `millis` column answers a second question at no extra cost. Of 1040 records
 in `storm-2026-08-12.csv`, **not one shares a second with another**, where about

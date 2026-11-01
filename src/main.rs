@@ -6,6 +6,7 @@
 mod as3935;
 mod boot;
 mod battery;
+mod budget;
 mod civil;
 mod clock;
 mod commands;
@@ -280,6 +281,14 @@ fn main() {
                 log.used_bytes().div_ceil(1024),
                 log.free_bytes() / 1024
             );
+            // Said on every boot, because since 0.21.0 an armed window outlives
+            // the restart that would once have ended it.
+            match log.event_budget() {
+                0 => println!("log:  events off -- only lightning is logged"),
+                left => println!(
+                    "log:  events armed -- {left} row(s) left, resumed from before the restart"
+                ),
+            }
             Some(log)
         }
         None => {

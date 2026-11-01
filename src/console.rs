@@ -92,7 +92,9 @@ pub enum Command {
     /// The measurement the whole deafness question rests on: are real flashes
     /// arriving as disturbers? Counted they say nothing; timestamped they can be
     /// laid against an independent record of when flashes happened.
-    Events(u32),
+    ///
+    /// `None` is a bare `events`, which reports and arms nothing.
+    Events(Option<u32>),
     Dump,
     /// `clear` — erase the strike log.
     Clear,
@@ -135,7 +137,9 @@ pub enum Command {
     /// `0` turns merging off, so every return stroke is its own record.
     Merge(Option<u32>),
     Sensitive(bool),
-    MaskDisturbers(bool),
+    /// `mask on|off` keeps disturbers off the IRQ or lets them on, and saves
+    /// it; a bare `mask` reports.
+    MaskDisturbers(Option<bool>),
     /// Typed, but not understood. Still counts as activity.
     Unknown,
 }
@@ -360,11 +364,13 @@ pub fn parse(line: &str) -> Command {
                 _ => Command::Unknown,
             },
         },
-        // **Refused rather than defaulted**, like `srej`: this decides whether
-        // the auto-tune can see anything at all, and a typo should not choose.
+        // **Refused rather than defaulted**, like `srej`: whether disturbers
+        // share the strike's interrupt wire is not a thing a typo should
+        // choose. Bare, it reports -- like `srej`, `wdth` and `merge`.
         "mask" => match arg {
-            Some("on") => Command::MaskDisturbers(true),
-            Some("off") => Command::MaskDisturbers(false),
+            None => Command::MaskDisturbers(None),
+            Some("on") => Command::MaskDisturbers(Some(true)),
+            Some("off") => Command::MaskDisturbers(Some(false)),
             _ => Command::Unknown,
         },
         "sensitive" | "sens" => match arg {
@@ -398,11 +404,17 @@ pub fn parse(line: &str) -> Command {
         // and no size bound; at the rate seen indoors this writes ~31,000 rows
         // an hour and free flash is about an hour of that. A budget makes it
         // safe to leave armed through a storm nobody is watching.
+        //
+        // **Bare `events` reports and arms nothing.** It used to arm 20,000
+        // rows -- ~1.3 MB at the longest row, against ~0.87 MB free on the
+        // board that showed it -- so the command with no argument was the one
+        // that could fill the filesystem. Every number given is capped to what
+        // fits anyway; the bare word now just asks.
         "events" => match arg {
-            None => Command::Events(20_000),
-            Some("off") => Command::Events(0),
+            None => Command::Events(None),
+            Some("off") => Command::Events(Some(0)),
             Some(n) => match n.parse::<u32>() {
-                Ok(rows) => Command::Events(rows),
+                Ok(rows) => Command::Events(Some(rows)),
                 Err(_) => Command::Unknown,
             },
         },
@@ -438,6 +450,7 @@ pub fn print_help() {
     println!("  health                device vitals -- the screen's top line");
     println!("  status                sensor state -- the screen's second line");
     println!("  dump                  the strike log as CSV");
+    println!("  events [rows|off]     also log disturbers and noise, capped to what fits; bare reports");
     println!("  clear                 erase the strike log (no confirmation)");
     println!("  strike [km] [int]     inject a synthetic strike (default 8 km, 4000)");
     println!("  mode indoor|outdoor   AFE gain -- outdoor is LOWER gain, for close storms");
@@ -467,7 +480,7 @@ pub fn print_help() {
     );
     println!("                             stored in NVS; omit to keep the current one");
     println!("  sensitive on|off      noise floor to 0, auto-tune frozen");
-    println!("  mask on|off           disturbers raise the IRQ. Masked by default; `off` to log them");
+    println!("  mask [on|off]         keep disturbers off the IRQ (default) or let them on; saved");
     println!("  ap [off|<ssid> <pass>] raise the access point and web UI; `off` drops it");
     println!("  golden [clear]        the settings that last heard lightning");
     println!("  import <e>,<d>,<en>,<n> append one historical record: epoch, distance, energy, strokes");

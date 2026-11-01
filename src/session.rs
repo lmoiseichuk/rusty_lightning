@@ -808,6 +808,16 @@ pub fn restart_statistics(sensor: &As3935, i2c: &mut I2cDriver<'_>, why: &str) {
 /// Nobody has ever had them.
 pub static CURRENT_NF: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
+/// Whether `MASK_DIST` is set on the chip right now.
+///
+/// **Kept here rather than read back, because reading it back is not free.**
+/// The bit lives in `0x03` beside the interrupt reason, and the datasheet sets
+/// IRQ low "whenever the interrupt register is read out" -- so a status query
+/// that read the chip could swallow the very event it was asked about. Written
+/// only where the bit is written: `boot::configure` and the `mask` command.
+pub static DISTURBERS_MASKED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(true);
+
 pub fn apply(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,

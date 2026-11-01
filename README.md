@@ -94,7 +94,7 @@ from it, and `tests/` compiles *those very modules* — by `#[path]`, never
 copies — with bare `rustc`.
 
 <!-- generated: counts -->
-**12 of the 34 modules are ESP-IDF-free, and every one of them is covered.**
+**13 of the 35 modules are ESP-IDF-free, and every one of them is covered.**
 <!-- end generated -->
 
 That constraint is why the module list looks the way it does. Whenever a

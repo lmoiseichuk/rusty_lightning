@@ -39,11 +39,17 @@ const KEY_GOLDEN: &[u8] = b"golden\0";
 const KEY_GOLDEN_N: &[u8] = b"golden_n\0";
 /// The last four reset reasons, one byte each, newest in the low byte.
 const KEY_RESTARTS: &[u8] = b"restarts\0";
+const KEY_MASK: &[u8] = b"mask\0";
+/// Event rows still to log. A count, not a switch -- see `Log::event_budget`.
+const KEY_EVENTS: &[u8] = b"events\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
 const STORED_INDOOR: u8 = 1;
 const STORED_OUTDOOR: u8 = 2;
+/// The same convention for every on/off setting below.
+const STORED_ON: u8 = 1;
+const STORED_OFF: u8 = 2;
 
 /// The stored location, or `None` if this unit has never been told.
 ///
@@ -346,5 +352,55 @@ pub fn restart_history() -> Option<u32> {
 pub fn store_restart_history(packed: u32) -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     nvs.set_u32(KEY_RESTARTS, packed)?;
+    nvs.commit()
+}
+
+
+// --- the diagnostics that used to die with the RAM ------------------------------
+
+/// Read an on/off setting, or `None` if never set or not a byte this wrote.
+fn get_switch(key: &[u8]) -> Option<bool> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    match nvs.get_u8(key)? {
+        STORED_ON => Some(true),
+        STORED_OFF => Some(false),
+        _ => None,
+    }
+}
+
+fn store_switch(key: &[u8], on: bool) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u8(key, if on { STORED_ON } else { STORED_OFF })?;
+    nvs.commit()
+}
+
+/// Whether disturbers are kept off the IRQ. `None` on a device never told,
+/// where boot masks them -- see `boot::configure` for the storm that decided it.
+///
+/// **Stored because a reset used to undo it.** `mask off` is the experiment
+/// that asks whether real flashes arrive here as disturbers, and every open of
+/// the console port restarts the board -- so the experiment ended the moment
+/// anybody connected to see how it was going.
+pub fn mask_disturbers() -> Option<bool> {
+    get_switch(KEY_MASK)
+}
+
+pub fn store_mask_disturbers(masked: bool) -> Result<(), EspError> {
+    store_switch(KEY_MASK, masked)
+}
+
+/// Event rows still to be logged, as of the last sync. `None` when never armed.
+pub fn event_budget() -> Option<u32> {
+    Namespace::open(NAMESPACE).ok()?.get_u32(KEY_EVENTS)
+}
+
+/// Persist the remaining event budget.
+///
+/// Called when `events` arms or disarms, and by `Log::sync` when the count has
+/// moved -- never per row, which at the measured six to ten a second would be
+/// a flash write every hundred milliseconds.
+pub fn store_event_budget(rows: u32) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_EVENTS, rows)?;
     nvs.commit()
 }

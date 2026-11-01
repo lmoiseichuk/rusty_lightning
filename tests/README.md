@@ -23,6 +23,7 @@ cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civ
 
 | File | Covers |
 |---|---|
+| `budget.rs` | the `events` budget: what the longest event row costs, and that no budget can spend the space kept for strikes |
 | `civil.rs` | the calendar: leap years, the century rules, month lengths, and that the time of day never leaks into the date |
 | `csv.rs` | reading the log back: the header decides the columns, so a new column cannot silently shift the old ones |
 | `defence.rs` | §4.2's noise-rejection ladder: rung boundaries, monotonicity, saturation |

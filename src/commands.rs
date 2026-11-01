@@ -327,21 +327,58 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             );
             println!("status: antenna {} kHz, IRQ {}", ctx.antenna_khz,
                 if ctx.irq_confirmed { "confirmed" } else { "NOT CONFIRMED" });
+            // The two experiments that now survive a restart, so the line that
+            // says what the device is doing has to say whether one is running.
+            println!(
+                "status: disturbers {}, events {}",
+                match crate::session::DISTURBERS_MASKED.load(core::sync::atomic::Ordering::Relaxed) {
+                    true => "masked".to_string(),
+                    false => "UNMASKED".to_string(),
+                },
+                match ctx.strike_log.as_deref().map(|log| log.event_budget()) {
+                    None | Some(0) => "off".to_string(),
+                    Some(left) => format!("{left} row(s) left"),
+                }
+            );
             println!("status: charts showing the last {}", ctx.chart_period.label());
         }
 
-        Command::Events(rows) => match ctx.strike_log.as_deref_mut() {
+        Command::Events(request) => match ctx.strike_log.as_deref_mut() {
             None => println!("events: no log on this device"),
-            Some(log) => {
-                let set = log.arm_events(rows);
-                match set {
+            // Bare: where the budget stands, and how much more would fit.
+            Some(log) if request.is_none() => {
+                match log.event_budget() {
                     0 => println!("events: off -- only lightning is logged"),
+                    left => println!("events: {left} row(s) left -- saved, so a restart resumes the count"),
+                }
+                report_room(log.free_bytes());
+            }
+            Some(log) => {
+                let asked = request.unwrap_or(0);
+                let armed = log.arm_events(asked);
+                match armed {
+                    0 if asked == 0 => println!("events: off -- only lightning is logged (saved)"),
+                    0 => {
+                        println!("events: no room -- nothing armed");
+                        report_room(log.free_bytes());
+                        println!("events: `dump` to keep what is there, then `clear` to make room");
+                    }
                     rows => {
-                        println!("events: logging disturbers and noise for the next {rows} row(s)");
+                        if rows < asked {
+                            println!("events: asked for {asked}, the log has room for {rows}");
+                            report_room(log.free_bytes());
+                        }
+                        println!("events: logging disturbers and noise for the next {rows} row(s) (saved)");
                         // The rate is what makes the budget necessary, so it is
                         // quoted where the decision is made rather than left in
-                        // a doc comment nobody reads at the console.
-                        println!("        ~8 events/s indoors, so that is roughly {} minute(s)", rows / 480);
+                        // a doc comment nobody reads at the console. Six to ten
+                        // a second is what an unmasked board measured indoors on
+                        // 2026-11-01; masked, only noise reaches the log.
+                        println!(
+                            "        at 6-10 a second, the indoor rate unmasked, that is {}-{} minute(s)",
+                            rows / 600,
+                            rows / 360
+                        );
                         println!("        the log does not rotate; `dump` reads it, `clear` empties it");
                     }
                 }
@@ -492,7 +529,22 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             effects.sensitivity = Some(on);
             effects.redraw_now = true;
         }
-        Command::MaskDisturbers(on) => effects.mask_disturbers = Some(on),
+        Command::MaskDisturbers(Some(on)) => effects.mask_disturbers = Some(on),
+        // Reported from what was last written rather than read off the chip:
+        // the bit shares `0x03` with the interrupt reason, and reading that
+        // register clears a pending event. See `session::DISTURBERS_MASKED`.
+        Command::MaskDisturbers(None) => {
+            let masked =
+                crate::session::DISTURBERS_MASKED.load(core::sync::atomic::Ordering::Relaxed);
+            let saved = match crate::settings::mask_disturbers() {
+                Some(_) => "saved",
+                None => "the default",
+            };
+            match masked {
+                true => println!("mask: disturbers kept off the IRQ ({saved})"),
+                false => println!("mask: disturbers RAISE the IRQ ({saved}) -- `mask on` to stop them"),
+            }
+        }
         Command::Freq(request) => effects.freq = Some(request),
         Command::Sleep(on) => effects.light_sleep = Some(on),
         Command::Battery => effects.read_battery = true,
@@ -505,4 +557,18 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Unknown => println!("?  try: help"),
     }
     effects
+}
+
+
+/// How much more the log could take as event rows, and what is held back.
+///
+/// Said wherever a budget is set or asked about, because "capped" with no
+/// figures reads as the device refusing for no reason.
+fn report_room(free_bytes: u32) {
+    println!(
+        "events: room for {} row(s) -- {} KB free, {} KB kept back so strikes can still be written",
+        crate::budget::rows_that_fit(free_bytes),
+        free_bytes / 1024,
+        crate::budget::RESERVED_BYTES / 1024
+    );
 }

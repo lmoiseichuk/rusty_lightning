@@ -216,7 +216,7 @@ rate, and no amount of averaging fixes it.
 Arm the log, sweep the rungs by hand, and read the three curves nobody has:
 
 ```sh
-echo "events 20000" > /dev/ttyACM0     # log disturbers and noise too, bounded
+echo "events 20000" > /dev/ttyACM0     # log disturbers and noise too, capped to what fits
 echo "place 0"      > /dev/ttyACM0     # then 1..7, ten minutes each
 echo "dump"         > /dev/ttyACM0 > sweep.csv
 ```

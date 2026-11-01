@@ -87,7 +87,24 @@ pub fn configure(
     // The cost is real and is the disturber log: `mask off` is how to run the
     // "are real flashes arriving here as disturbers" experiment, and that
     // question is still open. It is an experiment, so it is a command.
-    sensor.set_disturber_enabled(i2c, false)?;
+    //
+    // **And since 0.21.0 the command's answer survives a restart.** Every open
+    // of the console port resets the board, so a `mask off` held only in RAM
+    // ended the moment anybody connected to watch it. Masked remains what a
+    // device never told starts as; whatever was set last is what it resumes,
+    // and the banner says which, because an unmasked device on battery is an
+    // experiment somebody may have forgotten they started.
+    let masked = settings::mask_disturbers().unwrap_or(true);
+    sensor.set_disturber_enabled(i2c, !masked)?;
+    session::DISTURBERS_MASKED.store(masked, core::sync::atomic::Ordering::Relaxed);
+    match (masked, settings::mask_disturbers().is_some()) {
+        (true, false) => println!("as:   disturbers masked -- the default"),
+        (true, true) => println!("as:   disturbers masked (saved)"),
+        (false, _) => {
+            println!("as:   ⚠ disturbers UNMASKED (saved by `mask off`) -- they raise the IRQ");
+            println!("as:     expect missed edges in a close storm; `mask on` to restore");
+        }
+    }
     sensor.clear_irq_display(i2c)?;
     FreeRtos::delay_ms(500);
 

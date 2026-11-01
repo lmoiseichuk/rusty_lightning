@@ -219,10 +219,22 @@ pub fn handle(
             // Unmasking costs what boot's note describes: at four disturbers a
             // second the poll starts reporting events "with no interrupt -- the
             // edge was missed", and a strike shares that wire.
+            //
+            // **Saved, since 0.21.0**, in the order every other setting uses:
+            // tell the chip, and persist only what the chip accepted. Held in
+            // RAM alone, `mask off` ended the first time anybody opened the
+            // console port to see how the experiment was going -- every open
+            // restarts the board.
             match hw.sensor.set_disturber_enabled(hw.i2c, !mask) {
                 Ok(()) => {
+                    crate::session::DISTURBERS_MASKED
+                        .store(mask, core::sync::atomic::Ordering::Relaxed);
+                    let saved = match settings::store_mask_disturbers(mask) {
+                        Ok(()) => "saved".to_string(),
+                        Err(e) => format!("NOT saved -- {e}"),
+                    };
                     println!(
-                        "mask: disturbers {} the IRQ",
+                        "mask: disturbers {} the IRQ ({saved})",
                         match mask {
                             true => "no longer raise",
                             false => "raise",
@@ -230,6 +242,7 @@ pub fn handle(
                     );
                     if !mask {
                         println!("mask: expect missed edges in a close storm -- see boot::configure");
+                        println!("mask: it stays off across restarts until `mask on`");
                     }
                 }
                 Err(e) => println!("mask: could not change it -- {e}"),

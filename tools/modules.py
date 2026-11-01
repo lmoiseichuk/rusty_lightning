@@ -40,6 +40,7 @@ ROLES = {
     "history": "record",
     "log": "record",
     "csv": "record",
+    "budget": "record",
     "storage": "record",
     "settings": "record",
     "clock": "record",

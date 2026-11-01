@@ -97,9 +97,19 @@ pub struct Log {
     /// says so. That makes it safe to leave running through a storm nobody is
     /// watching, which is exactly when the measurement is wanted.
     ///
-    /// **Not persisted**, matching `sensitive on`: a device that came back from
-    /// a power cut silently filling its flash would be the same kind of trap.
+    /// **Persisted since 0.21.0, and capped to what fits.** It was RAM-only, on
+    /// the argument that a device coming back from a power cut silently filling
+    /// its flash would be a trap. Two things changed the answer. Every open of
+    /// the console port restarts the board, so an armed window ended the
+    /// moment anybody connected to see how it was going -- the measurement
+    /// could not be read without being stopped. And the trap was the
+    /// *filling*, not the persisting: every budget, typed or restored, now goes
+    /// through [`crate::budget::capped`], which keeps a reserve the event rows
+    /// can never spend, and the boot banner says when one is armed. Silent and
+    /// unbounded were the problem; this is neither.
     event_budget: u32,
+    /// The budget as NVS last recorded it, so `sync` writes only on a change.
+    saved_budget: u32,
     /// Lines appended since the last sync. Kept in memory so a storm does not
     /// become one flash write per strike.
     pending: Vec<String>,
@@ -166,10 +176,25 @@ impl Log {
             records: 0,
             bytes: 0,
             event_budget: 0,
+            saved_budget: 0,
             pending: Vec::new(),
         };
         log.ensure_header();
         log.recount();
+
+        // **An armed `events` window resumes where the last sync left it.**
+        // Re-capped against today's free space, because the rows written before
+        // the restart are on the disk now and the reserve still has to stand.
+        let stored = crate::settings::event_budget().unwrap_or(0);
+        let resumed = crate::budget::capped(stored, log.free_bytes());
+        if resumed < stored {
+            println!(
+                "log:  events: {stored} row(s) were left, the log has room for {resumed} -- armed {resumed}"
+            );
+            let _ = crate::settings::store_event_budget(resumed);
+        }
+        log.event_budget = resumed;
+        log.saved_budget = resumed;
 
         // **The second way a log goes missing, and the one the first check
         // cannot see.** If the filesystem was formatted by something other than
@@ -304,12 +329,19 @@ impl Log {
     /// carries no distance and no energy — the chip rejected the waveform before
     /// measuring it — so every reading column is empty. What it carries is the
     /// only thing being asked of it: *when*.
-    /// Arm event logging for `rows` more non-lightning events.
+    /// Arm event logging for up to `rows` more non-lightning events.
     ///
-    /// Returns the budget actually set. Zero turns it off.
+    /// Returns the budget actually set, which is less than asked when the log
+    /// has no room for it -- see [`crate::budget::capped`]. Zero turns it off.
+    /// Saved at once, so a restart a second later still has it.
     pub fn arm_events(&mut self, rows: u32) -> u32 {
-        self.event_budget = rows;
-        rows
+        let armed = crate::budget::capped(rows, self.free_bytes());
+        self.event_budget = armed;
+        match crate::settings::store_event_budget(armed) {
+            Ok(()) => self.saved_budget = armed,
+            Err(e) => println!("events: armed, but NOT saved -- a restart will lose it ({e})"),
+        }
+        armed
     }
 
     pub fn event_budget(&self) -> u32 {
@@ -329,12 +361,12 @@ impl Log {
         self.event_budget -= 1;
         let exhausted = self.event_budget == 0;
 
-        let mut line = String::with_capacity(64);
         let iso = match epoch {
             0 => String::new(),
             epoch => crate::clock::format_local(epoch).to_string(),
         };
-        let _ = write!(line, "{epoch},{millis},{},{nf},{srej},{iso},,,,,0,0", kind.as_str());
+        // Built in `budget`, so the row the cap assumes is the row written.
+        let line = crate::budget::event_row(epoch, millis, kind.as_str(), nf, srej, &iso);
         self.pending.push(line);
 
         // Announced after the row is queued, so the notice and the file agree
@@ -434,6 +466,15 @@ impl Log {
         // Written on the sync rather than the append, so it costs one NVS write
         // a minute at most, matching what is already on disk.
         let _ = crate::settings::store_logged_records(self.records);
+        // **The budget is saved with the sync that writes the rows it paid
+        // for**, so after a restart the count on disk and the count left agree:
+        // rows still pending when power went are lost *and* still owed. Only on
+        // a change -- an idle minute writes nothing.
+        if self.event_budget != self.saved_budget {
+            if crate::settings::store_event_budget(self.event_budget).is_ok() {
+                self.saved_budget = self.event_budget;
+            }
+        }
         Ok(written)
     }
 
