@@ -470,10 +470,10 @@ impl Log {
         // for**, so after a restart the count on disk and the count left agree:
         // rows still pending when power went are lost *and* still owed. Only on
         // a change -- an idle minute writes nothing.
-        if self.event_budget != self.saved_budget {
-            if crate::settings::store_event_budget(self.event_budget).is_ok() {
-                self.saved_budget = self.event_budget;
-            }
+        // A failed write leaves the two apart, so the next sync tries again.
+        let moved = self.event_budget != self.saved_budget;
+        if moved && crate::settings::store_event_budget(self.event_budget).is_ok() {
+            self.saved_budget = self.event_budget;
         }
         Ok(written)
     }

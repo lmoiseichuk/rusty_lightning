@@ -213,6 +213,9 @@ impl Calibration {
     }
 }
 
+/// One oscillator's calibration, decoded, with the raw register beside it.
+pub type CalibrationReading = (Calibration, u8);
+
 /// Where the sensor is, which sets the AFE gain (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Location {
@@ -367,7 +370,7 @@ impl As3935 {
     pub fn calibration_status(
         &self,
         i2c: &mut I2cDriver<'_>,
-    ) -> Result<((Calibration, u8), (Calibration, u8)), EspError> {
+    ) -> Result<(CalibrationReading, CalibrationReading), EspError> {
         let trco = self.read(i2c, REG_CALIB_TRCO)?;
         let srco = self.read(i2c, REG_CALIB_SRCO)?;
         Ok((

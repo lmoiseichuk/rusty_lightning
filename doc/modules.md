@@ -90,7 +90,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 615 |
+| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 618 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 495 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/merger.rs` | 213 |
 | `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1086 |
