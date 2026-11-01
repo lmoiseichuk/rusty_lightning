@@ -90,8 +90,18 @@ fn main() {
         SPIKE_REJECTION_MAX == 15);
     // Left because it gates on amplitude: raising it discards weaker arrivals,
     // distant strikes first, which are the ones an early-warning device exists
-    // to report. 2 is `deep_demo.py`'s value, the record of what worked here.
-    check("the watchdog defaults to the reference setup's 2", WATCHDOG_DEFAULT == 2);
+    // to report.
+    //
+    // **This asserted 2 for a week after the default became 0**, and nothing ran
+    // it: the commit that opened the gate changed `src/defence.rs` alone, and
+    // the next `check.sh` refused to build. The same shape as the spike
+    // rejection line above, from the other side -- here the value moved on
+    // purpose and the check stayed behind. The reasoning is at
+    // `WATCHDOG_DEFAULT`: measured in a storm, `wd 2` heard 0 strikes in 100 s
+    // and `wd 0` heard 2 in 90 s, because the watchdog discards a return before
+    // anything can classify it. The 2 was half of `deep_demo.py`'s pair, kept
+    // without the `srej 0` it was measured beside.
+    check("the watchdog defaults to 0 -- the amplitude gate open", WATCHDOG_DEFAULT == 0);
     check("...and is settable across the register's range", WATCHDOG_MAX == 15);
 
     // --- what a bisection actually probes -----------------------------------
