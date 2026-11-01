@@ -76,10 +76,23 @@ command are lost while it wakes. The symptom is `?  try: help` in response to a
 perfectly valid command. Send a bare newline first, wait a second, then send the
 real command — or pin the clock (below), which stops it happening at all.
 
-**Opening the port resets the device.** Most terminal programs assert DTR on
-open, and on this chip DTR is wired to the boot strap. If you see the banner
-scroll past every time you connect, that is why, not a crash. `picocom
---noreset` avoids it where you need the device to keep running.
+**Opening the port resets the device, every time.** This used to say `picocom
+--noreset` avoids it; measured on 2026-11-01 it does not — the board restarts
+with `rst:0x15` (`USB`) on every open, with DTR and RTS both held low. If you see
+the banner scroll past every time you connect, that is why, not a crash.
+
+Two consequences shape the rest of this page. **Nothing that lives only in RAM
+survives looking at it.** And **the restart that matters is usually the
+one before the banner you are reading**: an unplug or a brownout on the cell
+happens with nobody attached, and connecting to ask resets the board again. The
+banner therefore prints the earlier reasons too —
+
+```
+boot: USB -- the host reset it through the port, not a fault
+boot: before that, newest first: BROWNOUT, power-on
+```
+
+— and `health` repeats them for as long as the board stays up.
 
 ---
 
@@ -127,7 +140,7 @@ works: `time`→`date`, `chart`→`scope`, `point`→`defence`, `cal`→`calibra
 | Command | What it does |
 |---|---|
 | `help` (or `?`) | the command list |
-| `health` | vitals — clock, CPU MHz, die temperature, RAM, flash, battery. The screen's top line. |
+| `health` | vitals — clock, CPU MHz, die temperature, RAM, flash, battery — plus the firmware's version and commit, and the restarts behind this session, newest first. The screen's top line, and then some. |
 | `status` | sensor state — mode, defence level, session counts, last hour, antenna. The screen's second line. |
 | `date` | the current time, in local time |
 | `dump` | the whole strike log as CSV, including records not yet synced to flash |

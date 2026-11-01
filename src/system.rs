@@ -140,26 +140,117 @@ pub fn health(
 /// **Worth printing on every boot**, because on this chip an unexpected reset
 /// is usually not a firmware fault and the reason says so immediately.
 ///
-/// `ESP_RST_USB` in particular: the C3's USB-Serial/JTAG maps the host's CDC
-/// control lines onto the reset and boot straps, so a host that asserts DTR/RTS
-/// — which Linux's ModemManager does to *every* new serial device it probes —
-/// reboots the board simply by having a cable plugged into it. That presents as
-/// "plugging in USB reboots the device", which looks like a power fault and is
-/// not one. The moisture project lost time to the same thing.
+/// `ESP_RST_USB` in particular: the C3's USB-Serial/JTAG can reset the chip at
+/// the host's request, and on this board **every open of the port does** --
+/// measured 2026-11-01 as `rst:0x15` with DTR and RTS both held low, so a
+/// careful terminal does not avoid it either. That presents as "plugging in
+/// USB reboots the device", which looks like a power fault and is not one. The
+/// moisture project lost time to the same thing.
 pub fn reset_reason_name() -> &'static str {
-    // bindgen flattens C enums to `<enum>_<VARIANT>` constants, which is why
-    // these names are as long as they are.
-    match unsafe { sys::esp_reset_reason() } {
+    reason_long(reset_reason_code())
+}
+
+/// The reason as the IDF's own number, narrowed to a byte for storage.
+///
+/// Every value `esp_reset_reason_t` defines fits: the enum ends at 15.
+pub fn reset_reason_code() -> u8 {
+    // SAFETY: a read-only query with no preconditions.
+    unsafe { sys::esp_reset_reason() as u8 }
+}
+
+/// The one-line reading of a reason, for the boot banner.
+fn reason_long(code: u8) -> &'static str {
+    match code as sys::esp_reset_reason_t {
+        sys::esp_reset_reason_t_ESP_RST_USB => {
+            "USB -- the host reset it through the port, not a fault"
+        }
+        sys::esp_reset_reason_t_ESP_RST_BROWNOUT => {
+            "BROWNOUT -- the 3V3 rail fell below the detector (~2.51 V)"
+        }
+        _ => reason_short(code),
+    }
+}
+
+/// The short name, for the history line where several share one row.
+///
+/// bindgen flattens C enums to `<enum>_<VARIANT>` constants, which is why
+/// these names are as long as they are. Shouting is kept for the reasons that
+/// mean something went wrong, so a list of them reads at a glance.
+fn reason_short(code: u8) -> &'static str {
+    match code as sys::esp_reset_reason_t {
         sys::esp_reset_reason_t_ESP_RST_POWERON => "power-on",
+        sys::esp_reset_reason_t_ESP_RST_EXT => "reset pin",
         sys::esp_reset_reason_t_ESP_RST_SW => "software restart",
         sys::esp_reset_reason_t_ESP_RST_PANIC => "PANIC",
-        sys::esp_reset_reason_t_ESP_RST_INT_WDT => "interrupt watchdog",
+        sys::esp_reset_reason_t_ESP_RST_INT_WDT => "INTERRUPT WATCHDOG",
         sys::esp_reset_reason_t_ESP_RST_TASK_WDT => "TASK WATCHDOG",
         sys::esp_reset_reason_t_ESP_RST_WDT => "other watchdog",
         sys::esp_reset_reason_t_ESP_RST_DEEPSLEEP => "deep-sleep wake",
         sys::esp_reset_reason_t_ESP_RST_BROWNOUT => "BROWNOUT",
-        sys::esp_reset_reason_t_ESP_RST_USB => "USB (host asserted DTR/RTS -- not a fault)",
+        sys::esp_reset_reason_t_ESP_RST_USB => "USB",
         sys::esp_reset_reason_t_ESP_RST_JTAG => "JTAG",
+        sys::esp_reset_reason_t_ESP_RST_PWR_GLITCH => "POWER GLITCH",
+        sys::esp_reset_reason_t_ESP_RST_CPU_LOCKUP => "CPU LOCKUP",
         _ => "unknown",
     }
+}
+
+// --- the restarts before this one --------------------------------------------
+
+/// How many past reasons are kept: four, one byte each, in one NVS word.
+const HISTORY_LEN: u32 = 4;
+
+/// A history slot nothing has been written to. Not 0, which is the IDF's own
+/// `ESP_RST_UNKNOWN` and therefore a real reason.
+const HISTORY_EMPTY: u8 = 0xFF;
+
+/// This boot's reason followed by the ones before it, newest in the low byte.
+///
+/// Held for the life of the process so `health` and the web page can show it
+/// without reading NVS again; written once, by [`record_restart`].
+static HISTORY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// Push this boot's reason onto the stored history, and keep the result.
+///
+/// ## Why the reason has to outlive the boot that knows it
+///
+/// **The interesting reset is the one nobody sees.** Unplugging USB reset this
+/// board on 2026-11-01 instead of handing it to its cell -- and the banner that
+/// names the reason goes to the USB port, which is exactly what had just been
+/// unplugged. Plugging back in to look does not help: opening the port resets
+/// the chip again (`ESP_RST_USB`), so the banner then on the glass is about the
+/// *second* reset and the first is gone.
+///
+/// So each boot writes its reason into NVS beside the three before it, and the
+/// next boot that somebody is watching prints them. One NVS write per boot,
+/// which is nothing against the clock's own every fifteen minutes.
+pub fn record_restart() -> u32 {
+    let before = crate::settings::restart_history().unwrap_or(u32::MAX);
+    let now = (before << 8) | reset_reason_code() as u32;
+    HISTORY.store(now, core::sync::atomic::Ordering::Relaxed);
+    if let Err(e) = crate::settings::store_restart_history(now) {
+        println!("boot: could not store the reset reason -- {e}");
+    }
+    now
+}
+
+/// The restarts before this one, oldest last: `BROWNOUT, power-on`.
+///
+/// Empty when this is the first boot that kept a history.
+pub fn earlier_restarts() -> String {
+    let history = HISTORY.load(core::sync::atomic::Ordering::Relaxed);
+    let mut names: Vec<&str> = Vec::new();
+    for slot in 1..HISTORY_LEN {
+        let code = (history >> (8 * slot)) as u8;
+        if code == HISTORY_EMPTY {
+            break;
+        }
+        names.push(reason_short(code));
+    }
+    names.join(", ")
+}
+
+/// This boot's reason in its short form, for the history line and the page.
+pub fn this_restart() -> &'static str {
+    reason_short(HISTORY.load(core::sync::atomic::Ordering::Relaxed) as u8)
 }

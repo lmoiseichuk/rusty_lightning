@@ -41,6 +41,21 @@ pub fn configure(
     location: Location,
 ) -> Result<defence::Point, esp_idf_hal::sys::EspError> {
     sensor.power_up(i2c)?;
+
+    // **Did the oscillators calibrate?** Read straight after `power_up`, which
+    // is the calibration. Reported and nothing more: a failure here would
+    // explain disturbers-but-never-lightning, and the chip has been saying
+    // whether it happened on every boot without anyone asking. See
+    // `As3935::calibration_status` for the open question it is evidence for.
+    match sensor.calibration_status(i2c) {
+        Ok(((trco, trco_raw), (srco, srco_raw))) => println!(
+            "as:   RCO calibration -- TRCO {}, SRCO {} (0x3A=0x{trco_raw:02X} 0x3B=0x{srco_raw:02X})",
+            trco.label(),
+            srco.label()
+        ),
+        Err(e) => println!("as:   RCO calibration status unreadable -- {e}"),
+    }
+
     sensor.set_location(i2c, location)?;
 
     // **Disturbers are MASKED, and the reason they were not has expired.**

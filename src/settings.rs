@@ -37,6 +37,8 @@ const KEY_SREJ: &[u8] = b"srej\0";
 const KEY_WDTH: &[u8] = b"wdth\0";
 const KEY_GOLDEN: &[u8] = b"golden\0";
 const KEY_GOLDEN_N: &[u8] = b"golden_n\0";
+/// The last four reset reasons, one byte each, newest in the low byte.
+const KEY_RESTARTS: &[u8] = b"restarts\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -326,5 +328,23 @@ pub fn clear_golden() -> Result<(), EspError> {
     // most open one -- and would read as "nf 0 has heard lightning here".
     let _ = nvs.erase(KEY_GOLDEN);
     let _ = nvs.erase(KEY_GOLDEN_N);
+    nvs.commit()
+}
+
+
+// --- why the device restarted -----------------------------------------------
+
+/// The packed reset-reason history `system::record_restart` keeps.
+///
+/// Stored here and interpreted there: this module holds bytes, and what a byte
+/// means is the IDF's enum, which `system` already names.
+pub fn restart_history() -> Option<u32> {
+    Namespace::open(NAMESPACE).ok()?.get_u32(KEY_RESTARTS)
+}
+
+/// Persist the history. Once per boot.
+pub fn store_restart_history(packed: u32) -> Result<(), EspError> {
+    let nvs = Namespace::open(NAMESPACE)?;
+    nvs.set_u32(KEY_RESTARTS, packed)?;
     nvs.commit()
 }

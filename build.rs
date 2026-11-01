@@ -3,6 +3,90 @@ use std::{env, fmt::Write as _, fs, path::PathBuf};
 fn main() {
     embuild::espidf::sysenv::output();
     convert_assets();
+    stamp_commit();
+}
+
+/// The firmware's own build inputs, for the dirty test in [`stamp_commit`].
+///
+/// **`tools/release.sh`'s `SOURCES` without `tests/`**, which are host programs
+/// and never reach the binary. A second copy of that list, kept because the two
+/// answer different questions: release.sh refuses to stamp a dirty tree at all,
+/// while this only has to say so when `flash.sh` writes one.
+const BUILD_INPUTS: &[&str] = &[
+    "src",
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "partitions.csv",
+    "sdkconfig.defaults",
+    "rust-toolchain.toml",
+    "littlefs_bindings.h",
+    "assets",
+    ".cargo/config.toml",
+    "components_esp32c3.lock",
+];
+
+/// Put the commit this binary was built from into `LIGHTNING_COMMIT`.
+///
+/// **So the boot banner can say which source is running, not only which
+/// version number.** `0.20.1` ran on the board for weeks while `main` moved
+/// three commits past it, and the version alone could not tell an image built
+/// before them from one built after. `release/*/VERSION` records the commit for
+/// a stamped image; this carries the same twelve characters into the image
+/// itself, so a board read over the console answers the question without the
+/// release tree beside it.
+///
+/// `-dirty` when a build input differs from that commit, which only
+/// `flash.sh` can produce -- `release.sh` refuses a dirty tree. `unknown`
+/// outside a checkout, which is honest rather than an error: a tarball builds.
+fn stamp_commit() {
+    // `std::process::Command` rather than a crate: this is two short git
+    // invocations, and a build dependency is a thing to keep in step for ever.
+    let git = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git").args(args).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    };
+
+    let commit = match git(&["rev-parse", "--short=12", "HEAD"]) {
+        Some(hash) if !hash.is_empty() => {
+            let mut status_args = vec!["status", "--porcelain", "--"];
+            status_args.extend_from_slice(BUILD_INPUTS);
+            match git(&status_args) {
+                Some(changes) if changes.is_empty() => hash,
+                Some(_) => format!("{hash}-dirty"),
+                // Status failed where rev-parse worked: say what is known.
+                None => hash,
+            }
+        }
+        _ => "unknown".to_string(),
+    };
+    println!("cargo:rustc-env=LIGHTNING_COMMIT={commit}");
+
+    // **Re-run when the commit or the tree moves, and only then.** Cargo stops
+    // re-running a build script on every change the moment it prints any
+    // `rerun-if-changed`, which `convert_assets` already does -- so without
+    // these the stamp would freeze at whatever commit first built this target
+    // directory. `.git/HEAD` moves on a checkout, `.git/index` on every commit
+    // and `add`, and a directory entry makes cargo watch the files inside it.
+    if let Some(git_dir) = git(&["rev-parse", "--git-dir"]) {
+        println!("cargo:rerun-if-changed={git_dir}/HEAD");
+        println!("cargo:rerun-if-changed={git_dir}/index");
+        // The branch's own ref, which is what a commit actually moves. Only
+        // when it is a loose file: cargo re-runs a script on every build for a
+        // path that does not exist, and a packed ref has no file of its own.
+        if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
+            let loose = format!("{git_dir}/{branch}");
+            if std::path::Path::new(&loose).exists() {
+                println!("cargo:rerun-if-changed={loose}");
+            }
+        }
+    }
+    for input in BUILD_INPUTS {
+        println!("cargo:rerun-if-changed={input}");
+    }
 }
 
 /// Every 1bpp asset the firmware draws.

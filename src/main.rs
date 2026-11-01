@@ -183,8 +183,25 @@ fn main() {
 
     println!();
     println!("=== lightning terminal ===");
-    println!("fw {}", env!("CARGO_PKG_VERSION"));
+    // The commit as well as the version: a version number names a release, and
+    // a board flashed from a working tree between two of them is running
+    // neither. `build.rs` puts it here, `-dirty` when the tree had changes.
+    println!(
+        "fw {} -- commit {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("LIGHTNING_COMMIT")
+    );
     println!("boot: {}", system::reset_reason_name());
+    // **The reason before this one is usually the one that matters.** Opening
+    // the port to read this banner resets the board (`USB` above), so a reset
+    // that happened while nobody was attached -- an unplug, a brownout on the
+    // cell -- is only ever visible here, one line down. See
+    // `system::record_restart`.
+    system::record_restart();
+    match system::earlier_restarts() {
+        earlier if earlier.is_empty() => println!("boot: no earlier restarts recorded"),
+        earlier => println!("boot: before that, newest first: {earlier}"),
+    }
 
     // §5's clock: a persisted epoch plus uptime, with no network involved.
     // Said out loud either way -- a device that comes up without a time will

@@ -47,6 +47,8 @@
 //! | `0x04..0x06` | energy | 20-bit strike energy, LSB first |
 //! | `0x07` | `0x3F` DISTANCE | estimated distance to the head of the storm |
 //! | `0x08` | `0x0F` TUN_CAP, `0xE0` DISP_* | antenna tuning caps; what appears on IRQ |
+//! | `0x3A` | `0x80` TRCO_CALIB_DONE, `0x40` TRCO_CALIB_NOK | did the timer RCO calibrate |
+//! | `0x3B` | `0x80` SRCO_CALIB_DONE, `0x40` SRCO_CALIB_NOK | did the system RCO calibrate |
 //! | `0x3C` | — | direct command: reset (write `0x96`) |
 //! | `0x3D` | — | direct command: calibrate RCO (write `0x96`) |
 
@@ -67,6 +69,8 @@ const REG_ENERGY_MSB: u8 = 0x05;
 const REG_ENERGY_MMSB: u8 = 0x06;
 const REG_DISTANCE: u8 = 0x07;
 const REG_TUNING: u8 = 0x08;
+const REG_CALIB_TRCO: u8 = 0x3A;
+const REG_CALIB_SRCO: u8 = 0x3B;
 const CMD_RESET: u8 = 0x3C;
 const CMD_CALIB_RCO: u8 = 0x3D;
 /// The value both direct commands take. Not a register write — the chip
@@ -169,6 +173,45 @@ pub const LCO_DIVISOR: u32 = 16;
 /// §9 item 6 is still open precisely because nothing below
 /// [`Interrupt::Lightning`] has been confirmed by one.
 pub const IRQ_SETTLE_MS: u32 = 8;
+
+/// Bit 7 of `0x3A`/`0x3B`: the oscillator calibrated. Datasheet v1-04, the
+/// register table and "Clock Generation".
+const MASK_CALIB_DONE: u8 = 0x80;
+/// Bit 6 of the same registers: the calibration ran and failed.
+const MASK_CALIB_NOK: u8 = 0x40;
+
+/// What one RC oscillator's calibration status register says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Calibration {
+    /// `DONE` set, `NOK` clear: calibrated.
+    Done,
+    /// `NOK` set: the chip tried and failed.
+    Failed,
+    /// Neither bit: the calibration never finished, or never ran.
+    NotDone,
+    /// Both bits, which the datasheet does not describe. Reported raw.
+    Contradictory,
+}
+
+impl Calibration {
+    fn from_register(value: u8) -> Calibration {
+        match (value & MASK_CALIB_DONE != 0, value & MASK_CALIB_NOK != 0) {
+            (true, false) => Calibration::Done,
+            (false, true) => Calibration::Failed,
+            (false, false) => Calibration::NotDone,
+            (true, true) => Calibration::Contradictory,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Calibration::Done => "done",
+            Calibration::Failed => "FAILED",
+            Calibration::NotDone => "NOT DONE",
+            Calibration::Contradictory => "done AND failed",
+        }
+    }
+}
 
 /// Where the sensor is, which sets the AFE gain (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +349,31 @@ impl As3935 {
         self.modify(i2c, REG_TUNING, MASK_DISPLAY_TRCO, MASK_DISPLAY_TRCO)?;
         esp_idf_hal::delay::FreeRtos::delay_ms(2);
         self.modify(i2c, REG_TUNING, MASK_DISPLAY_TRCO, 0x00)
+    }
+
+    /// Whether the two RC oscillators calibrated, from `0x3A` and `0x3B`.
+    ///
+    /// **A report, and the evidence for a question this port has not settled.**
+    /// The chip's timing -- and so its whole idea of what a lightning waveform
+    /// looks like -- runs on these two oscillators, and [`Self::power_up`]
+    /// calibrates them by pulsing `DISP_TRCO` (bit 5), as the reference did.
+    /// The datasheet's own recalibration procedure (v1-04, "Clock Generation")
+    /// pulses `REG0x08[6]`, which is `DISP_SRCO`. Nothing here changes which bit
+    /// is pulsed; this reads what the chip says came of it, so the next boot
+    /// answers the question instead of an argument.
+    ///
+    /// Returns `(timer RCO, system RCO)` with the raw bytes, which are printed
+    /// beside the decoding for the same reason `regs` prints raw registers.
+    pub fn calibration_status(
+        &self,
+        i2c: &mut I2cDriver<'_>,
+    ) -> Result<((Calibration, u8), (Calibration, u8)), EspError> {
+        let trco = self.read(i2c, REG_CALIB_TRCO)?;
+        let srco = self.read(i2c, REG_CALIB_SRCO)?;
+        Ok((
+            (Calibration::from_register(trco), trco),
+            (Calibration::from_register(srco), srco),
+        ))
     }
 
     pub fn set_location(&self, i2c: &mut I2cDriver<'_>, location: Location) -> Result<(), EspError> {

@@ -235,6 +235,20 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 ),
                 None => println!("health: clock not set, up {} min", ctx.uptime_minutes),
             }
+            // The restart that started this session and the ones before it --
+            // the boot banner says the same, but the banner is gone by the time
+            // anybody asks, and the earlier entries are the ones nobody saw.
+            println!(
+                "health: fw {} {}, up {} min after {}",
+                env!("CARGO_PKG_VERSION"),
+                env!("LIGHTNING_COMMIT"),
+                ctx.uptime_minutes,
+                system::this_restart()
+            );
+            match system::earlier_restarts() {
+                earlier if earlier.is_empty() => {}
+                earlier => println!("health: earlier restarts, newest first: {earlier}"),
+            }
             println!("health: {} MHz, light sleep {}", health.cpu_mhz,
                 if crate::power::config().map(|(_, _, ls)| ls).unwrap_or(false) { "on" } else { "off" });
             match health.die_temp_tenths {

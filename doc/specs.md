@@ -304,6 +304,29 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 > harmonics are integer multiples of the passband. A 100 kHz bus beside a 500 kHz receiver is a
 > five-times multiplier, and nothing in either datasheet mentions the other part.
 
+> #### ⚠ AS BUILT, 0.21.0: the RC-oscillator calibration is now reported, and two things about it are open
+>
+> The chip's timing runs on two RC oscillators — the system RCO (~1.1 MHz, the clock for the whole
+> digital part) and the timer RCO (32.768 kHz) — and step 2 above calibrates both against the
+> antenna's LC oscillator. Registers `0x3A` and `0x3B` say whether that worked: bit 7 *done*, bit 6
+> *failed* (datasheet v1-04). Nothing read them until now; every boot prints
+> `as:   RCO calibration -- TRCO …, SRCO …` straight after `power_up`. **Report only.** Two
+> disagreements with the datasheet are recorded here rather than changed:
+>
+> 1. **Which bit is pulsed.** `power_up` pulses `0x08` bit 5, `DISP_TRCO`, exactly as the reference
+>    did — §8's audit kept the value and fixed only its name. The datasheet's own recalibration
+>    procedure ("Clock Generation") pulses `REG0x08[6]`, which is `DISP_SRCO`.
+> 2. **The order.** The datasheet: *"It is recommended to first trim the receiver antenna before the
+>    calibration of both oscillators is done"*, because the RCOs are calibrated against the LC
+>    oscillator. `boot::configure` calibrates first and writes the 120 pF tuning capacitance after,
+>    so the calibration runs at the reset value, 0 pF — the antenna off its 500 kHz.
+>
+> Either could leave the oscillators off frequency, and signal validation is timing — so either
+> could turn real strikes into disturbers with nothing looking wrong. The status bits answer the
+> first only partly: *done* says the calibration finished, not that it was against the right
+> reference. Changing the order is a one-line move; it is not made here because it changes the
+> receiver, and the receiver changes only on evidence from a storm.
+
 ---
 
 ## 4. Behaviour
@@ -912,6 +935,50 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 > minutes after unplugging; and `usb_serial_jtag_is_connected()` never reports a disconnect at all.
 > What replaced them is about a *person* rather than a cable — the grace period, and console
 > activity.
+
+> #### ⚠⚠ AS BUILT, 2026-11-01: unplugging USB can reset the board, and the cause is the power path
+>
+> Measured in a live storm on 0.20.1: pulling the cable **restarted the board** instead of handing
+> it to its cell, which read 94 % and charging. §8 below records the opposite from August — the chip
+> kept running through an unplug — so it is a sometimes, and the firmware is not what decides it.
+>
+> **Nothing in the firmware acts on the supply.** There is no VBUS handler, no `esp_restart` anywhere
+> in `src/`, and the three supply-detection schemes above were all removed. The console's writes go
+> through the USB-Serial/JTAG driver, which times out and drops output rather than blocking when the
+> host has gone, so a vanished port cannot hold the loop past the task watchdog either.
+>
+> **The cell is not wired to the rail; it reaches it through a converter that has to change mode.**
+> Seeed's driver-board schematic (rev 1.0, 2024-12-09) puts the cell behind **U1, an ETA9740** — a
+> power-bank part: a charger and a 5 V boost sharing one inductor and one pin, `OUT`, which is tied
+> straight to the XIAO's 5 V pad with 22 µF (C14). With USB present `OUT` is the charger's *input*.
+> When USB goes, the part has to see its input fall through its USB UVLO (4.5 V rising, 500 mV
+> hysteresis) and then start boosting — its datasheet's "automatic mode switching" — and states no
+> time for that. Until the boost is up, the 3V3 rail lives on capacitors: C14 on the 5 V side, CT1
+> 220 µF behind the panel's ferrite on 3V3, and whatever the XIAO carries itself.
+>
+> **Arithmetic, not a measurement:** 220 µF falling from 3.3 V to the brownout level is about 5 ms at
+> the 33.5 mA measured awake, and about 60 ms at the ~3 mA measured frugal; a panel refresh in
+> progress makes it shorter than either. So whether an unplug survives depends on what the board was
+> doing at that instant, which fits a failure that happened today and not in August.
+>
+> **A lower brownout level is not available, and switching the detector off is not safe.** This
+> build runs the IDF's default for the C3, level 7, which its Kconfig gives as **~2.51 V** — and that
+> is already the lowest level offered. It is below the **3.0 V** minimum the ESP32-C3 datasheet
+> (v2.4, Table 5-2) recommends for every supply pin, and below the **2.7 V** minimum of the
+> in-package flash (Table 5-10). Disabling the detector would let NVS and LittleFS writes run on a
+> rail under the flash's rating — choosing, on purpose, the corruption LittleFS was picked to
+> survive. Left as it is.
+>
+> **What settles it is the next unplug.** The reason a boot happened is now kept in NVS with the
+> three before it and printed on every boot (`boot: before that, newest first: …`), and by `health`.
+> That matters because the reset being chased is the one nobody sees: its banner goes to the port
+> that was just unplugged, and plugging back in to look resets the chip again, as `USB`. So after
+> the next unplug: **`BROWNOUT`** is the rail sagging past ~2.51 V during the switchover;
+> **`power-on`** is it collapsing outright; **anything else** — a watchdog, a panic — is firmware,
+> and this callout is wrong.
+>
+> If it is the switchover, the lever is hardware: hold-up capacitance on the 5 V node the ETA9740 and
+> the XIAO share. Untested.
 
 ---
 
