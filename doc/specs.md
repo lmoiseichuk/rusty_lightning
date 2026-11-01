@@ -955,6 +955,34 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 > What replaced them is about a *person* rather than a cable — the grace period, and console
 > activity.
 
+> #### ⚠ AS BUILT, 0.21.0: the sensor's IRQ wakes the chip — the "IRQ + timer wake" above, finally
+>
+> The model at the top of this section says *light-sleep with IRQ + timer wake*. Until 0.21.0 only
+> the timer half was true. The C3 build has `CONFIG_PM_SLP_DISABLE_GPIO` (the IDF selects it as part
+> of a workaround for a chip that resets when a floating input catches a static pulse in light
+> sleep), which isolates every pad while the core sleeps, and no GPIO was a wake source. An event
+> that arrived asleep waited for the loop's 1 s timer — and the AS3935 holds only the latest reason,
+> so a second event in that second overwrote the first, and `millis` recorded the service time.
+>
+> Now `power::wake_on_irq` makes GPIO21 a light-sleep wake source on a high level, and exempts that
+> one pad from the isolation (`gpio_wakeup_enable` does it, via `gpio_sleep_sel_dis`); it is driven
+> by the sensor's push-pull INT, so the floating-input hazard the workaround exists for does not
+> apply. Because the C3 shares one trigger field between interrupt and wake, the interrupt became
+> **level-triggered** too — which also closes the missed-edge mechanism the 200 ms rescue poll was
+> written for: an INT still high when the loop re-arms fires at once. The button stays on its edge:
+> GPIO9 carries DTR, and a level there would fire on every pass while a console holds the port.
+>
+> **The cost is one wake per event the chip raises**, each about one 10 ms tick awake (the 8 ms
+> settle before the register read rounds up to the tick):
+>
+> | | extra wakes | time awake | current, bounded by the measured 33.5 mA awake |
+> |---|---|---|---|
+> | masked (default) | noise + strikes only: ≤ ~1/s at the default 60/min quiet threshold, usually far fewer | ≤ ~1 % | ≤ ~0.3 mA on 2.5–3.0 mA |
+> | unmasked, indoors 2026-11-01 | 6–10/s | 6–10 % | ≤ 2–3.4 mA — at worst roughly double |
+>
+> Estimates from the measured rates and currents, not a measurement of this build. Unmasked was
+> already an experiment rather than a resting state; on the cell this is part of its price.
+
 > #### ⚠⚠ AS BUILT, 2026-11-01: unplugging USB can reset the board, and the cause is the power path
 >
 > Measured in a live storm on 0.20.1: pulling the cable **restarted the board** instead of handing

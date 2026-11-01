@@ -84,7 +84,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 819 |
+| `listen` | The event loop. | -- | 832 |
 
 ### The sensor and what it hears
 
@@ -140,7 +140,7 @@ this table is generated from it.
 | `boot` | Bring-up: everything that happens once, before the loop. | -- | 413 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
-| `power` | Clock and sleep policy (§7). | -- | 126 |
+| `power` | Clock and sleep policy (§7). | -- | 180 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
 | `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
 

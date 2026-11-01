@@ -321,11 +321,26 @@ fn main() {
 
     // --- the IRQ ---------------------------------------------------------
     //
-    // The pad was claimed at the top of `main`; only the edge configuration is
-    // left. §2: GPIO9 is out as an IRQ candidate -- it is the boot strap, and
-    // the AS3935's INT idles low, so a low there at reset drops the chip into
-    // the ROM downloader and our firmware never runs at all.
-    if let Err(e) = irq.set_interrupt_type(InterruptType::PosEdge) {
+    // The pad was claimed at the top of `main`; only the trigger is left. §2:
+    // GPIO9 is out as an IRQ candidate -- it is the boot strap, and the
+    // AS3935's INT idles low, so a low there at reset drops the chip into the
+    // ROM downloader and our firmware never runs at all.
+    //
+    // **High level, not rising edge, since 0.21.0** -- because only a level
+    // can wake the C3 from light sleep, and the chip shares one trigger field
+    // between the interrupt and the wake (`gpio_wakeup_enable` refuses an edge
+    // outright). See `power::wake_on_irq` for the wake half.
+    //
+    // The level is also the better interrupt for this sensor on its own terms.
+    // The AS3935 holds INT high until the reason register is read, so an edge
+    // that arrived while the interrupt was disarmed -- mid-redraw, between the
+    // ISR and the loop re-arming it -- was simply gone, and with it every later
+    // edge until something read the register. A level still pending when the
+    // loop re-arms fires at once. It cannot storm: esp-idf-hal's ISR disarms
+    // the pin on every fire, the loop re-arms once a pass, and every pass that
+    // was woken reads the register -- which lowers INT -- after a settle that
+    // yields to the scheduler.
+    if let Err(e) = irq.set_interrupt_type(InterruptType::HighLevel) {
         println!("FATAL: GPIO21 interrupt type -- {e}");
         return;
     }
@@ -381,7 +396,18 @@ fn main() {
     // Prove the wire before trusting silence. See `antenna_self_test`.
     let (irq_confirmed, antenna_khz) = boot::antenna_self_test(&sensor, &mut i2c, &irq);
 
-    println!("irq:  GPIO21 (D6), rising edge, pulldown");
+    // After the self-test, which drives this pin as a 31 kHz clock: the wake
+    // is armed only once the pin is back to being the sensor's INT.
+    match power::wake_on_irq(21) {
+        Ok(()) => println!("irq:  GPIO21 (D6), high level, pulldown -- wakes the chip from light sleep"),
+        Err(e) => {
+            // Not fatal: the 1 s batch timer still wakes the loop, which reads
+            // the register -- the 0.20 behaviour, slower and lossier, not deaf.
+            println!("irq:  GPIO21 (D6), high level, pulldown");
+            println!("irq:  ⚠ could not make it a light-sleep wake source -- {e}");
+            println!("irq:    asleep, events wait for the 1 s timer, and only the last one survives");
+        }
+    }
     println!(
         "btn:  GPIO9 (BOOT): hold {}-{} s for indoor/outdoor, {} s+ for the network",
         press::ACCEPT_MS / 1000,

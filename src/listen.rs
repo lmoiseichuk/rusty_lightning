@@ -67,6 +67,12 @@ pub const IRQ_POLL_INTERVAL_S: u32 = 30;
 /// It costs one I2C transaction per interval against a device that already
 /// polls a fuel gauge, and it is the difference between a log full of strikes
 /// and a log full of nothing.
+///
+/// **Since 0.21.0 the interrupt is level-triggered** (see `main`), which closes
+/// the mechanism above: an INT still high when the loop re-arms fires at once,
+/// so there is no "next edge" to wait for. The poll stays, as the diagnostic it
+/// started as -- a `poll: found ...` line now means something other than a
+/// missed edge, and is worth reading.
 pub const IRQ_RESCUE_INTERVAL_MS: u32 = 200;
 
 /// How often the tuner re-runs a full sweep without being asked.
@@ -261,6 +267,13 @@ pub fn listen(
         // Re-arming is required after every trigger: esp-idf disables the
         // interrupt when it fires, so a loop that forgets this hears exactly one
         // event and then waits forever. Both sources need it.
+        //
+        // The sensor's is a high *level* since 0.21.0, so this is also where an
+        // event that arrived while it was disarmed -- during a redraw, say --
+        // is picked up: if INT is still high, the interrupt fires the moment it
+        // is enabled. The button stays on its falling edge: GPIO9 carries DTR,
+        // and a level there would fire on every pass for as long as a console
+        // holds the port open.
         if let Err(e) = irq.enable_interrupt() {
             println!("irq:  could not re-arm GPIO21 -- {e}");
             return;
