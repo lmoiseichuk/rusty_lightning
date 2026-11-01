@@ -51,6 +51,21 @@ devices_list() {
     return 1
 }
 
+# Where a board sits on a switchable hub: `hub port`, or nothing if unlisted.
+#
+# Optional on purpose. A board on a root port cannot be power-cycled at all, and
+# a devices.list that made the columns mandatory would be inventing a location
+# for it rather than saying so.
+board_location() {
+    local want="${1:-${BOARD:-lightning}}" list
+    list="$(devices_list)" || return 1
+    awk -v want="$want" '
+        /^[[:space:]]*(#|$)/ { next }
+        $1 == want && NF >= 4 { print $3, $4; found = 1; exit }
+        END { exit !found }
+    ' "$list"
+}
+
 # Which name a MAC belongs to, for a message that says more than the hex.
 board_name_of() {
     local mac="$1" list

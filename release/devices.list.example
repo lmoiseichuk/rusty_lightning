@@ -1,4 +1,4 @@
-# The boards on this bench: one `name  MAC` pair per line.
+# The boards on this bench: `name  MAC  [hub  port]`, one per line.
 #
 # Copy to `devices.list` (gitignored) and put your own in. Every script that can
 # write to a device looks the board up here first, because the numbering in
@@ -11,8 +11,21 @@
 #     usb-Espressif_USB_JTAG_serial_debug_unit_AA:BB:CC:DD:EE:FF-if00
 #                                              ^^^^^^^^^^^^^^^^^
 #
+# `hub` and `port` are optional and only `tools/power.sh` needs them -- the
+# board's location on a switchable USB hub, from:
+#
+#     uhubctl -f
+#     Current status for hub 1-1 [...]
+#                            ^^^
+#       Port 1: 0103 power enable connect [303a:1001 ... AA:BB:CC:DD:EE:FF]
+#            ^
+#
+# A board with no hub and port simply cannot be power-cycled, which is the
+# honest answer for one plugged into a root port.
+#
 # The first entry is the default. Name others to keep them straight -- and to
 # make it obvious when a port resolves to one of them by mistake.
 
-lightning   AA:BB:CC:DD:EE:FF
-# panel     11:22:33:44:55:66
+# name       MAC                  hub    port
+lightning    AA:BB:CC:DD:EE:FF    1-1    1
+# panel      11:22:33:44:55:66    5-1    4
