@@ -84,16 +84,16 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 834 |
+| `listen` | The event loop. | -- | 891 |
 
 ### The sensor and what it hears
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 618 |
+| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 678 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 495 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1086 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1106 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/history.rs`, `tests/merger.rs` | 93 |
 | `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1052 |
 | `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 70 |
@@ -123,10 +123,10 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 594 |
+| `commands` | What the console commands actually do (§5). | -- | 596 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 468 |
+| `effects` | Applying the console's hardware effects. | -- | 471 |
 | `portal` | The access point and the web server it carries. | -- | 631 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
 | `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 409 |
@@ -137,10 +137,10 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 413 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 423 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
-| `power` | Clock and sleep policy (§7). | -- | 180 |
+| `power` | Clock and sleep policy (§7). | -- | 223 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
 | `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
 

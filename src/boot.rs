@@ -84,6 +84,15 @@ pub fn configure(
     // what falls out of not spending the interrupt path on returns the chip has
     // already classified as not-lightning.
     //
+    // **That mechanism is gone since 0.21.0, and the contention is not.** The
+    // IRQ is a level now, so an INT still high when the loop re-arms fires at
+    // once and no edge can be missed. What unmasking still costs is the one
+    // register a strike and a disturber share: the AS3935 shows only the
+    // latest reason, so a disturber that lands before a pending strike is read
+    // -- inside the settle, or behind a 3.8 s redraw -- replaces it, and at
+    // 6-10 a second a redraw is long enough to expect that. And on the cell
+    // each disturber is a wake of its own (`power::wake_on_irq`).
+    //
     // The cost is real and is the disturber log: `mask off` is how to run the
     // "are real flashes arriving here as disturbers" experiment, and that
     // question is still open. It is an experiment, so it is a command.
@@ -102,7 +111,8 @@ pub fn configure(
         (true, true) => println!("as:   disturbers masked (saved)"),
         (false, _) => {
             println!("as:   ⚠ disturbers UNMASKED (saved by `mask off`) -- they raise the IRQ");
-            println!("as:     expect missed edges in a close storm; `mask on` to restore");
+            println!("as:     a disturber can replace a strike's reason before it is read, and on the cell");
+            println!("as:     each one is a wake; `mask on` to restore");
         }
     }
     sensor.clear_irq_display(i2c)?;

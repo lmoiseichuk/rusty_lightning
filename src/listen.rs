@@ -71,8 +71,12 @@ pub const IRQ_POLL_INTERVAL_S: u32 = 30;
 /// **Since 0.21.0 the interrupt is level-triggered** (see `main`), which closes
 /// the mechanism above: an INT still high when the loop re-arms fires at once,
 /// so there is no "next edge" to wait for. The poll stays, as the diagnostic it
-/// started as -- a `poll: found ...` line now means something other than a
-/// missed edge, and is worth reading.
+/// started as, and since 0.21.1 it reads only while INT is low: a
+/// `poll: found ... with INT low` line is an event the IRQ wire never carried
+/// -- a broken line rather than a missed edge -- and is worth reading.
+///
+/// It runs where the batch closes, so in practice once a second, not five
+/// times: the interval is a floor under the batch rather than its own clock.
 pub const IRQ_RESCUE_INTERVAL_MS: u32 = 200;
 
 /// How often the tuner re-runs a full sweep without being asked.
@@ -262,6 +266,16 @@ pub fn listen(
     let mut portal_request = false;
     let mut portal_wanted: Option<bool> = None;
     let mut portal: Option<crate::portal::Portal> = None;
+    // **Set when a read of the reason register failed**, and cleared when the
+    // batch closes. A failed read leaves INT high -- only the read lowers it --
+    // and a high *level* re-fires the instant it is re-armed, so re-arming on
+    // the next pass would turn one I2C fault into a read attempt and a console
+    // line every pass, and a board that never light-sleeps. Held, the pin is
+    // tried once a batch: the fault costs a line a second instead.
+    let mut irq_held = false;
+    // Consecutive failed reads, so the hold is explained once and its end is
+    // reported, rather than either being repeated every second.
+    let mut irq_failures: u32 = 0;
 
     loop {
         // Re-arming is required after every trigger: esp-idf disables the
@@ -274,9 +288,13 @@ pub fn listen(
         // is enabled. The button stays on its falling edge: GPIO9 carries DTR,
         // and a level there would fire on every pass for as long as a console
         // holds the port open.
-        if let Err(e) = irq.enable_interrupt() {
-            println!("irq:  could not re-arm GPIO21 -- {e}");
-            return;
+        //
+        // Except while held -- see `irq_held`.
+        if !irq_held {
+            if let Err(e) = irq.enable_interrupt() {
+                println!("irq:  could not re-arm GPIO21 -- {e}");
+                return;
+            }
         }
         if let Err(e) = button.enable_interrupt() {
             println!("btn:  could not re-arm GPIO9 -- {e}");
@@ -316,7 +334,7 @@ pub fn listen(
             // likely to be a bug in a notifier than a real third source, and
             // dropping it silently would lose a strike.
             if bits & !NOTIFY_BUTTON != 0 {
-                collect(
+                let read = collect(
                     sensor,
                     i2c,
                     &mut batch,
@@ -325,6 +343,29 @@ pub fn listen(
                     minute_now(),
                     strike_log.as_deref_mut(),
                 );
+                match (read, irq_failures) {
+                    (true, 0) => {}
+                    (true, failed) => {
+                        println!("irq:  the reason register reads again, after {failed} failed read(s)");
+                        irq_failures = 0;
+                    }
+                    (false, failed) => {
+                        // The interrupt fired and was disabled by esp-idf on
+                        // the way; not re-arming it is the first half of the
+                        // hold. The wake source is the second: INT high would
+                        // wake the chip the moment it tried to sleep.
+                        irq_held = true;
+                        irq_failures = failed.saturating_add(1);
+                        if let Err(e) = power::hold_irq_wake(i32::from(irq.pin())) {
+                            println!("irq:  could not stop GPIO21 waking the chip -- {e}");
+                        }
+                        if failed == 0 {
+                            println!(
+                                "irq:  INT stays high until the register is read -- GPIO21 is tried once a batch until it is"
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -377,20 +418,36 @@ pub fn listen(
             continue;
         }
 
+        // A held IRQ is released with the batch, so the next pass re-arms it
+        // and the read is tried again -- once a second while the fault lasts.
+        if irq_held {
+            irq_held = false;
+            if let Err(e) = power::wake_on_irq(i32::from(irq.pin())) {
+                println!("irq:  could not make GPIO21 a wake source again -- {e}");
+            }
+        }
+
         // Plan B: look for events the interrupt line never announced. Before
         // `report`, so anything found is summarised in this batch rather than
         // the next one.
+        //
+        // **Only while INT is low.** High, the event belongs to the level
+        // interrupt, which fires as soon as the next pass re-arms it and reads
+        // after the settle; a poll now would read it first with no settle at
+        // all, and leave the interrupt an empty register. See `session::poll`.
         if crate::uptime::due(now_ms(), last_irq_poll_ms, IRQ_RESCUE_INTERVAL_MS) {
             last_irq_poll_ms = now_ms();
-            session::poll(
-                sensor,
-                i2c,
-                &mut batch,
-                &mut totals,
-                &mut history,
-                minute_now(),
-                strike_log.as_deref_mut(),
-            );
+            if irq.is_low() {
+                session::poll(
+                    sensor,
+                    i2c,
+                    &mut batch,
+                    &mut totals,
+                    &mut history,
+                    minute_now(),
+                    strike_log.as_deref_mut(),
+                );
+            }
         }
 
         // **A strike earns the screen a short floor**, so the glass is not half

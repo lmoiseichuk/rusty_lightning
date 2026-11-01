@@ -5,7 +5,6 @@
 //! reads as a loop skeleton calling named steps instead of defining them
 //! inline.
 
-use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::i2c::I2cDriver;
 
 use crate::merger::{Merged, Merger};
@@ -163,6 +162,13 @@ pub struct Drawn {
 
 
 /// Read one interrupt and fold it into the batch.
+///
+/// Returns whether the reason register was read. **`false` means INT is still
+/// high**, because only that read lowers it -- and with a level interrupt the
+/// caller must not simply re-arm, or the pin fires again on the next pass and
+/// every pass after it. See `listen`, which holds the pin until the batch
+/// closes.
+#[must_use]
 pub fn collect(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
@@ -171,11 +177,12 @@ pub fn collect(
     history: &mut history::History,
     minute: u32,
     strike_log: Option<&mut log::Log>,
-) {
+) -> bool {
     // The datasheet's settle time, and the reason this is in the main task
-    // rather than the ISR (§3).
-    FreeRtos::delay_ms(as3935::IRQ_SETTLE_MS);
-    read_and_handle(sensor, i2c, batch, totals, history, minute, strike_log, false);
+    // rather than the ISR (§3). A function rather than a delay call, because
+    // the delay call is what failed to wait: see `as3935::settle`.
+    as3935::settle();
+    read_and_handle(sensor, i2c, batch, totals, history, minute, strike_log, false)
 }
 
 /// Read the reason register without an edge having announced it (§3, plan B).
@@ -195,6 +202,14 @@ pub fn collect(
 ///
 /// No settle delay: there is no edge to settle from, and whatever is in the
 /// register has been there for however long it took this poll to come round.
+///
+/// **Since 0.21.1 the caller polls only while INT is low.** With a level
+/// interrupt, INT high means the interrupt is about to take the event -- with
+/// a settle -- and a poll in that moment would read it first, with none,
+/// perhaps inside the datasheet's 2 ms, and leave the interrupt path to read
+/// an empty register after it. With INT low there is no such race, and an
+/// event found anyway was never on the wire at all: a broken IRQ line, not a
+/// missed edge.
 pub fn poll(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
@@ -204,7 +219,9 @@ pub fn poll(
     minute: u32,
     strike_log: Option<&mut log::Log>,
 ) {
-    read_and_handle(sensor, i2c, batch, totals, history, minute, strike_log, true);
+    // Whether it read is of no interest here: INT was low, so a failed read
+    // leaves nothing armed that could fire on it.
+    let _ = read_and_handle(sensor, i2c, batch, totals, history, minute, strike_log, true);
 }
 
 /// Read `0x03` and fold whatever it says into the batch.
@@ -223,22 +240,24 @@ fn read_and_handle(
     minute: u32,
     mut strike_log: Option<&mut log::Log>,
     polled: bool,
-) {
+) -> bool {
     let reason = match sensor.interrupt_reason(i2c) {
         Ok(reason) => reason,
         Err(e) => {
             println!("irq:  reason read failed -- {e}");
-            return;
+            return false;
         }
     };
 
     // Nothing pending is the overwhelmingly common answer to a poll, and saying
     // so once every thirty seconds would bury everything else.
     if polled && matches!(reason, Interrupt::Unknown(0)) {
-        return;
+        return true;
     }
     if polled {
-        println!("poll: found {reason:?} with no interrupt -- the edge was missed");
+        // The caller polls only with INT low, so this is an event the IRQ line
+        // never carried -- see `poll`.
+        println!("poll: found {reason:?} with INT low -- the IRQ line did not carry it");
     }
 
     match reason {
@@ -283,6 +302,7 @@ fn read_and_handle(
         }
         Interrupt::Unknown(_) => batch.unknown += 1,
     }
+    true
 }
 
 

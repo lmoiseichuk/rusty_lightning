@@ -217,9 +217,11 @@ pub fn handle(
             // back, which is the only record of whether real flashes are
             // arriving here classified as not-lightning.
             //
-            // Unmasking costs what boot's note describes: at four disturbers a
-            // second the poll starts reporting events "with no interrupt -- the
-            // edge was missed", and a strike shares that wire.
+            // Unmasking costs what boot's note describes. Under the old edge
+            // trigger it was missed edges; under the level trigger it is the
+            // shared reason register -- a disturber that lands before a
+            // pending strike is read replaces it -- and on the cell a wake per
+            // disturber.
             //
             // **Saved, since 0.21.0**, in the order every other setting uses:
             // tell the chip, and persist only what the chip accepted. Held in
@@ -242,7 +244,8 @@ pub fn handle(
                         }
                     );
                     if !mask {
-                        println!("mask: expect missed edges in a close storm -- see boot::configure");
+                        println!("mask: a disturber can replace a strike's reason before it is read,");
+                        println!("mask: and on the cell each one is a wake -- see boot::configure");
                         println!("mask: it stays off across restarts until `mask on`");
                     }
                 }

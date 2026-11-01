@@ -121,12 +121,34 @@ precisely when the band is at its worst — the moment the estimate matters most
 Such an observation is *right-censored*, and the honest treatment is to record it
 as noisy, exclude it from every rate, and say so.
 
+**Since 0.21.0 the count measures something else, and nobody has measured how
+different.** The interrupt became a high level (§6), so an INT that rose while
+the pin was disarmed — the rest of a pass, a 3.8 s redraw, the second before
+the batch-end poll — is now serviced the moment the loop re-arms instead of
+waiting, uncounted, for the poll. The datasheet says `INT_NH` *"persists as long
+as the noise level is above the threshold"*, so in a noisy band that is a re-raise
+the old path lost and the new one counts. The same room can therefore read
+noisier on 0.21 than on 0.20.
+
+That matters because **the tuner's thresholds were set against the old counts.**
+`climb` takes one notch per multiple of the quiet threshold (60/min) at once, and
+`golden::is_swamped` records a rung as drowned at five times it (300/min) and
+then refuses to relax below it — a ceiling that sat almost exactly on the old
+path's saturation. A window 0.20 counted at ~300 might count 500 on 0.21: eight
+notches instead of five, and a floor recorded where 0.20 recorded none. The cap
+was never strict — 595/min was logged under the edge — so the size of the
+effect is open. Until it is measured, compare `noise/min` and the
+`tune: nf N drowned at …` lines on 0.20 and 0.21 in the same room before
+trusting where the tuner comes to rest. Nothing in the tuner was changed for
+it: thresholds move on measurements, and this one has not been made.
+
 ---
 
 ## 6. The interrupt path, and how an event is lost
 
-The AS3935 asserts INT and **holds it** until register 0x03 is read. The pin is
-configured for a rising edge.
+The AS3935 asserts INT and **holds it** until register 0x03 is read. Until
+0.21.0 the pin was configured for a rising edge, and what follows is how that
+lost events; 0.21.0 made it a high level, for the reason at the end.
 
 `esp-idf-hal` disables the pin inside the ISR, and the IDF's disable also clears
 that pin's pending status — so an edge arriving while the interrupt is disabled
@@ -146,6 +168,17 @@ a quiet-driven controller answers quiet by becoming more sensitive, or by
 resting where it is. So a window in which the rescue poll found anything the IRQ
 missed is not evidence about the band at all. It has to be withheld from the
 decision, not averaged into it.
+
+**Since 0.21.0 the trigger is a high level**, because only a level can wake the
+C3 from light sleep and the chip shares one trigger field between the interrupt
+and the wake. It also closes the mechanism above: an INT still high when the
+loop re-arms fires at once, so no edge can be missed and nothing waits for the
+poll. The poll now reads only while INT is low — high, the event is the level
+interrupt's to read, after its settle — so a `poll: found … with INT low` line
+is an event the IRQ wire never carried, not a missed edge. Two costs come with
+the level: every re-raise is now counted (§5), and a read that fails leaves INT
+high, so the loop then holds the pin until the batch closes rather than
+re-arming into it on every pass.
 
 ---
 

@@ -99,8 +99,10 @@ pub struct Effects {
     ///
     /// `mask off` is therefore the interesting direction: it restores the
     /// disturber log, which is the only evidence about whether real flashes
-    /// reach this board classified as not-lightning. It costs missed edges in a
-    /// close storm, so it is an experiment and not a resting state.
+    /// reach this board classified as not-lightning. It costs strikes in a close
+    /// storm -- a disturber can replace a pending strike's reason before it is
+    /// read -- and on the cell a wake per disturber, so it is an experiment and
+    /// not a resting state.
     pub mask_disturbers: Option<bool>,
     /// `Some(on)` when `panel sleep on|off` was used. Applied by the caller,
     /// which owns the screen the setting lives on.

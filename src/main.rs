@@ -336,10 +336,28 @@ fn main() {
     // that arrived while the interrupt was disarmed -- mid-redraw, between the
     // ISR and the loop re-arming it -- was simply gone, and with it every later
     // edge until something read the register. A level still pending when the
-    // loop re-arms fires at once. It cannot storm: esp-idf-hal's ISR disarms
-    // the pin on every fire, the loop re-arms once a pass, and every pass that
-    // was woken reads the register -- which lowers INT -- after a settle that
-    // yields to the scheduler.
+    // loop re-arms fires at once.
+    //
+    // **What keeps a level from storming**, since it is not the trigger: the
+    // ISR disarms the pin on every fire (esp-idf-hal does), the loop re-arms
+    // at most once a pass, and every woken pass blocks for at least one tick
+    // in `as3935::settle` before the read that lowers INT -- so the idle task
+    // runs even if INT rises again at once. A read that *fails* lowers
+    // nothing, and the loop then holds the pin, and its wake, until the batch
+    // closes (`listen`'s `irq_held`).
+    //
+    // **What it changes that nothing has measured: the noise count.** Under
+    // the edge, every INT that rose while the pin was disarmed -- for the rest
+    // of a pass, a 3.8 s redraw, the gap before the batch-end poll -- went
+    // uncounted, and doc/scanning.md §4-5 records the result as a count that
+    // saturated near 300/min. The tuner's thresholds (`climb`'s notches per
+    // 60/min, `golden::is_swamped` at five times that) were set against those
+    // counts. The level services every re-raise, so the same room can now read
+    // noisier, climb further in one window, and record a rung as drowned that
+    // 0.20 did not. How much is open -- the cap was never strict, and 595/min
+    // was logged under the edge -- so compare `noise/min` and the
+    // `tune: ... drowned` lines on 0.20 and 0.21 in one room before trusting
+    // where the tuner comes to rest. See doc/scanning.md §5.
     if let Err(e) = irq.set_interrupt_type(InterruptType::HighLevel) {
         println!("FATAL: GPIO21 interrupt type -- {e}");
         return;

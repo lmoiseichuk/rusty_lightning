@@ -959,29 +959,65 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 >
 > The model at the top of this section says *light-sleep with IRQ + timer wake*. Until 0.21.0 only
 > the timer half was true. The C3 build has `CONFIG_PM_SLP_DISABLE_GPIO` (the IDF selects it as part
-> of a workaround for a chip that resets when a floating input catches a static pulse in light
+> of a workaround for a chip that resets when an input-only pad catches a static pulse in light
 > sleep), which isolates every pad while the core sleeps, and no GPIO was a wake source. An event
 > that arrived asleep waited for the loop's 1 s timer — and the AS3935 holds only the latest reason,
 > so a second event in that second overwrote the first, and `millis` recorded the service time.
 >
 > Now `power::wake_on_irq` makes GPIO21 a light-sleep wake source on a high level, and exempts that
-> one pad from the isolation (`gpio_wakeup_enable` does it, via `gpio_sleep_sel_dis`); it is driven
-> by the sensor's push-pull INT, so the floating-input hazard the workaround exists for does not
-> apply. Because the C3 shares one trigger field between interrupt and wake, the interrupt became
+> one pad from the isolation (`gpio_wakeup_enable` does it, via `gpio_hal_sleep_sel_dis`). Because
+> the C3 shares one trigger field between interrupt and wake, the interrupt became
 > **level-triggered** too — which also closes the missed-edge mechanism the 200 ms rescue poll was
 > written for: an INT still high when the loop re-arms fires at once. The button stays on its edge:
 > GPIO9 carries DTR, and a level there would fire on every pass while a console holds the port.
 >
-> **The cost is one wake per event the chip raises**, each about one 10 ms tick awake (the 8 ms
-> settle before the register read rounds up to the tick):
+> **What exempting the pad gives up.** The workaround is not about floating inputs. The IDF 5.3.4
+> Kconfig help for `ESP_SLEEP_GPIO_RESET_WORKAROUND`: the C3 *"will reset at wake-up if GPIO is
+> received a small electrostatic pulse during light sleep"*, on a pad *"configured as input-mode
+> only"*, for a pulse *"higher than 6 V"*; leaving one floating is mentioned only as bad practice
+> beside it. GPIO21 is exactly that pad — input-only and now the one left un-isolated — on a lead to
+> the sensor board of a lightning detector. What the exemption relies on is that the line is
+> **driven** (the AS3935's push-pull INT, and the pad's pull-down), which makes a 6 V pulse at the
+> pad unlikely, not impossible. If one comes the chip resets on the next wake: about fifteen seconds
+> deaf in the middle of a storm, and a restart that is neither `BROWNOUT` nor `power-on` — see the
+> triage below. Taken for the wake, without which every event on the cell waits up to a second and
+> only the last survives.
+>
+> **The read waits 8–10 ms, guaranteed, since 0.21.1.** The settle was `FreeRtos::delay_ms(8)`,
+> which esp-idf-hal rounds up to one tick at `CONFIG_FREERTOS_HZ` = 100, and `vTaskDelay(1)` returns
+> at the *next* tick — anywhere from microseconds to 10 ms. So the settle had always been spread over
+> 0–10 ms, about one event in five inside the datasheet's 2 ms (*"After the signal IRQ goes high the
+> external unit should wait 2ms before reading the interrupt register"*), and the read lowers INT, so
+> an event read too early is not raised again. On USB that was always so; on the cell it hardly
+> arose until the IRQ woke the chip, because an event that came in asleep was read at the 1 s timer.
+> `as3935::settle` now yields one tick and busy-waits the rest of 8 ms on the microsecond clock: the
+> yield keeps the idle task running if INT re-fires at once, and the spin is only the shortfall.
+>
+> **What keeps the level from storming.** The ISR disarms the pin, the loop re-arms at most once a
+> pass, and every woken pass blocks a tick in the settle before the read that lowers INT. A read that
+> *fails* lowers nothing, so after one the loop holds the pin and its wake (`power::hold_irq_wake`)
+> until the batch closes, and tries once a second — an I²C fault costs a console line a second rather
+> than a board that never sleeps again.
+>
+> **The cost is one wake per event the chip raises**, each 8–10 ms awake, part of it the yielded tick
+> and the rest the spin — too short to light-sleep in between, which needs 3 idle ticks:
 >
 > | | extra wakes | time awake | current, bounded by the measured 33.5 mA awake |
 > |---|---|---|---|
-> | masked (default) | noise + strikes only: ≤ ~1/s at the default 60/min quiet threshold, usually far fewer | ≤ ~1 % | ≤ ~0.3 mA on 2.5–3.0 mA |
-> | unmasked, indoors 2026-11-01 | 6–10/s | 6–10 % | ≤ 2–3.4 mA — at worst roughly double |
+> | masked (default), tuner holding noise under its threshold | noise + strikes: ≤ ~1/s | ≤ ~1 % | ≤ ~0.3 mA on 2.5–3.0 mA |
+> | masked, but the noise is not held down — the six-hourly sweep, `sensitive on` (`nf 0` frozen), or a room still noisy at the top rung | 5–10/s, the measured 300–600 noise/min | 5–10 % | ≤ 1.7–3.4 mA — at worst roughly double |
+> | unmasked, indoors 2026-11-01 | 6–10/s | 5–10 % | ≤ 2–3.4 mA — at worst roughly double |
 >
-> Estimates from the measured rates and currents, not a measurement of this build. Unmasked was
-> already an experiment rather than a resting state; on the cell this is part of its price.
+> **The masked row is conditional, and was written as though it were not.** The 60/min quiet threshold
+> is where the tuner decides to climb; it does not limit `INT_NH`, which the datasheet says *"persists
+> as long as the noise level is above the threshold"*. Estimates from the measured rates and currents,
+> not a measurement of this build. Unmasked was already an experiment rather than a resting state; on
+> the cell this is part of its price.
+>
+> **Open: the level changed what the noise count measures.** Re-raises the edge used to lose are now
+> serviced, so the same room can count noisier than it did on 0.20 — and the tuner's thresholds were
+> set against 0.20's counts. Not measured, not compensated; doc/scanning.md §5 has the argument and
+> the comparison to make.
 
 > #### ⚠⚠ AS BUILT, 2026-11-01: unplugging USB can reset the board, and the cause is the power path
 >
@@ -1021,8 +1057,11 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 > That matters because the reset being chased is the one nobody sees: its banner goes to the port
 > that was just unplugged, and plugging back in to look resets the chip again, as `USB`. So after
 > the next unplug: **`BROWNOUT`** is the rail sagging past ~2.51 V during the switchover;
-> **`power-on`** is it collapsing outright; **anything else** — a watchdog, a panic — is firmware,
-> and this callout is wrong.
+> **`power-on`** is it collapsing outright; **a watchdog or a panic** is firmware, and this callout is
+> wrong. One more source of a restart that is neither: since 0.21.0 GPIO21 is the one input pad left
+> out of the light-sleep isolation, and the IDF documents a C3 that resets on wake when such a pad
+> catches an electrostatic pulse over 6 V (above). A restart that names neither the supply nor a
+> firmware fault, during a storm, is that before it is a mystery.
 >
 > If it is the switchover, the lever is hardware: hold-up capacitance on the 5 V node the ETA9740 and
 > the XIAO share. Untested.

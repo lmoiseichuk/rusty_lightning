@@ -130,9 +130,10 @@ pub const LCO_DIVISOR: u32 = 16;
 
 /// Wait between the IRQ edge and reading the reason register.
 ///
-/// **Datasheet page 22 says 2 ms minimum, and it is not optional.** Read sooner
-/// and the reason nibble reads as 0, which decodes as `Unknown` and loses the
-/// event entirely.
+/// **The datasheet says 2 ms minimum, and it is not optional** -- v1-04,
+/// "Interrupt Management", page 34; the reference's comment below cites page
+/// 22, presumably of an earlier revision. Read sooner and the reason nibble
+/// reads as 0, which decodes as `Unknown` and loses the event entirely.
 ///
 /// ## Why 3, and the 30 that was here before it
 ///
@@ -167,12 +168,71 @@ pub const LCO_DIVISOR: u32 = 16;
 /// strike as a disturber — was plausible, never tested against lightning, and
 /// rested on a quotation that was not there.
 ///
-/// What is real is the datasheet's **2 ms minimum** (page 22) for the interrupt
+/// What is real is the datasheet's **2 ms minimum** (above) for the interrupt
 /// bits, which 3 ms clears with margin. If a longer settle is ever wanted
 /// again, it needs evidence from a storm rather than from a misread reference:
 /// §9 item 6 is still open precisely because nothing below
 /// [`Interrupt::Lightning`] has been confirmed by one.
+///
+/// **A constant is not a wait.** Until 0.21.1 this was handed to
+/// `FreeRtos::delay_ms`, which never waited 8 ms at all -- see [`settle`],
+/// which is now the only thing that honours it.
 pub const IRQ_SETTLE_MS: u32 = 8;
+
+/// Wait at least [`IRQ_SETTLE_MS`] before the reason register is read, yielding
+/// to the scheduler on the way.
+///
+/// ## What `FreeRtos::delay_ms(8)` actually did
+///
+/// esp-idf-hal turns milliseconds into scheduler ticks, rounding up, and this
+/// build ticks at `CONFIG_FREERTOS_HZ` = 100 -- so 8 ms became **one tick**.
+/// `vTaskDelay(1)` does not wait a tick: it returns at the *next* tick
+/// interrupt, which may be 10 ms away or a few microseconds. The settle was
+/// spread evenly over 0-10 ms, and about one event in five was read inside the
+/// datasheet's 2 ms -- v1-04, "Interrupt Management": *"After the signal IRQ
+/// goes high the external unit should wait 2ms before reading the interrupt
+/// register."* Read that early, the reason nibble can still be 0, or distance
+/// and energy can be the previous event's; and the read itself lowers INT
+/// (same section), so nothing raises it again. The event is simply gone,
+/// counted as `Unknown`.
+///
+/// That was true on USB all along. On the cell it hardly arose, because an
+/// event that came in while the chip light-slept was read only at the next
+/// 1 s timer wake, long after INT rose. Since 0.21.0 the IRQ wakes the chip,
+/// so every event on the cell is read straight after its interrupt -- the
+/// path this function now guards.
+///
+/// ## The shape, and why both halves
+///
+/// **One tick first, always.** The main task has to block, however briefly, so
+/// the idle task runs: a level interrupt that re-fires the moment it is
+/// re-armed would otherwise have this task spinning from one pass to the next
+/// until the task watchdog reset the board. A pure busy-wait would be exact and
+/// would lose that.
+///
+/// **Then a busy-wait for whatever of the 8 ms the tick did not cover**, timed
+/// on the microsecond clock rather than assumed. So the read lands 8-10 ms
+/// after the task woke -- never under the reference's 8, at most one tick over
+/// -- and the spin is only ever the shortfall: about 3 ms on average, none when
+/// the tick itself took 8 ms or more. Timed from here rather than from the
+/// interrupt, which only makes it longer, never shorter.
+///
+/// Rounding the tick count up by one instead (`vTaskDelay(2)`) would also
+/// guarantee the minimum, at 10-20 ms -- twice as long awake on every event
+/// on the cell, and further from the 8 ms that has heard lightning here.
+pub fn settle() {
+    let wanted_us = i64::from(IRQ_SETTLE_MS) * 1000;
+    // SAFETY: the IDF's monotonic microsecond clock; a read with no side
+    // effects. `vTaskDelay` is a plain FreeRTOS call from task context.
+    let started_us = unsafe { esp_idf_hal::sys::esp_timer_get_time() };
+    unsafe { esp_idf_hal::sys::vTaskDelay(1) };
+    let elapsed_us = unsafe { esp_idf_hal::sys::esp_timer_get_time() } - started_us;
+    if elapsed_us < wanted_us {
+        // `Ets` is the ROM's busy-wait. Never more than 8 ms here, so it cannot
+        // starve anything: the tick above already let the idle task in.
+        esp_idf_hal::delay::Ets::delay_us((wanted_us - elapsed_us) as u32);
+    }
+}
 
 /// Bit 7 of `0x3A`/`0x3B`: the oscillator calibrated. Datasheet v1-04, the
 /// register table and "Clock Generation".
@@ -578,10 +638,10 @@ impl As3935 {
     /// Why the IRQ fired. **Reading this clears it**, which is what re-arms the
     /// pin — so it must be called exactly once per edge.
     ///
-    /// The caller is responsible for having waited [`IRQ_SETTLE_MS`] first.
-    /// That wait is not done here because this is called from the main task,
-    /// which may have other things to do in those 3 ms, and burying a blocking
-    /// delay inside a register read is how it ends up being paid twice.
+    /// The caller is responsible for having waited first -- [`settle`] -- when
+    /// an interrupt announced the event. That wait is not done here because the
+    /// poll reads this register with no interrupt to settle from, and burying a
+    /// blocking delay inside a register read is how it ends up being paid twice.
     pub fn interrupt_reason(&self, i2c: &mut I2cDriver<'_>) -> Result<Interrupt, EspError> {
         let reason = self.read(i2c, REG_INTERRUPT)? & MASK_INTERRUPT;
         Ok(match reason {
