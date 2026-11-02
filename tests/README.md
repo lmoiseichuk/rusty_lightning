@@ -27,12 +27,13 @@ cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civ
 | `civil.rs` | the calendar: leap years, the century rules, month lengths, and that the time of day never leaks into the date |
 | `csv.rs` | reading the log back: the header decides the columns, so a new column cannot silently shift the old ones |
 | `defence.rs` | §4.2's noise-rejection ladder: rung boundaries, monotonicity, saturation |
+| `golden.rs` | the known-good record: packing, the fall-back rule, the learned floor, and what a detection may teach — `overhead` never, a merged flash by its recorded distance |
 | `history.rs` | §4.3's strike rings: the score formula against the spec's observed figures, bucketing, gap clearing, and that "overhead"/"out of range" are counted but not averaged |
 | `merger.rs` | folding the strokes of one flash into a single strike, and what a merged flash reports |
 | `pace.rs` | walks over the whole log: a one-tick block every tenth of the task watchdog's timeout, both read from `sdkconfig.defaults`, and the dump that reset the board walked again at its measured rate |
 | `press.rs` | the button gesture boundaries: too short, gain flip, portal, stuck |
 | `uptime.rs` | interval arithmetic across the 49.7-day millisecond wrap |
-| `verdict.rs` | the noise verdict: what counts as quiet, and that only noise feeds it |
+| `verdict.rs` | the noise verdict: what counts as quiet, that only noise feeds it, and that an `overhead` strike never reaches a decision |
 
 ## These compile the real modules, not copies of them
 

@@ -16,7 +16,8 @@ use esp_idf_hal::i2c::I2cDriver;
 use esp_idf_hal::task::notification::Notification;
 
 use crate::as3935::{As3935, Location};
-use crate::session::{collect, report, toggle_location, Batch, Drawn, StormWatch, Totals};
+use crate::session::{collect, report, toggle_location, Drawn, StormWatch, Totals};
+use crate::verdict::Batch;
 use crate::{
     battery, clock, console, defence, display, effects, history, log, power, screen,
     session, system, tuning,
@@ -458,6 +459,11 @@ pub fn listen(
         // **A strike earns the screen a short floor**, so the glass is not half
         // a minute behind the weather. Set before `report` consumes the batch;
         // cleared by the redraw that shows it.
+        //
+        // **Every strike, `overhead` included**, and so is the awake hold
+        // below: these are about showing the reader what the chip reported and
+        // keeping the console up while it reports it, not about what the
+        // device learns. The tuner reads `Batch::confirmed` instead.
         if batch.strikes > 0 {
             screen.strike_seen = true;
             last_strike_s = Some(now_ms() / 1000);
@@ -799,6 +805,12 @@ pub fn listen(
             // runs on command and takes a quarter of an hour, so the effect is
             // to notice a storm ending slightly early, once, while someone is
             // watching.
+            //
+            // **Fed every flash, `overhead` included, on purpose.** What it
+            // clears is the chip's own distance statistics, which hold those
+            // detections whatever the device makes of them; and what it gates
+            // is the six-hourly sweep, where counting a doubtful strike as
+            // weather errs toward not mis-setting the receiver.
             storm_watch.step(sensor, i2c, totals.strikes);
             tuning.step(sensor, i2c, &mut totals, now_ms());
 

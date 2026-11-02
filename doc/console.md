@@ -370,7 +370,7 @@ the asymmetry is deliberate:
 |---|---|
 | `<= threshold` | relax **one** notch — refunding `SREJ` first, `NF_LEV` last |
 | `> threshold` | tighten `rate / threshold` notches — spending `NF_LEV` first, `SREJ` last |
-| contains a strike | **hold** — never escalate |
+| contains a strike with a distance | **hold** — never escalate |
 
 Quick to defend, slow to relax. The proportional step is what lets it answer a
 real step change: a microwave door swing here took the band from 6/min to
@@ -384,6 +384,17 @@ that arrive as disturbers, so a close storm looks like a noisy band to a counter
 that cannot tell them apart — and climbing on that would deafen the device at
 the one moment it exists for. You will see `tune: holding at ...` on the console
 when this fires.
+
+**An `overhead` strike does not hold, since 0.22.0** — nor keep a dip open, nor
+reset the twenty minutes the rescue waits out, nor count toward the golden
+combination below. Every `overhead` this device could check was man-made: 503
+from an electric hammer at `srej 0`, 9,542 round the clock in September, and on
+2026-11-01 three that matched electrical events — a USB plug-in to the second,
+the end of a short run on the cell, and one mid-run — and no thunder.
+They are still logged, charted and printed — the console marks each one
+`[unconfirmed -- not learned from]`, and a window that had some says
+`tune: N unconfirmed strike(s) this window`. A strike whose distance could not
+be read counts the same way.
 
 **It has now been watched doing its job.** Through the storm of 2026-08-12 the
 band ran at 208–299/min against a 120/min threshold — enough to climb one to two
@@ -466,8 +477,16 @@ could collapse into a single record hours long.
 Two things it deliberately does not do. It does not fold `overhead` into the
 distance average — overhead is not a kilometre figure, and averaging it in as 1
 is what once made a storm read as permanently overhead. And it does not change
-what §4.2 sees: the auto-tune still counts every stroke, because that is its
-evidence that lightning is present and the strike-hold rule wants all of it.
+what §4.2 sees: the auto-tune still counts every stroke that carried a distance,
+because that is its evidence that lightning is present and the strike-hold rule
+wants all of it.
+
+**A merged flash teaches the device what its recorded distance says.** One that
+mixed an `overhead` stroke with a kilometre stroke is recorded at kilometres and
+counts, as its kilometre stroke would have alone under `merge 0`. One whose only
+readings were `overhead` — with or without `far` — is recorded as `overhead`
+and does not. So the log's `distance_km` column is an exact record of which
+rows taught the device: `overhead` did not, everything else did.
 
 **`defence <raw>` skips the sweep** when you already know the answer for a room.
 `0` is fully receptive; higher is deafer. A device that has never calibrated
@@ -636,13 +655,23 @@ a setting can hear lightning** — at `srej 0` a single detection may be an
 electric hammer, and this device has logged 503 of those in a morning. Two is
 cheap in any real storm and discards the isolated false positive.
 
+**Only a strike with a distance counts, since 0.22.0.** `overhead` is still
+logged and shown, and writes nothing here: in September a stream of them, one
+every 7–10 s round the clock, made this record read "840 strikes heard here",
+and on 2026-11-01 six more lifted that afternoon's record to fourteen. A record
+written before 0.22.0 cannot be split into the strikes that carried a distance
+and the ones that did not, so 0.22.0 keeps its own record under new keys and
+sets the old one aside: `golden` still prints it, marked *set aside*, nothing
+acts on it, and `golden clear` removes both. The first boot of 0.22.0 says so
+when the old record is the only one there is.
+
 The record can only pull the point *toward* something already proved, never past
 it. A tuner that has found something more open keeps it. And a record made at
 one AFE gain is never applied at the other: a noise floor learned indoors
 describes a front end seeing roughly four times what the outdoor one sees, and
 carrying it across is exactly how a good point becomes a deaf one.
 
-`golden clear` forgets it; the next strike starts a new record.
+`golden clear` forgets it; the next strike with a distance starts a new record.
 
 
 ## Putting history back

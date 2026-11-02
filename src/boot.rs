@@ -175,6 +175,20 @@ pub fn configure(
     // does, and carrying it across is how a good point becomes a deaf one.
     let here_outdoor = matches!(settings::location(), Some(crate::as3935::Location::Outdoor));
     let here = settings::golden().filter(|record| record.combo.outdoor == here_outdoor);
+
+    // **A record from before 0.22.0 is not one of these.** It was counted with
+    // `overhead` as lightning, so it is read only for display -- see
+    // `settings::legacy_golden`. Said at boot when it is the only record there
+    // is, because that is the boot whose start point it would once have set.
+    if settings::golden().is_none() {
+        if let Some(old) = settings::legacy_golden() {
+            println!(
+                "gold: the record from before 0.22.0 (nf {} wd {} sr {}, {} strike(s)) counted `overhead`",
+                old.combo.nf, old.combo.wdth, old.combo.srej, old.strikes
+            );
+            println!("gold:   as lightning -- set aside; the next strike with a distance starts a new one");
+        }
+    }
     let known_good = here.filter(|record| record.strikes >= crate::golden::TRUSTED_STRIKES);
 
     // **An untrusted record still outranks a point that is merely more open.**

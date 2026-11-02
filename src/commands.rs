@@ -464,15 +464,18 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         Command::Golden(clear) => {
             if clear {
                 match crate::settings::clear_golden() {
-                    Ok(()) => println!("gold: forgotten -- the next strike starts a new record"),
+                    Ok(()) => println!(
+                        "gold: forgotten -- the next strike with a distance starts a new record"
+                    ),
                     Err(e) => println!("gold: could not clear -- {e}"),
                 }
                 return effects;
             }
             match crate::settings::golden() {
                 None => {
-                    println!("gold: nothing recorded -- this device has not heard a strike yet,");
-                    println!("gold: or the record was cleared. The first one writes it.");
+                    println!("gold: nothing recorded -- this device has not heard a strike with a");
+                    println!("gold: distance yet, or the record was cleared. The first one writes it;");
+                    println!("gold: `overhead` never does -- see `golden::is_evidence`.");
                 }
                 Some(record) => {
                     println!(
@@ -496,6 +499,22 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                         );
                     }
                 }
+            }
+            // **What a firmware before 0.22.0 wrote, shown and not used.** It
+            // counted `overhead` as lightning, so its count cannot say how much
+            // of it was evidence; a person who remembers it should be able to
+            // see where it went rather than wonder why the trust is gone.
+            if let Some(old) = crate::settings::legacy_golden() {
+                println!(
+                    "gold: set aside -- nf {} wd {} sr {} ({}), {} strike(s), from before 0.22.0",
+                    old.combo.nf,
+                    old.combo.wdth,
+                    old.combo.srej,
+                    if old.combo.outdoor { "outdoor" } else { "indoor" },
+                    old.strikes,
+                );
+                println!("gold:   it counted `overhead` as lightning, so nothing acts on it;");
+                println!("gold:   `golden clear` removes it with the current record");
             }
         }
         Command::AccessPoint(request) => {

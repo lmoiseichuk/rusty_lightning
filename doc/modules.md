@@ -84,7 +84,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 896 |
+| `listen` | The event loop. | -- | 908 |
 
 ### The sensor and what it hears
 
@@ -92,11 +92,11 @@ this table is generated from it.
 |---|---|---|---|
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 678 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 495 |
-| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1106 |
-| `strike` | What a strike is, with no hardware attached. | pure, `tests/history.rs`, `tests/merger.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1052 |
-| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 70 |
+| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs` | 213 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1122 |
+| `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1078 |
+| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 165 |
 
 ### Keeping it
 
@@ -108,7 +108,7 @@ this table is generated from it.
 | `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
 | `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 676 |
-| `settings` | What survives a power cut, and nothing else. | -- | 418 |
+| `settings` | What survives a power cut, and nothing else. | -- | 451 |
 | `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 
 ### The glass
@@ -123,7 +123,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 619 |
+| `commands` | What the console commands actually do (§5). | -- | 638 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 471 |
@@ -137,13 +137,13 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 423 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 437 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
 | `power` | Clock and sleep policy (§7). | -- | 223 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
-| `uptime` | Comparing times on a counter that wraps. | pure, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
+| `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
 
 **Unclassified** (add them to `ROLES` in `tools/modules.py`): `golden`
 
@@ -167,6 +167,7 @@ program' is not information.
 | `credentials` | `storage` |
 | `display` | `uptime` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
+| `golden` | `strike` |
 | `history` | `strike` |
 | `log` | `as3935` `budget` `clock` `csv` `history` `pace` `settings` |
 | `merger` | `strike` `uptime` |
@@ -175,15 +176,16 @@ program' is not information.
 | `portal` | `clock` `credentials` `history` `log` `pace` `session` `strike` `system` `tuning` `uptime` `webui` |
 | `power` | `policy` `storage` |
 | `screen` | `as3935` `battery` `clock` `defence` `display` `history` `power` `session` `settings` `system` `ui` `uptime` |
-| `session` | `as3935` `clock` `defence` `golden` `history` `log` `merger` `settings` `uptime` |
+| `session` | `as3935` `clock` `defence` `golden` `history` `log` `merger` `settings` `uptime` `verdict` |
 | `settings` | `as3935` `battery` `defence` `golden` `storage` |
 | `system` | `settings` |
 | `tuning` | `as3935` `defence` `golden` `listen` `session` `settings` `uptime` `verdict` |
 | `ui` | `as3935` `battery` `clock` `display` `history` `session` `system` |
+| `verdict` | `golden` `strike` |
 | `webui` | `portal` `query` |
 
 **Depends on nothing in this crate** — the bottom of the stack, and
-where a change is cheapest: `budget`, `civil`, `csv`, `defence`, `golden`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `uptime`, `verdict`.
+where a change is cheapest: `budget`, `civil`, `csv`, `defence`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `uptime`.
 <!-- end generated -->
 
 ## How a strike travels

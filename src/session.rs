@@ -9,42 +9,24 @@ use esp_idf_hal::i2c::I2cDriver;
 
 use crate::merger::{Merged, Merger};
 use crate::as3935::{As3935, Distance, Interrupt, Location, Strike};
+// `Batch` lives in `verdict` since 0.22.0, beside the window it feeds, so the
+// split between a lightning interrupt and a strike that counts is host-tested.
+use crate::verdict::Batch;
 
 use crate::{as3935, clock, defence, history, log, settings};
-
-/// What one batch window heard.
-#[derive(Default)]
-pub struct Batch {
-    pub strikes: u32,
-    pub disturbers: u32,
-    pub noise: u32,
-    pub unknown: u32,
-}
-
-impl Batch {
-    pub fn heard_interference(&self) -> bool {
-        self.disturbers > 0 || self.noise > 0
-    }
-
-    /// **Uncalled since the ladder moved to a once-a-minute decision.** It
-    /// answered "did this one-second batch hear nothing", which was the trigger
-    /// for the old per-batch decay; the minute window asks the same question of
-    /// a span long enough for the answer to mean something. Kept as the natural
-    /// complement to `heard_interference`.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.strikes == 0 && !self.heard_interference() && self.unknown == 0
-    }
-}
 
 
 /// Everything counted since boot.
 #[derive(Default)]
 pub struct Totals {
     /// **Flashes, not strokes** — one per merge window (§4.3). `Batch::strikes`
-    /// still counts every stroke, deliberately: it is the tuner's evidence that
-    /// lightning is present, and more of it is better, where this is the number
-    /// a person reads.
+    /// still counts every stroke, deliberately: more of it is better for the
+    /// console line that says the chip classified something as lightning, where
+    /// this is the number a person reads. The tuner reads neither -- it reads
+    /// `Batch::confirmed`, the strokes that are evidence (`golden::is_evidence`).
+    ///
+    /// **Every flash, `overhead` included.** What a person reads is what the
+    /// chip reported; what the device learns from is a separate question.
     pub strikes: u32,
     pub disturbers: u32,
     pub last_strike: Option<(Distance, u32, Option<u64>)>,
@@ -262,21 +244,31 @@ fn read_and_handle(
 
     match reason {
         Interrupt::Lightning => {
-            batch.strikes += 1;
             // Strikes are reported individually and immediately. They are the
             // point of the device, they are rare, and a summary line would hide
             // the distance and energy that §4.3 needs.
+            //
+            // **Counted in both arms, and split by the distance.** Every
+            // lightning interrupt is a strike to the console; only one with a
+            // distance that is evidence reaches the tuner -- see
+            // `verdict::Batch::lightning`.
             match sensor.strike(i2c) {
-                Ok(strike) => record_strike(
-                    totals,
-                    history,
-                    strike_log.as_deref_mut(),
-                    &strike,
-                    clock::now(),
-                    minute,
-                    false,
-                ),
-                Err(e) => println!("STRIKE  -- but the detail read failed: {e}"),
+                Ok(strike) => {
+                    batch.lightning(Some(strike.distance));
+                    record_strike(
+                        totals,
+                        history,
+                        strike_log.as_deref_mut(),
+                        &strike,
+                        clock::now(),
+                        minute,
+                        false,
+                    )
+                }
+                Err(e) => {
+                    batch.lightning(None);
+                    println!("STRIKE  -- but the detail read failed: {e}")
+                }
             }
         }
         Interrupt::Disturber => {
@@ -535,7 +527,16 @@ pub fn commit_merged(
     // nothing about the front end -- it never went through it -- and letting it
     // write the record would let a bench test pin the device to whatever it
     // happened to be set to.
-    if !merged.simulated {
+    //
+    // **And so, since 0.22.0, is `overhead`.** Every `overhead` this device
+    // could check against something else was man-made: the hammer at `srej 0`,
+    // September's 9,542 round the clock, and the November ones that landed on
+    // a USB plug-in. They fed this record anyway -- "840 strikes heard here" --
+    // and the record is what boot, the rescue and the floor trust. A merged
+    // flash is judged on the distance it is recorded with, which settles the
+    // mixed one; see `golden::may_record`.
+    let learned = crate::golden::may_record(merged.simulated, strike.distance);
+    if learned {
         remember_working_point();
     }
 
@@ -595,6 +596,14 @@ pub fn commit_merged(
         1 => String::new(),
         n => format!("  [{n} strokes]"),
     };
+    // Marked on the console, where the reader cannot see the rule; the log
+    // needs no mark, because its `distance_km` column already says `overhead`
+    // for exactly the rows that taught nothing.
+    let marker = match (merged.simulated, learned) {
+        (true, _) => "  [SIMULATED]",
+        (false, false) => "  [unconfirmed -- not learned from]",
+        (false, true) => "",
+    };
     println!(
         "STRIKE  {}  {:?}  energy {} (intensity {}.{:03}){}{}",
         when,
@@ -603,7 +612,7 @@ pub fn commit_merged(
         strike.intensity_milli() / 1000,
         strike.intensity_milli() % 1000,
         strokes,
-        if merged.simulated { "  [SIMULATED]" } else { "" }
+        marker
     );
 }
 
@@ -625,9 +634,16 @@ pub fn report(batch: &Batch) {
     if batch.strikes == 0 && !batch.heard_interference() && batch.unknown == 0 {
         return;
     }
+    // The unconfirmed count only when there is one, and at the end, so a batch
+    // line without one reads exactly as it did before 0.22.0 and the fields a
+    // reader already counts by position stay where they were.
+    let unconfirmed = match batch.unconfirmed {
+        0 => String::new(),
+        n => format!(", {n} of the strikes unconfirmed"),
+    };
     println!(
-        "batch: {} strike(s), {} disturber(s), {} noise, {} unknown",
-        batch.strikes, batch.disturbers, batch.noise, batch.unknown
+        "batch: {} strike(s), {} disturber(s), {} noise, {} unknown{}",
+        batch.strikes, batch.disturbers, batch.noise, batch.unknown, unconfirmed
     );
 }
 

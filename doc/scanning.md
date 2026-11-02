@@ -39,6 +39,15 @@ succeed: the tuner climbs to 7, stays "noisy", burns the ladder's whole range
 and hands over to the stuck detector. Only `noise` reaches the quiet verdict
 now — see `src/verdict.rs`, which exists so that claim is host-testable.
 
+**The bottom row has a sub-row, since 0.22.0.** A lightning interrupt whose
+distance reads `overhead` licenses nothing either: not the hold, not a dip that
+stays open, not the rescue's silence, not the golden record. Every one this
+device could check against something else was man-made — the hammer at
+`srej 0`, September's 9,542 round the clock, November's on a USB plug-in — and
+the nearest bin is where the estimator files a lone impulse it has no storm
+statistics for. `verdict::Batch` splits the two where the interrupt is read, so
+that one is host-tested too.
+
 ---
 
 ## 2. The tuning space is one register, and that is a safety property

@@ -35,8 +35,22 @@ const KEY_LOGGED: &[u8] = b"log_recs\0";
 const KEY_MERGE: &[u8] = b"merge_ms\0";
 const KEY_SREJ: &[u8] = b"srej\0";
 const KEY_WDTH: &[u8] = b"wdth\0";
-const KEY_GOLDEN: &[u8] = b"golden\0";
-const KEY_GOLDEN_N: &[u8] = b"golden_n\0";
+/// The known-good record, **renamed in 0.22.0 for the reason `defence3` was.**
+///
+/// The record under the old keys was counted by a rule that took `overhead` as
+/// lightning -- see `golden::is_evidence` -- and nothing stored beside it says
+/// how many of its strikes carried a distance. September's said "840 strikes
+/// heard here" with almost none that did. Honouring it would hand boot, the
+/// rescue and the floor a trust the new rule never granted; a new key makes
+/// every device start a record afresh, at the cost of two located strikes.
+///
+/// **The old keys are left where they are**, read only by [`legacy_golden`]:
+/// a person can still see what the record said, and a board taken back to
+/// 0.21 still finds its own.
+const KEY_GOLDEN: &[u8] = b"golden2\0";
+const KEY_GOLDEN_N: &[u8] = b"golden2_n\0";
+const KEY_GOLDEN_LEGACY: &[u8] = b"golden\0";
+const KEY_GOLDEN_LEGACY_N: &[u8] = b"golden_n\0";
 /// The last four reset reasons, one byte each, newest in the low byte.
 const KEY_RESTARTS: &[u8] = b"restarts\0";
 const KEY_MASK: &[u8] = b"mask\0";
@@ -328,13 +342,32 @@ pub fn store_golden(record: crate::golden::Golden) -> Result<(), EspError> {
     nvs.commit()
 }
 
-/// Forget it, for `golden clear`.
+/// The record a firmware before 0.22.0 kept, if it is still there.
+///
+/// **For display only.** Nothing that decides anything reads this -- not boot,
+/// not the rescue, not the floor -- because it was counted with `overhead` as
+/// lightning and its count cannot be split afterwards. `golden` shows it so the
+/// person who remembers "trusted, 14 strikes" can see where it went.
+pub fn legacy_golden() -> Option<crate::golden::Golden> {
+    let nvs = Namespace::open(NAMESPACE).ok()?;
+    let packed = nvs.get_u32(KEY_GOLDEN_LEGACY)?;
+    let strikes = nvs.get_u32(KEY_GOLDEN_LEGACY_N).unwrap_or(1);
+    Some(crate::golden::Golden {
+        combo: crate::golden::Combo::unpack(packed),
+        strikes,
+    })
+}
+
+/// Forget it, for `golden clear` -- the record before 0.22.0 as well, because
+/// "forget" from a person means both.
 pub fn clear_golden() -> Result<(), EspError> {
     let nvs = Namespace::open(NAMESPACE)?;
     // Absent rather than zeroed: a zeroed record is a real combination -- the
     // most open one -- and would read as "nf 0 has heard lightning here".
     let _ = nvs.erase(KEY_GOLDEN);
     let _ = nvs.erase(KEY_GOLDEN_N);
+    let _ = nvs.erase(KEY_GOLDEN_LEGACY);
+    let _ = nvs.erase(KEY_GOLDEN_LEGACY_N);
     nvs.commit()
 }
 

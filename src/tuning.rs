@@ -20,8 +20,8 @@ use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::i2c::I2cDriver;
 
 use crate::as3935::As3935;
-use crate::session::{Batch, Totals};
-use crate::verdict::Window;
+use crate::session::Totals;
+use crate::verdict::{Batch, Window};
 use crate::{defence, session, settings};
 
 /// The one measurement window (§4.2).
@@ -84,8 +84,9 @@ pub struct Tuning {
     /// window is — which is exactly how a 60 s sweep came to settle deafer than
     /// a 10 s one in the same room. See [`session::QUIET_PER_MIN`].
     quiet_per_min: u32,
-    /// When lightning was last heard. Feeds the fall-back to the known-good
-    /// combination — see [`crate::golden`].
+    /// When lightning that is evidence was last heard -- `overhead` does not
+    /// move it. Feeds the fall-back to the known-good combination — see
+    /// [`crate::golden`].
     last_strike_ms: Option<u32>,
     /// The lowest rung the walk may relax to, learned from drowning at one.
     ///
@@ -227,9 +228,15 @@ impl Tuning {
     ///
     /// Disturbers are still counted, and still reported. They are simply not
     /// evidence about the noise floor.
+    ///
+    /// **Nor is every strike evidence about the weather.** Only the confirmed
+    /// ones reach the window's strike count and the silence clock the rescue
+    /// waits on -- an `overhead` every 7-10 s, as September produced round the
+    /// clock, used to hold the walk, keep every dip open and reset the rescue's
+    /// twenty minutes for ever. See `golden::is_evidence`.
     pub fn observe(&mut self, batch: &Batch) {
-        self.window.fold(batch.noise, batch.disturbers, batch.strikes);
-        if batch.strikes > 0 {
+        self.window.fold_batch(batch);
+        if batch.confirmed() > 0 {
             self.last_strike_ms = Some(crate::now_ms());
         }
     }
@@ -456,7 +463,14 @@ impl Tuning {
             // allowed was the quiet strike window relaxing, which changes the
             // instrument in the middle of the storm it is supposed to be
             // measuring.
-            _ if self.window.strikes > 0 => {
+            //
+            // **A strike that is evidence, since 0.22.0.** An `overhead`
+            // detection does not hold: September's stream of them, one every
+            // 7-10 s round the clock, would otherwise have held the walk where
+            // it stood for nine days on the word of something man-made. The
+            // window is judged on its noise instead, as any window without
+            // lightning is.
+            _ if self.window.heard_lightning() => {
                 self.hold(totals);
                 None
             }
@@ -464,7 +478,16 @@ impl Tuning {
             _ => self.relax(),
         };
 
-        let heard_strikes = self.window.strikes > 0;
+        // Said once a window, and only when there were any: the reader should
+        // be able to see that the walk ignored them on purpose.
+        if self.window.unconfirmed > 0 && !sweeping {
+            println!(
+                "tune: {} unconfirmed strike(s) this window (overhead, or unreadable) -- not lightning to the tuner",
+                self.window.unconfirmed
+            );
+        }
+
+        let heard_strikes = self.window.heard_lightning();
 
         // Stuck detection, counted after the walk has had its turn so the span
         // sees where the point actually ended up. A sweep or a dip owns the
@@ -851,6 +874,9 @@ impl Tuning {
     /// dip is a question rather than a decision.
     fn judge_dip(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>) -> Option<&'static str> {
         let restore = self.dip_restore.take();
+        // Confirmed strikes only -- `Window::strikes` holds nothing else. A dip
+        // that stayed open for an `overhead` would sit wide open on the word of
+        // the impulse the dip is most likely to admit.
         if self.window.strikes >= DIP_STRIKES_TO_BELIEVE {
             println!(
                 "dip:  {} strike(s) while open -- weather, staying at {}/{}",

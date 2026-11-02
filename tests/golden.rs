@@ -16,9 +16,20 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+// `golden` names `crate::strike` for the distance a detection carried, and the
+// mixed-flash checks below run strokes through the real merger, which reaches
+// for `crate::uptime`. All three at the root, where those paths resolve.
+#[path = "../src/strike.rs"]
+mod strike;
+#[path = "../src/uptime.rs"]
+mod uptime;
+#[path = "../src/merger.rs"]
+mod merger;
 #[path = "../src/golden.rs"]
 mod golden;
 use golden::*;
+use merger::Merger;
+use strike::{Distance, Strike};
 
 static PASS: AtomicU32 = AtomicU32::new(0);
 static FAIL: AtomicU32 = AtomicU32::new(0);
@@ -229,6 +240,91 @@ fn main() {
     // window, until the device was deaf -- so the argument is noise alone.
     check("the working rung is not drowning", !is_swamped(0, 60));
     check("...however many disturbers accompany it", !is_swamped(0, 60));
+
+    println!("\n  what a detection may teach");
+    // **The regression this section exists for.** Every `overhead` this device
+    // could check was man-made -- the hammer at srej 0, September's 9,542 round
+    // the clock, November's on a USB plug-in -- and they fed the record.
+    check("overhead is not evidence", !is_evidence(Distance::Overhead));
+    check("a kilometre reading is", is_evidence(Distance::Km(6)));
+    // The nearest kilometre bin is 5, one above the sentinel: the line is drawn
+    // at the sentinel, not at "close".
+    check("so is the nearest kilometre bin", is_evidence(Distance::Km(5)));
+    check("out of range is an answer about distance, so it is", is_evidence(Distance::OutOfRange));
+    check("a real kilometre flash may be recorded", may_record(false, Distance::Km(10)));
+    check("a real overhead flash may not", !may_record(false, Distance::Overhead));
+    check("a simulated flash never may", !may_record(true, Distance::Km(10)));
+    check("...overhead or not", !may_record(true, Distance::Overhead));
+
+    // Strokes through the real merger, at its default one-second window: the
+    // flash is judged on the distance it is recorded with.
+    let stroke = |distance| Strike { distance, energy_raw: 100_000 };
+    let flash = |strokes: &[Distance]| {
+        let mut merging = Merger::default();
+        for (index, distance) in strokes.iter().enumerate() {
+            let _ = merging.observe(&stroke(*distance), Some(1), 1, false, index as u32 * 100);
+        }
+        merging.take_due(10_000).expect("the window closed")
+    };
+    let mixed = flash(&[Distance::Overhead, Distance::Km(8)]);
+    check(
+        "overhead then kilometres in one flash is recorded at kilometres",
+        mixed.strike.distance == Distance::Km(8) && mixed.strokes == 2,
+    );
+    check("...and counts, as its kilometre stroke would alone", may_record(mixed.simulated, mixed.strike.distance));
+    let reversed = flash(&[Distance::Km(8), Distance::Overhead]);
+    check("in either order", may_record(reversed.simulated, reversed.strike.distance));
+    let contradictory = flash(&[Distance::Overhead, Distance::OutOfRange]);
+    check(
+        "overhead with far is recorded as overhead",
+        contradictory.strike.distance == Distance::Overhead,
+    );
+    check(
+        "...and does not count, so the log's distance column says what taught the device",
+        !may_record(contradictory.simulated, contradictory.strike.distance),
+    );
+    let only = flash(&[Distance::Overhead, Distance::Overhead, Distance::Overhead]);
+    check("three overhead strokes are one flash that teaches nothing", !may_record(only.simulated, only.strike.distance));
+
+    // The record as `session::remember_working_point` builds it: only the
+    // flashes `may_record` lets through reach `observe`.
+    let fold = |record: Option<Golden>, distance: Distance, at: Combo| match may_record(false, distance) {
+        true => Some(observe(record, at)),
+        false => record,
+    };
+    let room = combo(3, 0, 1, false);
+    let mut september = None;
+    for _ in 0..840 {
+        september = fold(september, Distance::Overhead, room);
+    }
+    check("840 overhead strikes write no record at all", september.is_none());
+    check("...so nothing can fall back to one", fall_back_to(combo(7, 0, 1, false), september, 600).is_none());
+
+    // 2026-11-01 outside, in the order the log has them: seven with a distance,
+    // six overhead among them.
+    let november = [
+        Distance::Km(14), Distance::Km(6), Distance::Km(6), Distance::Overhead,
+        Distance::Overhead, Distance::Overhead, Distance::Km(10), Distance::Km(6),
+        Distance::Overhead, Distance::Overhead, Distance::Overhead, Distance::Km(12),
+        Distance::Km(12),
+    ];
+    let mut record = None;
+    for distance in november {
+        record = fold(record, distance, room);
+    }
+    check(
+        "that afternoon's thirteen make a record of seven",
+        record == Some(Golden { combo: room, strikes: 7 }),
+    );
+    check("...which is still trusted", record.map(|r| r.strikes).unwrap_or(0) >= TRUSTED_STRIKES);
+    // A stream of overhead must not be able to buy trust on its own either:
+    // one strike with a distance, then nothing but overhead.
+    let mut thin = fold(None, Distance::Km(9), room);
+    for _ in 0..50 {
+        thin = fold(thin, Distance::Overhead, room);
+    }
+    check("one located strike and fifty overhead is still one strike", thin.map(|r| r.strikes) == Some(1));
+    check("...and not trusted", fall_back_to(combo(7, 0, 1, false), thin, 600).is_none());
 
     let passed = PASS.load(Ordering::Relaxed);
     let failed = FAIL.load(Ordering::Relaxed);
