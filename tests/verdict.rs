@@ -19,16 +19,31 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // `verdict` splits a lightning interrupt by its distance with
-// `golden::is_evidence`, so both of those come in at the root, where its
-// `crate::golden` and `crate::strike` resolve.
+// `golden::is_evidence`, and times the rescue's silence with `uptime`; `golden`
+// in turn names `merger` for the flash it folds into its record. All of them
+// at the root, where their `crate::` paths resolve.
 #[path = "../src/strike.rs"]
 mod strike;
+#[path = "../src/uptime.rs"]
+mod uptime;
+#[path = "../src/merger.rs"]
+mod merger;
 #[path = "../src/golden.rs"]
 mod golden;
 #[path = "../src/verdict.rs"]
 mod verdict;
-use strike::Distance;
+use strike::{Distance, Strike};
 use verdict::*;
+
+/// A detail read that came back, as `As3935::strike` returns one.
+fn read(distance: Distance) -> Result<Strike, ()> {
+    Ok(Strike { distance, energy_raw: 100_000 })
+}
+
+/// A detail read that failed.
+fn unreadable() -> Result<Strike, ()> {
+    Err(())
+}
 
 static PASS: AtomicU32 = AtomicU32::new(0);
 static FAIL: AtomicU32 = AtomicU32::new(0);
@@ -92,16 +107,16 @@ fn main() {
 
     println!("\n  a lightning interrupt is not always a strike the tuner may act on");
     let mut batch = Batch::default();
-    batch.lightning(Some(Distance::Overhead));
+    batch.lightning(&read(Distance::Overhead));
     check("overhead is still a strike to the console", batch.strikes == 1);
     check("...but not a confirmed one", batch.confirmed() == 0 && batch.unconfirmed == 1);
-    batch.lightning(Some(Distance::Km(9)));
+    batch.lightning(&read(Distance::Km(9)));
     check("a kilometre reading is confirmed", batch.confirmed() == 1);
-    batch.lightning(Some(Distance::OutOfRange));
+    batch.lightning(&read(Distance::OutOfRange));
     check("so is out of range", batch.confirmed() == 2);
     // The detail read failed: nothing says what the chip measured, so it may
     // not vouch for anything.
-    batch.lightning(None);
+    batch.lightning(&unreadable());
     check("an unreadable one is unconfirmed", batch.unconfirmed == 2 && batch.confirmed() == 2);
     check("and every one of them is still counted", batch.strikes == 4);
 
@@ -109,7 +124,7 @@ fn main() {
     // between an overhead and a decision that commits the device to anything.
     let mut overheads = Batch::default();
     for _ in 0..3 {
-        overheads.lightning(Some(Distance::Overhead));
+        overheads.lightning(&read(Distance::Overhead));
     }
     overheads.noise = 70;
     let mut window = Window::default();
@@ -122,7 +137,7 @@ fn main() {
     // strike leaves behind is not the room's.
     check("...and still holds the walk rather than climbing on it", window.walk(60, 60) == Walk::Hold);
     let mut located = Batch::default();
-    located.lightning(Some(Distance::Km(12)));
+    located.lightning(&read(Distance::Km(12)));
     window.fold_batch(&located);
     check("one strike with a distance and it has heard lightning", window.heard_lightning());
     check("and holds exactly that one", window.strikes == 1 && window.unconfirmed == 3);
@@ -137,14 +152,14 @@ fn main() {
     check("a noisy one climbs", walk_of(Batch { noise: 200, ..Batch::default() }) == Walk::Climb);
     check("...and disturbers alone do not make it climb", walk_of(Batch { disturbers: 500, ..Batch::default() }) == Walk::Relax);
     let mut located = Batch { noise: 200, ..Batch::default() };
-    located.lightning(Some(Distance::Km(8)));
+    located.lightning(&read(Distance::Km(8)));
     check("a noisy window with a located strike holds", walk_of(located) == Walk::Hold);
     let mut quiet_strike = Batch::default();
-    quiet_strike.lightning(Some(Distance::Km(8)));
+    quiet_strike.lightning(&read(Distance::Km(8)));
     check("...and so does a quiet one, rather than relaxing mid-storm", walk_of(quiet_strike) == Walk::Hold);
-    let mut unreadable = Batch { noise: 200, ..Batch::default() };
-    unreadable.lightning(None);
-    check("a strike whose distance could not be read holds too", walk_of(unreadable) == Walk::Hold);
+    let mut failed_read = Batch { noise: 200, ..Batch::default() };
+    failed_read.lightning(&unreadable());
+    check("a strike whose distance could not be read holds too", walk_of(failed_read) == Walk::Hold);
     // **The night this rule is for**, 2026-08-12 as a repeat would look now:
     // the band at 208-299 noise/min, the strikes all in the nearest bin. A
     // window with eight of them at 210/min must hold -- 0.22.0 climbed
@@ -153,7 +168,7 @@ fn main() {
     for second in 0..60 {
         let mut each = Batch { noise: if second < 30 { 4 } else { 3 }, ..Batch::default() };
         if second % 8 == 0 {
-            each.lightning(Some(Distance::Overhead));
+            each.lightning(&read(Distance::Overhead));
         }
         overhead_storm.fold_batch(&each);
     }
@@ -172,7 +187,7 @@ fn main() {
         for second in 0..60 {
             let mut each = Batch::default();
             if second % 8 == 0 {
-                each.lightning(Some(Distance::Overhead));
+                each.lightning(&read(Distance::Overhead));
             }
             minute.fold_batch(&each);
         }
@@ -181,6 +196,52 @@ fn main() {
     }
     check("an hour of September's overhead never once reads as lightning", !september_heard);
     check("...and holds the walk in every window of it", september_held);
+
+    println!("\n  the dip and the rescue read only strikes with a distance");
+    let mut overhead_only = Batch::default();
+    overhead_only.lightning(&read(Distance::Overhead));
+    let mut found = Batch::default();
+    found.lightning(&read(Distance::Km(14)));
+    let mut failed = Batch::default();
+    failed.lightning(&unreadable());
+    let mut dip = Window::default();
+    dip.fold_batch(&overhead_only);
+    check("a dip that heard only overhead does not stay open", !dip.dip_stays_open());
+    check("...and an overhead does not stop the next dip starting", dip.dip_may_start());
+    dip.fold_batch(&found);
+    check("one strike with a distance keeps it open", dip.dip_stays_open());
+    check("...and makes the next dip unnecessary", !dip.dip_may_start());
+    let mut lost = Window::default();
+    lost.fold_batch(&failed);
+    check("an unreadable strike keeps no dip open", !lost.dip_stays_open() && lost.dip_may_start());
+    check("an empty window lets a dip start", Window::default().dip_may_start());
+
+    // The rescue's clock. **September's stream must not keep restarting it**:
+    // that is what kept 0.21's rescue from ever running while it lasted.
+    let minute = 60_000u32;
+    let mut silence = Silence::default();
+    check("no strike yet, no silence to measure", silence.minutes(100 * minute).is_none());
+    silence.observe(&overhead_only, minute);
+    check("an overhead does not start the clock", silence.minutes(100 * minute).is_none());
+    silence.observe(&failed, minute);
+    check("nor does an unreadable strike", silence.minutes(100 * minute).is_none());
+    silence.observe(&found, minute);
+    check("a located strike does", silence.minutes(26 * minute) == Some(25));
+    for second in 0..3600u32 {
+        if second % 8 == 0 {
+            silence.observe(&overhead_only, minute + second * 1000);
+        }
+        silence.observe(&Batch { noise: 11, disturbers: 8, ..Batch::default() }, minute + second * 1000);
+    }
+    check(
+        "an hour of overhead, noise and disturbers does not restart it",
+        silence.minutes(61 * minute) == Some(60),
+    );
+    silence.observe(&found, 61 * minute);
+    check("the next located strike does", silence.minutes(61 * minute) == Some(0));
+    let mut wrapped = Silence::default();
+    wrapped.observe(&found, u32::MAX - minute + 1);
+    check("...and it counts across the millisecond wrap", wrapped.minutes(minute) == Some(2));
 
     println!("\n  the raw count is the verdict, the batches are for comparing with 0.20");
     // A band drowning at the chip's re-raise rate, ~90 ms: 11 a batch for a

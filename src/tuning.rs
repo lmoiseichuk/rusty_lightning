@@ -21,7 +21,7 @@ use esp_idf_hal::i2c::I2cDriver;
 
 use crate::as3935::As3935;
 use crate::session::Totals;
-use crate::verdict::{Batch, Walk, Window};
+use crate::verdict::{Batch, Silence, Walk, Window};
 use crate::{defence, session, settings};
 
 /// The one measurement window (§4.2).
@@ -59,14 +59,8 @@ const DEFENCE_SAVE_S: u32 = 15 * 60;
 /// So once every ten minutes it spends one window fully open and finds out.
 const DIP_INTERVAL_S: u32 = 10 * 60;
 
-/// Strikes in a dip window before the weather is believed.
-///
-/// **One.** A dip is already the rare case, and a storm that is starting is
-/// exactly when being slow is most expensive -- the opening strikes are the
-/// warning the whole device exists to give. The cost of believing a single
-/// event is a false alarm from something man-made, which lasts until the next
-/// window judges the band and walks the point back.
-const DIP_STRIKES_TO_BELIEVE: u32 = 1;
+// How many strikes a dip window needs before the weather is believed lives in
+// `verdict` since 0.22.1, beside `Window::dip_stays_open`, which reads it.
 
 /// Everything the noise decision needs to remember between windows.
 pub struct Tuning {
@@ -86,8 +80,8 @@ pub struct Tuning {
     quiet_per_min: u32,
     /// When lightning that is evidence was last heard -- `overhead` does not
     /// move it. Feeds the fall-back to the known-good combination — see
-    /// [`crate::golden`].
-    last_strike_ms: Option<u32>,
+    /// [`crate::golden`] and [`crate::verdict::Silence`], which holds the rule.
+    silence: Silence,
     /// The lowest rung the walk may relax to, learned from drowning at one.
     ///
     /// Held in RAM rather than NVS: it describes the room *now*, and a room
@@ -161,7 +155,7 @@ impl Tuning {
             last_save_s: now_ms / 1000,
             sweep: None,
             quiet_per_min,
-            last_strike_ms: None,
+            silence: Silence::default(),
             // **Seeded from the record.** Without this the walk relaxes straight
             // back past the point boot just resumed to -- measured 2026-09-07:
             // boot raised nf 0 to nf 1 on the strength of the record, and the
@@ -235,23 +229,13 @@ impl Tuning {
     /// clock, used to stop every dip from starting and reset the rescue's
     /// twenty minutes for ever. See `golden::is_evidence`. Every one of them
     /// still holds the walk, which costs nothing: see `verdict::Walk::Hold`.
+    ///
+    /// **Both decisions are made in `verdict`**, where the host checks run:
+    /// which strikes the window counts (`Window::fold_batch`) and which start
+    /// the silence again (`Silence::observe`). This only hands the batch over.
     pub fn observe(&mut self, batch: &Batch) {
         self.window.fold_batch(batch);
-        if batch.confirmed() > 0 {
-            self.last_strike_ms = Some(crate::now_ms());
-        }
-    }
-
-    /// Minutes since lightning was last heard, or `None` if it never has been
-    /// during this run.
-    ///
-    /// **Since the last strike, not since boot.** A device that has been up for
-    /// a week and heard a storm an hour ago is not deaf; one that has been up
-    /// an hour and heard nothing might be, and only the record of what worked
-    /// can tell the two apart.
-    fn quiet_minutes(&self, now_ms: u32) -> Option<u32> {
-        self.last_strike_ms
-            .map(|at| crate::uptime::since(now_ms, at) / 60_000)
+        self.silence.observe(batch, crate::now_ms());
     }
 
     /// How long this window runs. A sweep sets its own, so `calibrate 60` means
@@ -302,7 +286,7 @@ impl Tuning {
             srej: crate::session::spike_rejection(),
             outdoor: matches!(crate::settings::location(), Some(crate::as3935::Location::Outdoor)),
         };
-        crate::golden::fall_back_to(current, crate::settings::golden(), self.quiet_minutes(now_ms)?)
+        crate::golden::fall_back_to(current, crate::settings::golden(), self.silence.minutes(now_ms)?)
     }
 
     /// The threshold a window is judged against, for the console and the page.
@@ -527,7 +511,9 @@ impl Tuning {
             );
         }
 
-        let heard_strikes = self.window.heard_lightning();
+        // Read before the window is cleared below. `verdict` decides it: a
+        // strike with a distance makes a dip unnecessary, an `overhead` does not.
+        let dip_may_start = self.window.dip_may_start();
 
         // Stuck detection, counted after the walk has had its turn so the span
         // sees where the point actually ended up. A sweep or a dip owns the
@@ -558,7 +544,7 @@ impl Tuning {
         // `overhead` every 7-10 s, as September produced for nine days, would
         // otherwise have stopped every dip from starting, and the dip is the
         // one rule that can find a storm the setting itself is deaf to.
-        if !sweeping && !dipping && !heard_strikes && self.dip_due(now_ms) {
+        if !sweeping && !dipping && dip_may_start && self.dip_due(now_ms) {
             self.begin_dip(sensor, i2c, now_ms);
         }
 
@@ -927,10 +913,9 @@ impl Tuning {
     /// dip is a question rather than a decision.
     fn judge_dip(&mut self, sensor: &As3935, i2c: &mut I2cDriver<'_>) -> Option<&'static str> {
         let restore = self.dip_restore.take();
-        // Confirmed strikes only -- `Window::strikes` holds nothing else. A dip
-        // that stayed open for an `overhead` would sit wide open on the word of
-        // the impulse the dip is most likely to admit.
-        if self.window.strikes >= DIP_STRIKES_TO_BELIEVE {
+        // Confirmed strikes only -- see `verdict::Window::dip_stays_open`,
+        // which holds the rule so the host checks reach it.
+        if self.window.dip_stays_open() {
             println!(
                 "dip:  {} strike(s) while open -- weather, staying at {}/{}",
                 self.window.strikes,

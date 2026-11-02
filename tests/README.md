@@ -27,13 +27,13 @@ cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civ
 | `civil.rs` | the calendar: leap years, the century rules, month lengths, and that the time of day never leaks into the date |
 | `csv.rs` | reading the log back: the header decides the columns, so a new column cannot silently shift the old ones |
 | `defence.rs` | §4.2's noise-rejection ladder: rung boundaries, monotonicity, saturation |
-| `golden.rs` | the known-good record: packing, the fall-back rule, the learned floor, and what a detection may teach — `overhead` never, a merged flash by its recorded distance |
+| `golden.rs` | the known-good record: packing, the fall-back rule, the learned floor, and what a detection may teach — `overhead` never, a merged flash by its recorded distance — through `fold_flash`, the function the device calls |
 | `history.rs` | §4.3's strike rings: the score formula against the spec's observed figures, bucketing, gap clearing, and that "overhead"/"out of range" are counted but not averaged |
 | `merger.rs` | folding the strokes of one flash into a single strike, and what a merged flash reports |
 | `pace.rs` | walks over the whole log: a one-tick block every tenth of the task watchdog's timeout, both read from `sdkconfig.defaults`, and the dump that reset the board walked again at its measured rate |
 | `press.rs` | the button gesture boundaries: too short, gain flip, portal, stuck |
 | `uptime.rs` | interval arithmetic across the 49.7-day millisecond wrap |
-| `verdict.rs` | the noise verdict: what counts as quiet, that only noise feeds it, and that any lightning interrupt holds the walk, `overhead` included, while only one with a distance reaches a decision that commits the device |
+| `verdict.rs` | the noise verdict: what counts as quiet, that only noise feeds it, and that any lightning interrupt holds the walk, `overhead` included, while only one with a distance keeps a dip open, stops the next one, or restarts the rescue's silence |
 
 ## These compile the real modules, not copies of them
 
@@ -63,3 +63,12 @@ Declaring `mod strike;` at the test binary's root is what makes `history`'s
 
 **If you add an ESP-IDF import to either module, these stop compiling.** That is
 the intended failure: move the hardware half out rather than reaching for a copy.
+
+**And a decision left in a module that cannot be built here is not tested,
+however many checks surround it.** 0.22.0's rule that `overhead` teaches nothing
+had checks for every helper and none for its three call sites in `session` and
+`tuning`; putting all three back to 0.21's behaviour passed every check. Since
+0.22.1 the call sites only hand values over -- `Batch::lightning` takes the
+detail read as it came back, `golden::fold_flash` takes the flash, and
+`verdict::Silence`, `Window::walk` and the two dip questions hold the rest.
+When a check cannot reach a rule, move the rule, not the check.

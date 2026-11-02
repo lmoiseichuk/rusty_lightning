@@ -40,7 +40,19 @@
 //!   7-10 s for nine days, would otherwise have steered.
 
 use crate::golden;
-use crate::strike::Distance;
+use crate::strike::Strike;
+
+/// Strikes in a dip window before the weather is believed.
+///
+/// **One.** A dip is already the rare case, and a storm that is starting is
+/// exactly when being slow is most expensive -- the opening strikes are the
+/// warning the whole device exists to give. The cost of believing a single
+/// event is a false alarm from something man-made, which lasts until the next
+/// window judges the band and walks the point back.
+///
+/// Moved here from `tuning` in 0.22.1 with [`Window::dip_stays_open`], so the
+/// rule that reads it is host-tested.
+pub const DIP_STRIKES_TO_BELIEVE: u32 = 1;
 
 /// What one batch window heard -- about a second of interrupts.
 ///
@@ -62,17 +74,26 @@ pub struct Batch {
 }
 
 impl Batch {
-    /// Count one lightning interrupt.
+    /// Count one lightning interrupt, from the detail read exactly as the
+    /// driver returned it.
     ///
-    /// `distance` is `None` when the detail read failed. That is counted as
-    /// unconfirmed rather than as evidence: nothing says what the chip measured,
-    /// and the cost of the conservative reading is one strike the tuner does not
-    /// act on, where the other reading lets a fault vouch for a setting.
-    pub fn lightning(&mut self, distance: Option<Distance>) {
+    /// **The read itself, not a distance taken out of it**, so the call in
+    /// `session::read_and_handle` hands it over untouched and every decision
+    /// about it is made here, where the host checks run. That one line is the
+    /// boundary: nothing on a workstation can drive the I²C read, so the less
+    /// it does, the less there is that no check can see. Generic over the
+    /// error because only whether there was one matters here, and so the
+    /// checks need no ESP-IDF error type.
+    ///
+    /// A failed read is counted as unconfirmed rather than as evidence: nothing
+    /// says what the chip measured, and the cost of the conservative reading is
+    /// one strike the tuner does not learn from, where the other reading lets a
+    /// fault vouch for a setting.
+    pub fn lightning<E>(&mut self, read: &Result<Strike, E>) {
         self.strikes += 1;
-        let evidence = match distance {
-            Some(distance) => golden::is_evidence(distance),
-            None => false,
+        let evidence = match read {
+            Ok(strike) => golden::is_evidence(strike.distance),
+            Err(_) => false,
         };
         if !evidence {
             self.unconfirmed += 1;
@@ -199,6 +220,27 @@ impl Window {
         self.strikes > 0 || self.unconfirmed > 0
     }
 
+    /// For a window spent dipping wide open: whether it found weather, so the
+    /// dip stays where it is instead of restoring the defended point.
+    ///
+    /// **Strikes that are evidence only.** A dip that stayed open for an
+    /// `overhead` would sit wide open on the word of the impulse a fully open
+    /// receiver is most likely to admit.
+    pub fn dip_stays_open(&self) -> bool {
+        self.strikes >= DIP_STRIKES_TO_BELIEVE
+    }
+
+    /// Whether a dip may start after this window, if one is due.
+    ///
+    /// **Not after a strike that is evidence**: the device is plainly not deaf,
+    /// and the hold is doing its job. **But after an `overhead`, yes** -- a
+    /// stream of them every 7-10 s, as September produced for nine days, would
+    /// otherwise have stopped every dip from starting, and the dip is the one
+    /// rule that can find a storm the setting itself is deaf to.
+    pub fn dip_may_start(&self) -> bool {
+        !self.heard_lightning()
+    }
+
     /// What the ±1 walk does with this window, when neither a sweep nor a dip
     /// owns it.
     ///
@@ -244,5 +286,43 @@ impl Window {
     /// level interrupt counts awake and asleep alike.
     pub fn quiet(&self, quiet_per_min: u32, window_s: u32) -> bool {
         self.noise_per_min(window_s) <= quiet_per_min
+    }
+}
+
+/// When lightning that is evidence was last heard -- the clock the rescue's
+/// patience (`golden::PATIENCE_MINUTES`) runs on.
+///
+/// **Here rather than as a bare field in `tuning`**, so the rule that starts it
+/// again is host-tested: only a confirmed strike does. Until 0.22.1 that was a
+/// line in `Tuning::observe`, which no check compiles, and putting
+/// `batch.strikes` back in it -- which lets September's `overhead`, one every
+/// 7-10 s, keep the rescue from ever running -- passed every host check.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Silence {
+    /// `None` until the first confirmed strike of this run.
+    last_ms: Option<u32>,
+}
+
+impl Silence {
+    /// Fold one batch in, at `now_ms`. A confirmed strike starts the silence
+    /// again; nothing else does.
+    pub fn observe(&mut self, batch: &Batch, now_ms: u32) {
+        if batch.confirmed() > 0 {
+            self.last_ms = Some(now_ms);
+        }
+    }
+
+    /// Whole minutes since lightning that is evidence was last heard, or `None`
+    /// if it never has been during this run.
+    ///
+    /// **Since the last strike, not since boot.** A device that has been up for
+    /// a week and heard a storm an hour ago is not deaf; one that has been up
+    /// an hour and heard nothing might be, and only the record of what worked
+    /// can tell the two apart.
+    pub fn minutes(&self, now_ms: u32) -> Option<u32> {
+        match self.last_ms {
+            Some(at) => Some(crate::uptime::since(now_ms, at) / 60_000),
+            None => None,
+        }
     }
 }

@@ -283,12 +283,33 @@ fn main() {
     let only = flash(&[Distance::Overhead, Distance::Overhead, Distance::Overhead]);
     check("three overhead strokes are one flash that teaches nothing", !may_record(only.simulated, only.strike.distance));
 
-    // The record as `session::remember_working_point` builds it: only the
-    // flashes `may_record` lets through reach `observe`.
-    let fold = |record: Option<Golden>, distance: Distance, at: Combo| match may_record(false, distance) {
-        true => Some(observe(record, at)),
-        false => record,
+    // The record as `session::remember_working_point` builds it: each strike a
+    // flash out of the real merger, through the real `fold_flash`, and the
+    // record kept as it was when the flash teaches nothing -- which is all the
+    // caller adds. Until 0.22.1 this was a closure that re-implemented the
+    // gate, so it tested a copy of the rule rather than the one the device
+    // runs, and reverting the device's passed it.
+    let fold = |record: Option<Golden>, distance: Distance, at: Combo| {
+        match fold_flash(record, &flash(&[distance]), at) {
+            Some(after) => Some(after),
+            None => record,
+        }
     };
+    check(
+        "fold_flash learns from a located flash",
+        fold_flash(None, &flash(&[Distance::Km(9)]), combo(3, 0, 1, false))
+            == Some(Golden { combo: combo(3, 0, 1, false), strikes: 1 }),
+    );
+    check(
+        "...and says it learned nothing from an overhead one",
+        fold_flash(None, &flash(&[Distance::Overhead]), combo(3, 0, 1, false)).is_none(),
+    );
+    let mut simulated = flash(&[Distance::Km(9)]);
+    simulated.simulated = true;
+    check(
+        "...or from a simulated one",
+        fold_flash(trusted(combo(3, 0, 1, false)), &simulated, combo(3, 0, 1, false)).is_none(),
+    );
     let room = combo(3, 0, 1, false);
     let mut september = None;
     for _ in 0..840 {

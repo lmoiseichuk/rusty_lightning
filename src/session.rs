@@ -264,27 +264,25 @@ fn read_and_handle(
             // point of the device, they are rare, and a summary line would hide
             // the distance and energy that §4.3 needs.
             //
-            // **Counted in both arms, and split by the distance.** Every
-            // lightning interrupt is a strike to the console; only one with a
-            // distance that is evidence reaches the tuner -- see
-            // `verdict::Batch::lightning`.
-            match sensor.strike(i2c) {
-                Ok(strike) => {
-                    batch.lightning(Some(strike.distance));
-                    record_strike(
-                        totals,
-                        history,
-                        strike_log.as_deref_mut(),
-                        &strike,
-                        clock::now(),
-                        minute,
-                        false,
-                    )
-                }
-                Err(e) => {
-                    batch.lightning(None);
-                    println!("STRIKE  -- but the detail read failed: {e}")
-                }
+            // **Counted before the match, from the read as it came back.**
+            // Every lightning interrupt is a strike to the console; only one
+            // whose distance is evidence is confirmed for the tuner. The split
+            // is `verdict::Batch::lightning`'s, host-tested; this line only
+            // hands it the read, untouched, because it is the one part of the
+            // path no host check can drive.
+            let detail = sensor.strike(i2c);
+            batch.lightning(&detail);
+            match detail {
+                Ok(strike) => record_strike(
+                    totals,
+                    history,
+                    strike_log.as_deref_mut(),
+                    &strike,
+                    clock::now(),
+                    minute,
+                    false,
+                ),
+                Err(e) => println!("STRIKE  -- but the detail read failed: {e}"),
             }
         }
         Interrupt::Disturber => {
@@ -552,10 +550,11 @@ pub fn commit_merged(
     // record anyway -- "840 strikes heard here" -- and the record is what boot,
     // the rescue and the floor trust. See `golden::is_evidence`, and
     // `golden::may_record` for the mixed flash.
-    let learned = crate::golden::may_record(merged.simulated, strike.distance);
-    if learned {
-        remember_working_point();
-    }
+    //
+    // The decision is `golden::fold_flash`'s, taking the flash itself, so the
+    // host checks run the rule the device runs; this only supplies where the
+    // chip is set and stores what comes back.
+    let learned = remember_working_point(merged);
 
     // **A kilometre reading re-arms; the nearest bin counts toward a reset.**
     // `OutOfRange` re-arms too: it is a real answer about distance, so an
@@ -1130,7 +1129,12 @@ impl Sweep {
 ///
 /// Written to NVS only when the record actually changes. A close storm makes
 /// strikes faster than once a minute, and this is flash.
-fn remember_working_point() {
+///
+/// **Whether the flash teaches anything is `golden::fold_flash`'s decision**,
+/// made on the flash itself, so it is host-tested; until 0.22.1 the gate was a
+/// line in `commit_merged`, and reverting it passed every check. Returns
+/// whether the flash was learned from, for the console's marker.
+fn remember_working_point(merged: &Merged) -> bool {
     let combo = crate::golden::Combo {
         nf: CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
         wdth: crate::settings::watchdog().unwrap_or(0),
@@ -1143,9 +1147,12 @@ fn remember_working_point() {
     };
 
     let before = crate::settings::golden();
-    let after = crate::golden::observe(before, combo);
+    let after = match crate::golden::fold_flash(before, merged, combo) {
+        Some(after) => after,
+        None => return false,
+    };
     if before == Some(after) {
-        return;
+        return true;
     }
     match crate::settings::store_golden(after) {
         Ok(()) if before.map(|b| b.combo) != Some(combo) => println!(
@@ -1158,4 +1165,5 @@ fn remember_working_point() {
         Ok(()) => println!("gold: {} strike(s) now heard at this setting", after.strikes),
         Err(e) => println!("gold: could not store the working point -- {e}"),
     }
+    true
 }

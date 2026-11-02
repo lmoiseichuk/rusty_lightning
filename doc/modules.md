@@ -92,11 +92,11 @@ this table is generated from it.
 |---|---|---|---|
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 746 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 564 |
-| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1161 |
+| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/verdict.rs` | 213 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1169 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1131 |
-| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 248 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1116 |
+| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 328 |
 
 ### Keeping it
 
@@ -143,7 +143,7 @@ this table is generated from it.
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
 | `power` | Clock and sleep policy (§7). | -- | 223 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
-| `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs` | 70 |
+| `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs`, `tests/verdict.rs` | 70 |
 
 **Unclassified** (add them to `ROLES` in `tools/modules.py`): `golden`
 
@@ -167,7 +167,7 @@ program' is not information.
 | `credentials` | `storage` |
 | `display` | `uptime` |
 | `effects` | `as3935` `battery` `commands` `console` `defence` `golden` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
-| `golden` | `strike` |
+| `golden` | `merger` `strike` |
 | `history` | `strike` |
 | `log` | `as3935` `budget` `clock` `csv` `history` `pace` `settings` |
 | `merger` | `strike` `uptime` |
@@ -181,7 +181,7 @@ program' is not information.
 | `system` | `settings` |
 | `tuning` | `as3935` `defence` `golden` `listen` `session` `settings` `uptime` `verdict` |
 | `ui` | `as3935` `battery` `clock` `display` `history` `session` `system` |
-| `verdict` | `golden` `strike` |
+| `verdict` | `golden` `strike` `uptime` |
 | `webui` | `portal` `query` |
 
 **Depends on nothing in this crate** — the bottom of the stack, and

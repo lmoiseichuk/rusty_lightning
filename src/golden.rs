@@ -29,6 +29,7 @@
 //! that was not, so it is set aside rather than trusted: see
 //! `settings::legacy_golden`.
 
+use crate::merger::Merged;
 use crate::strike::Distance;
 
 /// Whether a detection at `distance` is evidence that this receiver can hear
@@ -116,6 +117,22 @@ pub fn is_evidence(distance: Distance) -> bool {
 /// A simulated strike never counts: it did not go through the front end.
 pub fn may_record(simulated: bool, distance: Distance) -> bool {
     !simulated && is_evidence(distance)
+}
+
+/// What a committed flash makes of the record: `Some` with the record as it
+/// now stands when the flash teaches it, `None` when it teaches nothing and the
+/// record stays as it was.
+///
+/// **The whole decision, taking the flash itself**, so `session::commit_merged`
+/// only supplies `at` -- where the chip was set -- and stores the answer. Until
+/// 0.22.1 the gate was a line there, in a module no host check compiles, and
+/// putting it back to `!merged.simulated` let September write "840 strikes
+/// heard here" again with every check green.
+pub fn fold_flash(record: Option<Golden>, merged: &Merged, at: Combo) -> Option<Golden> {
+    match may_record(merged.simulated, merged.strike.distance) {
+        true => Some(observe(record, at)),
+        false => None,
+    }
 }
 
 /// A complete sensitivity configuration.
