@@ -1,9 +1,9 @@
 build   : default
-version : 0.22.1
-commit  : 2bcfb57b8dd0
-built   : 2026-11-02T01:48:19Z
+version : 0.22.2
+commit  : 1b6e6ec9ffed
+built   : 2026-11-02T03:35:41Z
 flags   : (default)
 image   : lightning
 target  : riscv32imc-esp-espidf
 sources : src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defaults rust-toolchain.toml littlefs_bindings.h assets .cargo/config.toml components_esp32c3.lock
-purpose : THE INSTRUMENT: light sleep on, so the battery lasts. The USB console is only reachable in the waking windows -- send `freq 160` to pin the clock and keep the port up while debugging.
+purpose : THE INSTRUMENT: light sleep on, so the battery lasts. The USB console is only reachable in the waking windows -- send `freq 160` to keep the port up until the next restart, or `awake on` to keep it up across restarts (saved; ~2.5 days on the cell against ~30).
