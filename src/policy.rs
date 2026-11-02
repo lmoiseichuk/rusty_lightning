@@ -12,7 +12,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
     /// Awake and fast: the console and the flasher both work. Held for the
-    /// grace period after boot, and whenever somebody is using the console.
+    /// grace period after boot, whenever somebody is using the console, and
+    /// for good while `awake on` is saved.
     Awake,
     /// 80 MHz ceiling, 10 MHz floor, light sleep on. WiFi still works here —
     /// 80 is its floor — so a radio window needs no separate policy.
@@ -74,18 +75,76 @@ pub enum Supply {
 /// set the clock without the port dying mid-sentence.
 pub const CONSOLE_AWAKE_S: u32 = 10 * 60;
 
+/// Whether a board that has never been told `awake on|off` is held awake: **no**.
+///
+/// The default is the instrument -- light sleep, so the cell lasts. Holding it
+/// awake is something a person asks for, for a board on USB that has to stay
+/// reachable, and its price is the 13x in `power`'s module comment.
+pub const AWAKE_LOCK_DEFAULT: bool = false;
+
+/// What the lock costs on the cell, in the words every report uses.
+///
+/// One copy, because it is printed at boot, by `status`, `health` and a bare
+/// `awake`, and a figure written out at four call sites is four figures. From
+/// specs §7's table: 33.5 mA awake is ~2.5 days of the 2000 mAh cell, against
+/// 2.5-3.0 mA frugal, ~28-33 days. Both are idle current measured at the port;
+/// the ratio between them, 13x, is the part that holds in practice.
+pub const AWAKE_LOCK_COST: &str = "~2.5 days on the 2000 mAh cell against ~30 asleep";
+
+/// The awake lock in force, from what NVS holds.
+///
+/// `None` is a board that has never been told -- `settings` keeps that apart
+/// from "told off", as it does for every switch -- and it gets
+/// [`AWAKE_LOCK_DEFAULT`]. Written here rather than as an `unwrap_or` at the
+/// call site so the default is host-tested beside the rule it feeds.
+pub fn awake_lock(saved: Option<bool>) -> bool {
+    match saved {
+        Some(on) => on,
+        None => AWAKE_LOCK_DEFAULT,
+    }
+}
+
 /// Which policy to run.
 ///
 /// Ordered so the two conclusions that are *measured* outrank the ones that are
 /// inferred. See `power`'s module comment for the three supply-detection
 /// schemes that failed; `Supply` here is deliberately narrower than any of them.
+///
+/// `awake_lock` is `awake on`, saved in NVS, and it outranks everything here --
+/// the grace period, the console, the weather **and the cell**. The comment
+/// inside says why it does not give way to a discharging cell.
 pub fn decide(
     uptime_s: u32,
     last_console_s: Option<u32>,
     last_strike_s: Option<u32>,
     supply: Supply,
+    awake_lock: bool,
 ) -> Policy {
     if cfg!(feature = "no-light-sleep") {
+        return Policy::Awake;
+    }
+
+    // **Unconditional, and above the cell's rule, on purpose.** The lock is for
+    // a board on USB whose port must still be there when a script comes to
+    // read it, hours after anybody last typed. Letting go of it when the
+    // supply *looks* like the cell would need a signal this board does not
+    // have:
+    //
+    // * the gauge reads a full cell on USB and a resting cell alike -- `CRATE`
+    //   exactly 0 and a flat voltage -- and nothing on record says what it
+    //   reads as a charge ends and the cell settles back, so a lock that gave
+    //   way to `Discharging` could drop the port on USB, the one place it is
+    //   for;
+    // * `usb_serial_jtag_is_connected()` was measured claiming a host after
+    //   the cable was pulled, and what it watches -- the host's start-of-frame
+    //   packets -- also stops whenever the host suspends the bus: asleep
+    //   overnight, rebooting, or autosuspending an idle port. That is the
+    //   night before the morning read.
+    //
+    // So on the cell the lock costs the battery for as long as it is on, and
+    // everything that reports the device's state says so: boot, `status`,
+    // `health`, a bare `awake` and the web page.
+    if awake_lock {
         return Policy::Awake;
     }
     if uptime_s < GRACE_S {

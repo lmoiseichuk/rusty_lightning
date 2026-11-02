@@ -65,6 +65,12 @@ pub const COMMANDS: &[(&str, Arity)] = &[
     ("sensitive", Arity::Choice(&["off"])),
     ("mask", Arity::Choice(&["on", "off"])),
     ("panel sleep", Arity::Choice(&["on", "off"])),
+    // **Both ways, unlike `sensitive`.** `off` is the reason it is here: a
+    // board out on its cell with the lock still on is emptying it, and the
+    // page reaches it with no cable to fetch. `on` costs the battery and
+    // nothing else -- it cannot deafen the receiver, which is what kept
+    // `sensitive on` off the page -- and its button says how much.
+    ("awake", Arity::Choice(&["on", "off"])),
     ("scope", Arity::Choice(&["day", "week", "month"])),
 ];
 
@@ -123,8 +129,9 @@ pub const FIELDS: &[Field] = &[
     Field { command: "events", label: "log N noise/disturber rows", hint: "5000" },
 ];
 
-/// The two experiments, as toggles: the page is the only way to change them on
-/// a board running from its cell, where connecting a cable restarts it.
+/// The two experiments and the awake lock, as toggles: the page is the only way
+/// to change them on a board running from its cell, where connecting a cable
+/// restarts it.
 pub const TOGGLES: &[Toggle] = &[
     Toggle {
         command: "mask",
@@ -135,6 +142,13 @@ pub const TOGGLES: &[Toggle] = &[
         command: "panel sleep",
         while_on: "panel sleeps between refreshes -- keep it powered",
         while_off: "panel left powered -- power it down",
+    },
+    // The cost is on both labels, because the button is the decision: about
+    // 2.5 days of the cell held awake against about 30 asleep (specs §7).
+    Toggle {
+        command: "awake",
+        while_on: "HELD AWAKE, ~2.5 days on the cell -- let it sleep (~30)",
+        while_off: "sleeps on its own -- hold it awake (~2.5 days on the cell)",
     },
 ];
 

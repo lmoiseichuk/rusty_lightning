@@ -64,6 +64,33 @@ fn main() {
         "but not freeze it wide open",
         command_from_query("cmd=sensitive&v=on").is_none(),
     );
+    // **Both ways for the awake lock.** `off` is why it is on the page at all:
+    // a board out on its cell with the lock on is emptying it, and the page
+    // reaches it with no cable. `on` costs the battery and cannot deafen the
+    // receiver, which is what kept `sensitive on` off.
+    check(
+        "the page may let a held board sleep",
+        command_from_query("cmd=awake&v=off").as_deref() == Some("awake off"),
+    );
+    check(
+        "and may hold it awake",
+        command_from_query("cmd=awake&v=on").as_deref() == Some("awake on"),
+    );
+    check(
+        "the lock takes only on or off",
+        command_from_query("cmd=awake&v=always").is_none()
+            && command_from_query("cmd=awake&v=1").is_none(),
+    );
+    // A bare `awake` reports, which the page has no use for: it shows the state
+    // on the toggle, and a report goes to a console nobody on the page can see.
+    check(
+        "a bare awake is not a page command",
+        command_from_query("cmd=awake").is_none(),
+    );
+    check(
+        "the lock is one of the page's toggles",
+        TOGGLES.iter().any(|toggle| toggle.command == "awake"),
+    );
 
     println!("\n  and what it refuses");
     // The allow-list is the whole security argument: a command the page does

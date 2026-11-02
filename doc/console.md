@@ -117,8 +117,8 @@ and antenna checks, the five-second logo — and says so with
 on this page now uses `tools/send.py` or a reader that holds the port.
 
 Two consequences shape the rest of this page. **Nothing that lives only in RAM
-survives looking at it** — so `mask` and an armed `events` budget are kept in
-NVS and come back on their own, and the banner says so. And **the restart that matters is usually the
+survives looking at it** — so `mask`, an armed `events` budget and `awake on`
+are kept in NVS and come back on their own, and the banner says so. And **the restart that matters is usually the
 one before the banner you are reading**: an unplug or a brownout on the cell
 happens with nobody attached, and connecting to ask resets the board again. The
 banner therefore prints the earlier reasons too —
@@ -150,15 +150,96 @@ freq 160
 ```
 
 The clock is now fixed, light sleep is off, and the power policy is paused until
-you say otherwise. The board stays reachable indefinitely. Undo with:
+you say otherwise. The board stays reachable until it restarts. Undo with:
 
 ```
 freq auto
 ```
 
-Neither setting is saved to NVS. A power cycle always returns the device to its
-normal policy — a board that came back from a power cut silently refusing to
-sleep would quietly cost the battery, and you would not find out for weeks.
+Neither `freq` nor `sleep` is saved to NVS. A power cycle always returns the
+device to its normal policy — a board that came back from a power cut silently
+refusing to sleep would quietly cost the battery, and you would not find out for
+weeks. **And every open of the port is a restart**, so `freq 160` lasts exactly
+until the next tool connects.
+
+### Across restarts — `awake on`
+
+For a board that lives on USB and has to be there when something comes to read
+it — the daily cross-check that reads the log every morning, say — there is a
+saved form:
+
+```
+awake on        hold 160 MHz with light sleep off, from every boot
+awake off       let it sleep on its own again
+awake           report: the setting, and what the chip is enforcing now
+```
+
+`awake on` puts the board in exactly the state `freq 160` does — 160/160 MHz,
+light sleep off, nothing in the policy able to change it — and keeps it there
+through every restart until `awake off`. It answers at once:
+
+```
+awake on
+awake: held at 160 MHz with light sleep off, from every boot until `awake off` (saved)
+awake:   costs the battery -- ~2.5 days on the 2000 mAh cell against ~30 asleep
+awake:   `awake off` before it goes out on its cell
+awake: now 160 MHz -- pm 160/160 MHz, light sleep off, policy awake, held by `awake on`
+```
+
+**`freq` stays as it was, and wins while it is in force.** It is the override
+for this session; the lock is part of the policy. So `freq 80` or `sleep on`
+after `awake on` takes effect until `freq auto` or a restart, and `freq auto`
+hands back to a policy that the lock holds awake. `awake off` re-decides at
+once, with the console counted as just used: the port stays for the usual ten
+minutes and then goes.
+
+**The power-cut concern above is real for this one, and it is answered by never
+being silent rather than by forgetting.** The lock survives a power cut by
+design, so a board carried outside with it still on runs awake on its cell.
+Every place that reports the device's state says so:
+
+```
+pm:   ⚠ held awake by `awake on` (saved) -- 160 MHz, light sleep off, on USB or the cell
+pm:     costs the battery: ~2.5 days on the 2000 mAh cell against ~30 asleep -- `awake off` lets it sleep
+```
+
+at every boot; a `status` line (`HELD AWAKE from every boot`), a `health` line,
+a bare `awake`, and a warning and a toggle on the web page. With the lock off,
+boot says that too — `sleeps on its own from 5 min after boot` — so a log shows
+which one a board was running.
+
+**It does not watch for the cable, because nothing on this board can be trusted
+to.** Two candidates were weighed, and each fails in the direction that would
+drop the port on USB — the one thing the lock is for:
+
+* **The fuel gauge** reads a full cell on USB and a resting cell on its own
+  identically: `CRATE` exactly 0, the voltage flat. Only a measurably *falling*
+  cell is a conclusion, which is what the frugal policy acts on — but nothing on
+  record says what the gauge reads as a charge ends and the cell settles back,
+  and a lock that gave way to a discharge seen there would drop the port while
+  plugged in. It would also have to latch: asleep, the board's 2.5–3.0 mA is
+  under one `CRATE` step, so the gauge stops reporting the discharge that made
+  it sleep, and an unlatched lock would wake it again.
+* **`usb_serial_jtag_is_connected()`** was measured claiming a host after the
+  cable was pulled, which is why it was removed in August. What it watches is
+  the host's start-of-frame packets (IDF 5.3.4's `CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION`
+  is the same signal), and those also stop whenever the host suspends the bus —
+  asleep overnight, rebooting, or autosuspending an idle port. A lock that let
+  go then would be gone by the morning read, and the board would not get it
+  back: asleep, the PHY is down, and the port does not come back in the short
+  waking windows (§7), so there would be no frames to see the host return by.
+
+So the lock is unconditional, and the cost of that is bounded and stated.
+**On a cell outside, with the lock left on:** it runs at the measured 33.5 mA
+instead of 2.5–3.0, about **2.5 days of the 2000 mAh cell instead of about
+30** (§7 — both from idle current measured at the port; the frugal board has
+lasted up to a week in practice, and the 13× between them is the part that
+holds). The USB port stays up the whole time, so a cable reaches it — plugging
+one in restarts the board, the lock comes back with it, and `awake off` typed
+after `con:  listening` lands as usual — and the web page's toggle turns it off
+with no cable at all. **`awake off` before it goes outside.** The
+no-light-sleep build ignores the setting — it never sleeps either way — keeps
+it for the default image, and leaves its toggle off the page.
 
 ---
 
@@ -195,6 +276,7 @@ which is why it no longer gives a number.)
 | `mode indoor\|outdoor` | AFE gain — the same switch as holding the BOOT button |
 | `clear` | erase the strike log. No confirmation. |
 | `merge [ms]` | strike-merge window (§4.3). Bare, it reports. `0` logs every return stroke. |
+| `awake [on\|off]` | hold 160 MHz with light sleep off from every boot (`on`), or let the board sleep on its own (`off`, the default). Saved; bare, it reports. Costs the battery while on — ~2.5 days on the cell against ~30. See [Across restarts](#across-restarts--awake-on) |
 
 Setting the clock from the host, which is almost always what you want:
 
@@ -224,7 +306,7 @@ landed. `send.py` waits for the console and reads the epoch as it sends.
 | `calibrate [s] [/min]` | bisect the whole space for the most sensitive point that stays quiet |
 | `sensitive on\|off` | the noise floor to 0 — the most receptive the tuner's own space goes — with the auto-tune frozen |
 | `mask [on\|off]` | whether disturbers may raise the IRQ. Masked by default; `mask off` is the experiment that logs them. Saved, so it outlives a restart; bare, it reports |
-| `freq [auto\|40\|80\|160]` | read the clock, or pin it |
+| `freq [auto\|40\|80\|160]` | read the clock, or pin it — until the next restart; `awake on` is the saved form |
 | `sleep on\|off` | light sleep alone, leaving the clock where it is |
 | `panel sleep [on\|off]` | power the e-paper down after every refresh (`on`, the default) or leave it powered (`off`, how it ran until 0.21.0). Saved; redraws at once so the new setting is in force immediately. Bare `panel` reports. See below |
 | `strike [km] [intensity]` | inject a synthetic strike |
@@ -641,10 +723,14 @@ of the ladder, measured here at 300–480 noise a minute and no strikes indoors.
 It is a console command now; the allow-list lets only `sensitive off` through
 from the network, and the page shows that button only while it is needed.
 
-**`mask` and `panel sleep` are toggles on the page**, and the page shows why the
+**`mask`, `panel sleep` and `awake` are toggles on the page**, and the page shows why the
 board last restarted and the restarts before that. That is the point of having
 them there: a board running on its cell outdoors has no cable, and connecting
 one to change a setting — or to read why it restarted — restarts it again.
+`awake` goes both ways, unlike `sensitive`: `on` costs the battery and cannot
+deafen the receiver, and both of its buttons say what it costs. While it is on
+the page carries a warning at the top, since a board held awake on its cell is
+the one setting here that empties it.
 
 A few consequences worth knowing:
 

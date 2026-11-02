@@ -45,8 +45,49 @@ pub struct Runtime<'a> {
     pub fuel: &'a mut battery::Fuel,
     pub policy: &'a mut power::Policy,
     pub freq_override: &'a mut Option<u32>,
+    /// `awake on`, read from NVS at boot and changed only by `awake on|off`.
+    /// Held beside the policy and the override because it is an input to the
+    /// one and gives way to the other.
+    pub awake_lock: &'a mut bool,
     /// Uptime at the last clock save, which `date <epoch>` resets.
     pub clock_saved_s: &'a mut u32,
+}
+
+/// What `esp_pm` is enforcing, and who chose it, for `freq` and `awake`.
+///
+/// Read back from the chip rather than restated from what was asked for --
+/// `esp_pm_configure` can reject a config and leave the previous one running.
+/// One function, because `freq` and `awake` answer the same question and a
+/// line that drifted between them would be two answers.
+fn enforced(freq_override: Option<u32>, policy: power::Policy, awake_lock: bool) -> String {
+    let chosen_by = match (freq_override, awake_lock) {
+        (Some(mhz), _) => format!("pinned at {mhz} MHz"),
+        (None, true) => format!("policy {}, held by `awake on`", policy.label()),
+        (None, false) => format!("policy {}", policy.label()),
+    };
+    match power::config() {
+        Some((max, min, sleep)) => format!(
+            "now {} MHz -- pm {}/{} MHz, light sleep {}, {chosen_by}",
+            system::cpu_mhz(),
+            min,
+            max,
+            if sleep { "on" } else { "off" },
+        ),
+        None => format!("{} MHz (pm read-back failed)", system::cpu_mhz()),
+    }
+}
+
+/// Say so when the lock can change nothing on this board as flashed.
+///
+/// The recovery build compiles light sleep out (`policy::decide` returns awake
+/// before it reads the lock), so `awake off` there would read as a promise to
+/// sleep that the image cannot keep. The setting is still saved, for the
+/// default image that will read it.
+fn awake_in_this_build() {
+    if cfg!(feature = "no-light-sleep") {
+        println!("awake:   this is the no-light-sleep build, which never sleeps either way --");
+        println!("awake:   the setting is kept for the default image");
+    }
 }
 
 /// Run one console command and apply whatever it asked for.
@@ -77,6 +118,7 @@ pub fn handle(
                 uptime_minutes: now_ms / 60_000,
                 max_sensitivity: rt.tuning.frozen,
                 panel_sleep: rt.screen.panel_sleep,
+                awake_lock: *rt.awake_lock,
             },
         );
         if effects.clock_saved {
@@ -153,11 +195,16 @@ pub fn handle(
                     // and identically so: this runs *because* a console command
                     // just arrived, and the caller stamps that variable with
                     // this same instant immediately before calling in.
+                    //
+                    // The lock goes in as it stands: `freq auto` hands the
+                    // clock back to the policy, and while `awake on` is saved
+                    // the policy is awake.
                     let want = power::decide(
                         now_ms / 1000,
                         Some(now_ms / 1000),
                         None,
                         power::Supply::Unknown,
+                        *rt.awake_lock,
                     );
                     match power::apply(want) {
                         Ok(()) => {
@@ -172,20 +219,7 @@ pub fn handle(
             // Always report what the chip is enforcing, not what we asked
             // for -- `esp_pm_configure` can reject a config and leave the
             // previous one running.
-            match power::config() {
-                Some((max, min, sleep)) => println!(
-                    "freq: now {} MHz -- pm {}/{} MHz, light sleep {}, {}",
-                    system::cpu_mhz(),
-                    min,
-                    max,
-                    if sleep { "on" } else { "off" },
-                    match *rt.freq_override {
-                        Some(mhz) => format!("pinned at {mhz} MHz"),
-                        None => format!("policy {}", rt.policy.label()),
-                    }
-                ),
-                None => println!("freq: {} MHz (pm read-back failed)", system::cpu_mhz()),
-            }
+            println!("freq: {}", enforced(*rt.freq_override, *rt.policy, *rt.awake_lock));
         }
         if let Some(on) = effects.light_sleep {
             // Keep whatever clock is in force and change only the sleep
@@ -203,6 +237,11 @@ pub fn handle(
                         );
                         if on {
                             println!("sleep: the USB port will go with it -- `freq auto` or a power cycle to return");
+                            // An override for this session only, so say what
+                            // the restart that ends it will do.
+                            if *rt.awake_lock {
+                                println!("sleep: `awake on` is saved -- after `freq auto` or a restart it is held awake again");
+                            }
                         }
                     }
                     Err(e) => println!("sleep: could not change it -- {e}"),
@@ -210,6 +249,100 @@ pub fn handle(
                 None => println!("sleep: could not read the current config -- unchanged"),
             }
         }
+
+        if let Some(on) = effects.set_awake_lock {
+            // **Saved first, then applied.** The sensor's settings go the other
+            // way -- tell the chip, keep only what it accepted -- but there is
+            // no chip here to refuse anything: what `awake` promises is the
+            // next boot, so the save is the half that matters, and the answer
+            // says whether it landed.
+            //
+            // **What a failed save means depends on the direction**, so it is
+            // said from what NVS still holds rather than guessed: a failed
+            // `awake on` is lost by a restart, a failed `awake off` is undone
+            // by one.
+            let held_before = crate::policy::awake_lock(settings::awake_lock());
+            let saved = match settings::store_awake_lock(on) {
+                Ok(()) => "saved".to_string(),
+                Err(e) => format!(
+                    "NOT saved ({e}) -- a restart goes back to {}",
+                    match held_before {
+                        true => "holding it awake",
+                        false => "sleeping on its own",
+                    }
+                ),
+            };
+            *rt.awake_lock = on;
+            match on {
+                true => println!(
+                    "awake: held at 160 MHz with light sleep off, from every boot until `awake off` ({saved})"
+                ),
+                false => println!("awake: off -- the board sleeps on its own again ({saved})"),
+            }
+
+            // **A `freq` or `sleep` override in force is left alone.** It is a
+            // person's choice for this session, newer than the lock's, and
+            // `freq auto` is the documented way to hand the clock back -- to a
+            // policy that is now awake or not as this command said.
+            match *rt.freq_override {
+                Some(mhz) => println!(
+                    "awake:   `freq`/`sleep` still pins {mhz} MHz until `freq auto` or a restart"
+                ),
+                None => {
+                    // Decided now rather than at the next gauge poll, as `freq
+                    // auto` does, with the console stamped this instant for the
+                    // same reason -- so `awake off` keeps the port for the ten
+                    // minutes any command does, and then the board sleeps.
+                    let want = power::decide(
+                        now_ms / 1000,
+                        Some(now_ms / 1000),
+                        None,
+                        power::Supply::Unknown,
+                        on,
+                    );
+                    match power::apply(want) {
+                        Ok(()) => *rt.policy = want,
+                        Err(e) => println!("awake:   could not apply the {} policy -- {e}", want.label()),
+                    }
+                    if !on && !cfg!(feature = "no-light-sleep") {
+                        println!(
+                            "awake:   the console holds it {} min, then it light-sleeps and the USB port goes",
+                            crate::policy::CONSOLE_AWAKE_S / 60
+                        );
+                    }
+                }
+            }
+            if on {
+                println!("awake:   costs the battery -- {}", crate::policy::AWAKE_LOCK_COST);
+                println!("awake:   `awake off` before it goes out on its cell");
+            }
+            awake_in_this_build();
+            println!("awake: {}", enforced(*rt.freq_override, *rt.policy, *rt.awake_lock));
+        }
+
+        if effects.show_awake_lock {
+            let source = match settings::awake_lock() {
+                Some(_) => "saved",
+                None => "the default",
+            };
+            match *rt.awake_lock {
+                true => {
+                    println!("awake: ON ({source}) -- 160 MHz, light sleep off, from every boot");
+                    println!(
+                        "awake:   costs the battery -- {}; `awake off` lets it sleep",
+                        crate::policy::AWAKE_LOCK_COST
+                    );
+                }
+                false => println!(
+                    "awake: off ({source}) -- light sleep {} min after boot and {} after a command; `awake on` holds it",
+                    crate::policy::GRACE_S / 60,
+                    crate::policy::CONSOLE_AWAKE_S / 60
+                ),
+            }
+            awake_in_this_build();
+            println!("awake: {}", enforced(*rt.freq_override, *rt.policy, *rt.awake_lock));
+        }
+
         if let Some(mask) = effects.mask_disturbers {
             // **`mask off` is the experiment now, not `mask on`.** Boot masks
             // disturbers -- see `boot::configure` for the measurement -- so the

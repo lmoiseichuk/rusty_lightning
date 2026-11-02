@@ -126,6 +126,16 @@ pub fn page(state: &Snapshot) -> String {
              Turn it off below to hand the device back to itself.</div>",
         );
     }
+    // **The page is where a board on its cell is seen**, and a lock left on
+    // when it went outside is the one setting here that empties the cell.
+    if state.awake_lock && !cfg!(feature = "no-light-sleep") {
+        out.push_str(&format!(
+            "<div class=warn><b>Held awake</b> (<code>awake on</code>, saved): 160 MHz with \
+             light sleep off, from every boot, on USB or on the cell — {}. \
+             Let it sleep below before it runs on its own cell.</div>",
+            escape(crate::policy::AWAKE_LOCK_COST),
+        ));
+    }
 
     // --- what it has heard --------------------------------------------------
     out.push_str("<h2>Strikes</h2><div class=grid>");
@@ -238,9 +248,16 @@ pub fn page(state: &Snapshot) -> String {
         out.push_str(&action(release.command, release.value, release.label));
     }
     for toggle in crate::query::TOGGLES {
+        // The recovery build never sleeps, so neither of the lock's buttons
+        // would tell the truth there: one offers sleep it cannot give, the
+        // other a cost it is already paying. The console still takes it.
+        if toggle.command == "awake" && cfg!(feature = "no-light-sleep") {
+            continue;
+        }
         let on = match toggle.command {
             "mask" => state.masked,
             "panel sleep" => state.panel_sleep,
+            "awake" => state.awake_lock,
             _ => false,
         };
         let (value, label) = match on {

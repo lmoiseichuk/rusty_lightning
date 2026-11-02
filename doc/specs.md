@@ -983,7 +983,7 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 >
 > | | Clock | Light sleep | |
 > |---|---|---|---|
-> | **Awake** | 160/160 MHz | off | five minutes after boot, and ten minutes after any console input |
+> | **Awake** | 160/160 MHz | off | five minutes after boot, ten minutes after any console input, and from every boot while `awake on` is saved (0.22.2) |
 > | **Frugal** | 80/10 MHz | on | otherwise |
 >
 > **80 MHz rather than 40**, chosen deliberately. 40 is the crystal frequency, so capping there
@@ -1003,6 +1003,13 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 > minutes after unplugging; and `usb_serial_jtag_is_connected()` never reports a disconnect at all.
 > What replaced them is about a *person* rather than a cable — the grace period, and console
 > activity.
+>
+> **Since 0.22.2 a person can also say "stay awake" for good: `awake on`**, saved in NVS, for a
+> board on USB that has to be reachable when a script comes to read it, across the restart every
+> console open causes. It is unconditional — it outranks the cell's rule too — because the
+> detection above cannot be trusted in the direction that would drop the port on USB, and on the
+> cell it costs the table's difference: ~2.5 days instead of ~30. Every boot, `status`, `health`
+> and the web page say so. The argument in full is in doc/console.md, "Across restarts".
 
 > #### ⚠ AS BUILT, 0.21.0: the sensor's IRQ wakes the chip — the "IRQ + timer wake" above, finally
 >

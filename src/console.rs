@@ -113,6 +113,17 @@ pub enum Command {
     /// the rings would have to be rebuilt from CSV on every wake, and this
     /// device has no reason to use it.
     Sleep(bool),
+    /// `awake on|off` holds the board at 160 MHz with light sleep off from
+    /// every boot, or stops holding it, and saves it; a bare `awake` reports.
+    ///
+    /// **The saved form of `freq 160`, and a separate word because `freq`
+    /// stays RAM-only.** `freq` and `sleep` are a person's override for this
+    /// session, and a power cut ends them on purpose; this is a standing order
+    /// for a board that has to stay reachable on USB across the restart every
+    /// console open causes. `freq` and `sleep` still win while they are in
+    /// force -- `freq auto` hands back to the policy, and the policy is awake
+    /// while this is on.
+    Awake(Option<bool>),
     /// `mode indoor|outdoor` — AFE gain, same switch as the BOOT button.
     SetMode(bool),
     /// `regs` — dump the sensor's registers as the chip actually holds them.
@@ -400,6 +411,14 @@ pub fn parse(line: &str) -> Command {
                 Err(_) => Command::Unknown,
             },
         },
+        // Refused rather than defaulted, like `mask`: a typo should neither
+        // spend the battery nor drop the port. Bare, it reports.
+        "awake" => match arg {
+            None => Command::Awake(None),
+            Some("on") => Command::Awake(Some(true)),
+            Some("off") => Command::Awake(Some(false)),
+            _ => Command::Unknown,
+        },
         "battery" | "batt" => Command::Battery,
         "sleep" => match arg {
             Some("on") => Command::Sleep(true),
@@ -498,13 +517,15 @@ pub fn print_help() {
     println!("  ap [off|<ssid> <pass>] raise the access point and web UI; `off` drops it");
     println!("  golden [clear]        the settings that last heard lightning");
     println!("  import <e>,<d>,<en>,<n> append one historical record: epoch, distance, energy, strokes");
-    println!("  freq [auto|40|80|160] read the clock, or pin it");
+    println!("  freq [auto|40|80|160] read the clock, or pin it -- until a restart");
     println!("  sleep on|off          light sleep alone -- off is what keeps USB alive");
+    println!("  awake [on|off]        160 MHz, light sleep off, from every boot (default off); saved");
     println!("  panel sleep [on|off]  power the e-paper down between refreshes (default on); saved");
     println!();
     println!("Typing anything also keeps the device awake for 10 minutes.");
     println!("Otherwise it light-sleeps and the USB port goes with it.");
-    println!("`freq 160` holds it open indefinitely; `freq auto` gives it back.");
+    println!("`freq 160` holds it open until a restart; `freq auto` gives it back.");
+    println!("`awake on` holds it open across restarts -- ~2.5 days on the cell against ~30.");
     println!("Full guide: doc/console.md");
 }
 

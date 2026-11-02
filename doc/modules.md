@@ -84,7 +84,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 908 |
+| `listen` | The event loop. | -- | 938 |
 
 ### The sensor and what it hears
 
@@ -108,7 +108,7 @@ this table is generated from it.
 | `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
 | `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
 | `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 676 |
-| `settings` | What survives a power cut, and nothing else. | -- | 451 |
+| `settings` | What survives a power cut, and nothing else. | -- | 473 |
 | `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
 
 ### The glass
@@ -123,14 +123,14 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 647 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
+| `commands` | What the console commands actually do (§5). | -- | 680 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 599 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 513 |
-| `portal` | The access point and the web server it carries. | -- | 640 |
+| `effects` | Applying the console's hardware effects. | -- | 646 |
+| `portal` | The access point and the web server it carries. | -- | 644 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 409 |
-| `webui` | The page the access point serves. | -- | 281 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 423 |
+| `webui` | The page the access point serves. | -- | 298 |
 
 ### The board underneath
 
@@ -140,7 +140,7 @@ this table is generated from it.
 | `boot` | Bring-up: everything that happens once, before the loop. | -- | 497 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
-| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
+| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 191 |
 | `power` | Clock and sleep policy (§7). | -- | 223 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
 | `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs`, `tests/verdict.rs` | 70 |
@@ -162,11 +162,11 @@ program' is not information.
 | `battery` | `settings` `uptime` |
 | `boot` | `as3935` `defence` `golden` `session` `settings` |
 | `clock` | `civil` `storage` |
-| `commands` | `as3935` `battery` `budget` `clock` `console` `credentials` `golden` `history` `log` `power` `session` `settings` `strike` `system` `ui` |
+| `commands` | `as3935` `battery` `budget` `clock` `console` `credentials` `golden` `history` `log` `policy` `power` `session` `settings` `strike` `system` `ui` |
 | `console` | `defence` `query` `session` `strike` |
 | `credentials` | `storage` |
 | `display` | `uptime` |
-| `effects` | `as3935` `battery` `commands` `console` `defence` `golden` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
+| `effects` | `as3935` `battery` `commands` `console` `defence` `golden` `history` `log` `policy` `power` `screen` `session` `settings` `system` `tuning` |
 | `golden` | `merger` `strike` |
 | `history` | `strike` |
 | `log` | `as3935` `budget` `clock` `csv` `history` `pace` `settings` |
@@ -182,7 +182,7 @@ program' is not information.
 | `tuning` | `as3935` `defence` `golden` `listen` `session` `settings` `uptime` `verdict` |
 | `ui` | `as3935` `battery` `clock` `display` `history` `session` `system` |
 | `verdict` | `golden` `strike` `uptime` |
-| `webui` | `portal` `query` |
+| `webui` | `policy` `portal` `query` |
 
 **Depends on nothing in this crate** — the bottom of the stack, and
 where a change is cheapest: `budget`, `civil`, `csv`, `defence`, `i2c_scan`, `press`, `query`, `storage`, `strike`, `uptime`.

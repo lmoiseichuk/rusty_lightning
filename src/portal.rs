@@ -66,6 +66,8 @@ pub struct Snapshot {
     pub masked: bool,
     /// Whether the panel is powered down between refreshes, for its toggle.
     pub panel_sleep: bool,
+    /// Whether `awake on` holds the board awake, for its toggle and warning.
+    pub awake_lock: bool,
     /// Event rows still to log; zero when `events` is off.
     pub events_left: u32,
     /// Why this boot happened, and the restarts before it, newest first.
@@ -560,6 +562,7 @@ pub fn publish_from(
     log_bytes: u32,
     events_left: u32,
     panel_sleep: bool,
+    awake_lock: bool,
     credentials: Option<&Credentials>,
 ) {
     let epoch = crate::clock::now().unwrap_or(0);
@@ -628,6 +631,7 @@ pub fn publish_from(
         frozen: tuning.frozen,
         masked: crate::session::DISTURBERS_MASKED.load(core::sync::atomic::Ordering::Relaxed),
         panel_sleep,
+        awake_lock,
         events_left,
         restart: crate::system::this_restart(),
         earlier_restarts: crate::system::earlier_restarts(),

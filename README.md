@@ -84,7 +84,7 @@ make it a rule.
 |---|---|
 | **[Specification](doc/specs.md)** | the whole design, section by section, with `⚠ AS BUILT` callouts wherever reality diverged from the plan — and it diverged often. The hardware, the pinout, the storm logic, the power budget, and §9's honest list of what is still unsettled. |
 | **[How this device scans](doc/scanning.md)** | the receiver's argument end to end: what the three interrupt kinds each license, why the tuning space is deliberately *one register*, what "quiet" means and why the verdict is a rate, and §4 on the failure mode the whole design turns on. |
-| **[The console](doc/console.md)** | every command, what it does, and what it costs. Also the access point, the golden combination, and how to keep the USB port alive while debugging — light sleep takes it away. |
+| **[The console](doc/console.md)** | every command, what it does, and what it costs. Also the access point, the golden combination, and how to keep the USB port alive — `freq 160` for a session, `awake on` across restarts — since light sleep takes it away. |
 | **[The modules](doc/modules.md)** | what each of the 34 modules owns, which of them are free of ESP-IDF, what names what, and how a strike travels from the interrupt to the glass. **Generated from the source** by `tools/modules.py`, for the same reason the schematics are. |
 
 ## The shape of the code

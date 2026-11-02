@@ -57,6 +57,8 @@ const KEY_MASK: &[u8] = b"mask\0";
 /// Event rows still to log. A count, not a switch -- see `Log::event_budget`.
 const KEY_EVENTS: &[u8] = b"events\0";
 const KEY_PANEL_SLEEP: &[u8] = b"epd_sleep\0";
+/// `awake on|off`. Saved where `freq` is not -- see [`awake_lock`].
+const KEY_AWAKE: &[u8] = b"awake\0";
 
 /// Encoded so the stored byte is not a bare 0/1 whose meaning is invisible in a
 /// hex dump.
@@ -448,4 +450,24 @@ pub fn panel_sleep() -> Option<bool> {
 
 pub fn store_panel_sleep(on: bool) -> Result<(), EspError> {
     store_switch(KEY_PANEL_SLEEP, on)
+}
+
+/// Whether `awake on` holds the board at 160 MHz with light sleep off from
+/// every boot. `None` on a device never told; `policy::awake_lock` turns that
+/// into the default, which is off.
+///
+/// **Saved, where `freq 160` deliberately is not**, and for the reason `mask`
+/// and `events` came to be: every open of the console port restarts the
+/// board, so a RAM-only hold ended the moment anybody connected -- and on a
+/// board on USB that a script reads every morning, the default build then
+/// drops its port five minutes after that read. The trap a saved hold sets,
+/// a board back from a power cut that never sleeps, is answered the way
+/// `events` answered its own: it is never silent. Boot says so, and so do
+/// `status`, `health`, a bare `awake` and the web page.
+pub fn awake_lock() -> Option<bool> {
+    get_switch(KEY_AWAKE)
+}
+
+pub fn store_awake_lock(on: bool) -> Result<(), EspError> {
+    store_switch(KEY_AWAKE, on)
 }

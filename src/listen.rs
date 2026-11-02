@@ -236,7 +236,14 @@ pub fn listen(
     let mut policy = power::Policy::Awake;
     // `Some(mhz)` while `freq <mhz>` is in force. Deliberately not persisted:
     // it exists so a board can be watched over USB, and one that came back from
+    // a power cut silently refusing to sleep would quietly cost the battery.
     let mut freq_override: Option<u32> = None;
+    // `awake on`, which *is* persisted -- the standing form of `freq 160`, for
+    // a board on USB that must stay reachable across the restart every console
+    // open causes. What answers the power cut is that it is never silent: the
+    // lines below, `status`, `health` and the web page. See `policy::decide`
+    // for why it does not let go on the cell by itself.
+    let mut awake_lock = crate::policy::awake_lock(crate::settings::awake_lock());
     let mut console = console::Console::new();
     // Uptime at the last console input, and at the last clock save.
     let mut last_console_s: Option<u32> = None;
@@ -257,6 +264,25 @@ pub fn listen(
             None => println!("pm:   applied {} but could not read it back", policy.label()),
         },
         Err(e) => println!("pm:   could not apply {} -- {e}", policy.label()),
+    }
+    // Said on every boot, in both states: a board that will not sleep has to
+    // say why, and one that will drop its port in five minutes is worth
+    // knowing about before somebody leaves a script waiting on it.
+    match (awake_lock, cfg!(feature = "no-light-sleep")) {
+        // The saved value still matters here: it is what the default image
+        // will find when it is flashed back.
+        (locked, true) => println!(
+            "pm:   no-light-sleep build -- never sleeps, whatever `awake` says (saved: {})",
+            if locked { "on" } else { "off" }
+        ),
+        (true, false) => {
+            println!("pm:   ⚠ held awake by `awake on` (saved) -- 160 MHz, light sleep off, on USB or the cell");
+            println!("pm:     costs the battery: {} -- `awake off` lets it sleep", crate::policy::AWAKE_LOCK_COST);
+        }
+        (false, false) => println!(
+            "pm:   sleeps on its own from {} min after boot (`awake on` holds it awake across restarts)",
+            crate::policy::GRACE_S / 60
+        ),
     }
     let mut tuning = tuning::Tuning::new(start_point, now_ms());
     let mut storm_watch = StormWatch::default();
@@ -493,6 +519,7 @@ pub fn listen(
             strike_log.as_ref().map(|log| log.used_bytes()).unwrap_or(0),
             strike_log.as_ref().map(|log| log.event_budget()).unwrap_or(0),
             screen.panel_sleep,
+            awake_lock,
             portal.as_ref().map(|running| &running.credentials),
         );
 
@@ -613,6 +640,7 @@ pub fn listen(
                     fuel: &mut fuel,
                     policy: &mut policy,
                     freq_override: &mut freq_override,
+                    awake_lock: &mut awake_lock,
                     clock_saved_s: &mut last_clock_save_s,
                 },
                 now_ms(),
@@ -648,6 +676,7 @@ pub fn listen(
                     fuel: &mut fuel,
                     policy: &mut policy,
                     freq_override: &mut freq_override,
+                    awake_lock: &mut awake_lock,
                     clock_saved_s: &mut last_clock_save_s,
                 },
                 now_ms(),
@@ -725,6 +754,7 @@ pub fn listen(
                     last_console_s,
                     last_strike_s,
                     supply_hint,
+                    awake_lock,
                 ),
             };
             if freq_override.is_none() && want != policy {

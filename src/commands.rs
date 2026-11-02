@@ -42,6 +42,8 @@ pub struct Ctx<'a> {
     pub max_sensitivity: bool,
     /// Whether the panel is powered down between refreshes.
     pub panel_sleep: bool,
+    /// Whether `awake on` is in force, for `status` and `health`.
+    pub awake_lock: bool,
 }
 
 /// What the caller must do as a result.
@@ -112,6 +114,12 @@ pub struct Effects {
     pub freq: Option<crate::console::FreqRequest>,
     /// Set by `sleep on|off`. Same reason as `freq`.
     pub light_sleep: Option<bool>,
+    /// `Some(on)` when `awake on|off` was used. Same reason as `freq`: the
+    /// caller owns the policy, the override and the lock itself.
+    pub set_awake_lock: Option<bool>,
+    /// Set by a bare `awake`, which reports what the chip is enforcing as
+    /// well -- and only the caller knows whether `freq` is pinning it.
+    pub show_awake_lock: bool,
     /// Set by `battery`; the raw read needs the bus, which `Ctx` does not have.
     pub read_battery: bool,
 }
@@ -258,6 +266,18 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
             }
             println!("health: {} MHz, light sleep {}", health.cpu_mhz,
                 if crate::power::config().map(|(_, _, ls)| ls).unwrap_or(false) { "on" } else { "off" });
+            // **Why it is not sleeping, when the reason is a saved setting.** A
+            // board that came back from a power cut holding itself awake is the
+            // trap the lock sets; this is one of the places that springs it.
+            // The recovery build never sleeps at all, and says that instead.
+            match (ctx.awake_lock, cfg!(feature = "no-light-sleep")) {
+                (_, true) => println!("health: no-light-sleep build -- never sleeps"),
+                (true, false) => println!(
+                    "health: held awake by `awake on` (saved) -- {}",
+                    crate::policy::AWAKE_LOCK_COST
+                ),
+                (false, false) => {}
+            }
             match health.die_temp_tenths {
                 Some(t) => println!("health: die {}.{} C", t / 10, (t % 10).abs()),
                 None => println!("health: die temperature unavailable"),
@@ -349,6 +369,17 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 "status: panel {} between refreshes",
                 if ctx.panel_sleep { "powered down" } else { "left POWERED" }
             );
+            // Another setting that survives a restart, and the only one that
+            // costs the battery whatever the weather -- so it is said in both
+            // states, like the panel's, and the recovery build says what it is.
+            match (ctx.awake_lock, cfg!(feature = "no-light-sleep")) {
+                (_, true) => println!("status: never sleeps -- the no-light-sleep build"),
+                (true, false) => println!(
+                    "status: HELD AWAKE from every boot (`awake on`) -- {}",
+                    crate::policy::AWAKE_LOCK_COST
+                ),
+                (false, false) => println!("status: sleeps on its own -- `awake on` holds it awake across restarts"),
+            }
             println!(
                 "status: disturbers {}, events {}",
                 match crate::session::DISTURBERS_MASKED.load(core::sync::atomic::Ordering::Relaxed) {
@@ -620,6 +651,8 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
         }
         Command::Freq(request) => effects.freq = Some(request),
         Command::Sleep(on) => effects.light_sleep = Some(on),
+        Command::Awake(Some(on)) => effects.set_awake_lock = Some(on),
+        Command::Awake(None) => effects.show_awake_lock = true,
         Command::Battery => effects.read_battery = true,
         Command::Regs => effects.dump_registers = true,
         Command::SetMode(indoor) => {

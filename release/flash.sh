@@ -64,7 +64,8 @@ if [[ -z "$PORT" ]]; then
 
 If it is plugged in and still missing, it is probably asleep: light sleep powers
 down the USB Serial/JTAG PHY, so the port comes and goes. Either catch it in a
-waking window, or flash the no-light-sleep variant once and it will stay.
+waking window, or flash the no-light-sleep variant once and it will stay. On
+the ordinary build, `awake on` once it is caught keeps it up across restarts.
 EOF
         exit 1
     }
