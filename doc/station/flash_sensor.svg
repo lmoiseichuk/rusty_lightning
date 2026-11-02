@@ -56,7 +56,7 @@
 <polygon points="830.0,420.0 820.0,415.5 820.0,424.5" fill="#2f855a"/>
 <text x="555.0" y="413.0" font-size="12" text-anchor="middle" fill="#2f855a">BCLK, WS, SD</text>
 <polyline points="915.0,520.0 915.0,548.0" fill="none" stroke="#1f2933" stroke-width="3" stroke-linejoin="round"/>
-<text x="905.0" y="556.0" font-size="12" font-weight="bold" text-anchor="end" fill="#1f2933">lane: cell +, GND, SDA, SCL</text>
+<text x="905.0" y="556.0" font-size="12" font-weight="bold" text-anchor="end" fill="#1f2933">lane: rail +, GND, SDA, SCL</text>
 <rect x="30.0" y="578.0" width="310.0" height="88.0" rx="8" fill="#ffffff" stroke="#7b8794" stroke-width="1.6"/>
 <text x="42.0" y="600.0" font-size="14" font-weight="bold" text-anchor="start" fill="#7b8794">Awake while its lane is on</text>
 <text x="42.0" y="618.0" font-size="12" text-anchor="start" fill="#1f2933">80 MHz; 40 to 160 is fine</text>

@@ -242,11 +242,12 @@ def overview():
     )
 
     figure.rect(300, 50, 720, 500, HOUSE, radius=12, dashed=True)
-    figure.text(316, 76, "Roof: low, away from the ridge, white ASA box", 14, bold=True, colour=HOUSE[1])
+    figure.text(316, 76, "Roof: low, away from the ridge, white ASA boxes", 14, bold=True, colour=HOUSE[1])
 
     fallback = figure.box(320, 95, 170, "ESP32-C3 Pro", ["fallback radio", "antenna socket"], RADIO, dashed=True)
     receivers = figure.box(
-        510, 95, 240, "4 × SEN0290 (AS3935)", ["rods at 0°, 45°, 90°, 135°", "one IRQ line each"], STATION
+        510, 90, 240, "4 × SEN0290 (AS3935)",
+        ["in the octagon, 50 cm up", "rods at 0°, 45°, 90°, 135°", "one IRQ line each"], STATION
     )
     core = figure.box(
         510, 245, 240, "FireBeetle 2 ESP32-P4",
@@ -260,24 +261,24 @@ def overview():
     )
     time = figure.box(
         320, 405, 230, "Time and weather",
-        ["ATGM336H-5N-31 with PPS", "DS3231: no satellites", "SHT45: speed of sound"],
+        ["GNSS with PPS: the octagon", "DS3231: the core box", "SHT45: shielded, on the mast"],
         TIME,
     )
     power = figure.box(
         590, 405, 410, "Power",
         [
-            "5–6 V solar panel → 45 °C thermostat → CN3065",
-            "5000 mAh Li-ion, two NTCs, MAX17043 gauge",
-            "3.3 V regulator: SEN0290s, SHT45, DS3231, GNSS",
+            "solar panel on the core box → two chargers",
+            "cell 1, its own MAX17043: the core",
+            "cell 2, its own MAX17043: ring and GNSS",
+            "3.3 V regulator in the octagon",
             "5 V boost, chosen by its noise: the FireBeetle",
-            "8 switched lanes: the flash sensors",
         ],
         POWER,
     )
 
     # Receivers to the core.
     figure.line([(630, receivers["y"] + receivers["h"]), (630, core["y"])], STATION[1], arrow_end=True)
-    figure.text(640, 205, "I2C A (3 boards), I2C B (1), 4 IRQs", 12, colour=STATION[1])
+    figure.text(640, 214, "up the mast: I2C A and B, 4 IRQs", 12, colour=STATION[1])
     # The fallback radio, dashed: only if the on-board C6 falls short.
     figure.line(
         [(405, fallback["y"] + fallback["h"]), (405, 268), (core["x"], 268)], RADIO[1], dashed=True
@@ -301,6 +302,65 @@ def overview():
     figure.text(728, 375, "5 V", 12, colour=POWER[1])
     figure.line([(910, power["y"]), (910, ring["y"] + ring["h"])], POWER[1], arrow_end=True)
     figure.text(918, 385, "switched", 12, colour=POWER[1])
+    return figure.save()
+
+
+def layout():
+    figure = Figure("layout", 1000, 720)
+    figure.text(20, 30, "The station from the side: the noise below, the ears 50 cm up", 16, bold=True)
+    mast_x, mast_top, mast_bottom = 500, 262, 504
+    # A magnetic near field falls as the cube of the distance: how much quieter the
+    # boost and the FireBeetle are at 50 cm than beside the plate, at 10 cm.
+    near, far = 0.10, 0.50
+    quieter_db = 20 * math.log10((far / near) ** 3)
+
+    # The roof, and the core box with the solar panel on its lid, shading the cells.
+    figure.line([(30, 664), (970, 664)], MUTED, width=2)
+    figure.text(40, 690, "the roof: keep the octagon's top below the ridge line", 12, colour=MUTED)
+    figure.box(300, 528, 400, "Core box",
+               ["FireBeetle 2, DS3231, the 5 V boost", "cell 1 (the core), cell 2 (the rail)",
+                "two CN3065s, MAX17043s, NTCs", "the switched rail's switch"], STATION, height=130)
+    figure.rect(270, 506, 460, 16, POWER, radius=2)
+    figure.text(260, 518, "solar panel", 12, bold=True, anchor="end", colour=POWER[1])
+
+    # The mast, with the cables inside it and the SHT45's shield on it.
+    figure.rect(mast_x - 8, mast_top, 16, mast_bottom - mast_top, PLAIN, radius=2)
+    figure.line([(530, mast_bottom), (530, mast_top)], MUTED, width=1.2, arrow_end=True, arrow_start=True)
+    figure.text(540, 360, "50 cm", 12, bold=True)
+    figure.text(540, 440, "a fiberglass or plastic tube;", 12)
+    figure.text(540, 457, "four sheathed cables and a spare", 12)
+    for index, y in enumerate((300, 310, 320)):
+        figure.line([(mast_x - 66 + index * 4, y), (mast_x - 14 - index * 4, y)], INK, width=2.4)
+    figure.text(424, 306, "SHT45 in a", 12, anchor="end")
+    figure.text(424, 322, "radiation shield", 12, anchor="end")
+
+    # The octagon, with the GNSS on top and two of its eight arms.
+    figure.box(390, 174, 220, "The octagon",
+               ["4 × SEN0290 on one plate", "PCA9548A, a PTC per lane", "3.3 V regulator, always on"], STATION,
+               height=88)
+    figure.rect(470, 150, 60, 24, TIME, radius=3)
+    figure.text(500, 167, "GNSS", 12, bold=True, anchor="middle", colour=TIME[1], check=False)
+    for side in (-1, 1):
+        inner = 390 if side < 0 else 610
+        outer = inner + side * 210
+        figure.line([(inner, 218), (outer, 218)], INK, width=3)
+        box_x = outer - 80 if side < 0 else outer
+        figure.rect(box_x, 196, 80, 44, LIGHT, radius=6)
+        figure.text(box_x + 40, 223, "sensor", 12, bold=True, anchor="middle", check=False)
+        # Each window looks out and about 20° up.
+        start_x = box_x if side < 0 else box_x + 80
+        rise = 60 * math.tan(math.radians(20))
+        figure.line([(start_x, 210), (start_x + side * 60, 210 - rise)], LIGHT[1], width=1.6, arrow_end=True)
+    figure.text(185, 266, "8 arms, one per 45° sector (2 shown)", 12, anchor="middle")
+    figure.text(815, 266, "a lane cable along each arm", 12, anchor="middle")
+    figure.text(40, 168, "window ~20° up", 12, colour=LIGHT[1])
+
+    figure.box(715, 330, 270, "Why this way",
+               ["boost, FireBeetle: 50 cm from the plate",
+                f"near field ∝ 1/r³: {quieter_db:.0f} dB under 10 cm",
+                "the panel shades the cells",
+                "no wire leaves the station"],
+               PLAIN)
     return figure.save()
 
 
@@ -375,7 +435,7 @@ def receivers():
 
 def ring():
     figure = Figure("ring", 780, 810)
-    figure.text(20, 30, "Eight flash sensors, one 45° sector each, each on its own lane", 16, bold=True)
+    figure.text(20, 30, "Eight flash sensors on the octagon's arms, one 45° sector each", 16, bold=True)
     centre_x, centre_y = 390, 400
     node_radius, wedge_inner, wedge_outer = 215, 262, 318
     names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
@@ -412,12 +472,12 @@ def ring():
         figure.text(x, y + 5, f"ch {index}", 13, bold=True, anchor="middle", colour=INK, check=False)
 
     figure.rect(centre_x - 100, centre_y - 75, 200, 150, STATION, radius=10)
-    figure.text(centre_x, centre_y - 42, "FireBeetle 2", 14, bold=True, anchor="middle", colour=STATION[1])
-    figure.text(centre_x, centre_y - 22, "PCA9548A: a channel", 12, anchor="middle")
-    figure.text(centre_x, centre_y - 6, "and a power switch", 12, anchor="middle")
-    figure.text(centre_x, centre_y + 10, "for every lane", 12, anchor="middle")
-    figure.text(centre_x, centre_y + 38, "SEN0290 plate", 13, bold=True, anchor="middle", colour=STATION[1])
-    figure.text(centre_x, centre_y + 56, "under the ring", 12, anchor="middle")
+    figure.text(centre_x, centre_y - 44, "The octagon", 14, bold=True, anchor="middle", colour=STATION[1])
+    figure.text(centre_x, centre_y - 24, "SEN0290 plate, GNSS", 12, anchor="middle")
+    figure.text(centre_x, centre_y - 8, "PCA9548A", 12, anchor="middle")
+    figure.text(centre_x, centre_y + 8, "a PTC per lane", 12, anchor="middle")
+    figure.text(centre_x, centre_y + 38, "on a 50 cm mast", 13, bold=True, anchor="middle", colour=STATION[1])
+    figure.text(centre_x, centre_y + 56, "over the core box", 12, anchor="middle")
 
     # A flash at 70°: the two brightest neighbours, NE and E, give the bearing.
     flash_bearing = 70
@@ -429,7 +489,7 @@ def ring():
     figure.raw(f'<polygon points="{coordinates}" fill="#f6c343" stroke="{LIGHT[1]}" stroke-width="1.2"/>')
 
     figure.line([(30, 738), (70, 738)], INK, width=3)
-    figure.text(80, 743, "a lane: 4 wires (cell +, GND, SDA, SCL), its own PCA9548A channel and power switch", 12)
+    figure.text(80, 743, "a lane, along an arm: 4 wires (rail +, GND, SDA, SCL), its own PCA9548A channel and PTC", 12)
     figure.text(30, 768, "Every sensor answers at 0x10: the channel is its place; each reports its own id.", 12)
     figure.text(30, 790, "A flash at 70°: the two brightest neighbours, NE and E, give the bearing, to about ±20°.", 12)
     return figure.save()
@@ -474,7 +534,7 @@ def flash_sensor():
     branch_x = 595
     figure.line([(branch_x, row), (branch_x, 150), (chip_x, 150)], LIGHT[1], arrow_end=True)
     figure.text(712, 143, "later strokes, their shape", 12, anchor="middle", colour=LIGHT[1])
-    # The gain line runs back from the chip to the amplifier: an AO3400 switches its feedback resistor.
+    # The gain line runs back from the chip to the amplifier: an analog switch changes its feedback resistor.
     amplifier_bottom = amplifier["y"] + amplifier["h"]
     figure.line([(chip_x, 205), (300, 205), (300, amplifier_bottom)], INK, width=1.4, arrow_end=True)
     figure.text(560, 198, "GPIO21 → analog switch: the amplifier's gain", 12, anchor="middle", colour=INK)
@@ -488,7 +548,7 @@ def flash_sensor():
 
     # The lane leaves the bottom of the chip.
     figure.line([(915, chip_bottom), (915, 548)], INK, width=3)
-    figure.text(905, 556, "lane: cell +, GND, SDA, SCL", 12, bold=True, anchor="end")
+    figure.text(905, 556, "lane: rail +, GND, SDA, SCL", 12, bold=True, anchor="end")
 
     figure.box(30, 578, 310, "Awake while its lane is on",
                ["80 MHz; 40 to 160 is fine", "datasheet: 18–22 mA at 80 MHz", "ADC: 4 channels, ~20 kHz each"],
@@ -503,45 +563,48 @@ def flash_sensor():
 
 
 def power():
-    figure = Figure("power", 1060, 470)
-    figure.text(20, 30, "Power: one linear charger, one fast boost, nothing switching near 500 kHz", 16, bold=True)
+    figure = Figure("power", 1060, 540)
+    figure.text(20, 30, "Power: one panel, two cells -- one for the core, one for the switched rail", 16, bold=True)
 
-    solar = figure.box(20, 60, 150, "Solar panel", ["5–6 V, about 5 W"], POWER, height=70)
-    thermostat = figure.box(205, 60, 190, "Thermostat", ["KSD9700, 45 °C, NC", "taped to the cell"], POWER,
-                            height=70)
-    charger = figure.box(430, 60, 170, "CN3065", ["linear charger", "CHRG, DONE → GPIO"], POWER, height=70)
-    cell = figure.box(635, 60, 190, "Li-ion, 5000 mAh", ["about 18 Wh", "two NTCs → ADC"], POWER, height=70)
-    gauge = figure.box(860, 60, 180, "MAX17043", ["across the cell", "I2C A, 0x36"], POWER, height=70)
+    solar = figure.box(20, 115, 150, "Solar panel", ["5–6 V, about 5 W", "on the core box"], POWER, height=70)
+    rows = []
+    for number, top, role, bus in ((2, 60, "the rail", "B"), (1, 170, "the core", "A")):
+        thermostat = figure.box(215, top, 190, f"Thermostat {number}", ["KSD9700, 45 °C, NC", f"taped to cell {number}"],
+                                POWER, height=70)
+        charger = figure.box(440, top, 170, f"CN3065 {number}", ["linear charger", "CHRG, DONE → GPIO"], POWER,
+                             height=70)
+        cell = figure.box(645, top, 190, f"Cell {number}, 5000 mAh", [f"{role}: about 18 Wh", f"NTC; MAX17043, bus {bus}"],
+                          POWER, height=70)
+        figure.line([thermostat["right"], charger["left"]], POWER[1], arrow_end=True)
+        figure.line([charger["right"], cell["left"]], POWER[1], arrow_end=True)
+        rows.append((thermostat, cell))
+    # The panel feeds both chargers, each through its own thermostat.
+    figure.line([solar["right"], (192, 150)], POWER[1])
+    figure.line([(192, 95), (192, 205)], POWER[1])
+    figure.line([(192, 95), rows[0][0]["left"]], POWER[1], arrow_end=True)
+    figure.line([(192, 205), rows[1][0]["left"]], POWER[1], arrow_end=True)
+    figure.text(20, 268, "each thermostat opens above 45 °C and closes near 35 °C: it works if the firmware hangs",
+                12, colour=POWER[1])
 
-    figure.line([solar["right"], thermostat["left"]], POWER[1], arrow_end=True)
-    figure.line([thermostat["right"], charger["left"]], POWER[1], arrow_end=True)
-    figure.line([charger["right"], cell["left"]], POWER[1], arrow_end=True)
-    figure.line([cell["right"], gauge["left"]], POWER[1])
-    # The thermostat's thermal contact with the cell, dashed below the row.
-    cell_bottom = cell["y"] + cell["h"]
-    figure.line([(300, thermostat["y"] + thermostat["h"]), (300, 170), (700, 170), (700, cell_bottom)],
-                POWER[1], dashed=True)
-    figure.text(500, 188, "opens above 45 °C, closes near 35 °C: works if the firmware hangs", 12,
-                anchor="middle", colour=POWER[1])
+    # Cell 2, on top, feeds the switched rail down the right; cell 1 feeds the core
+    # and the always-on octagon from below. The two lines never cross.
+    core_bus_y = 300
+    core_cell = rows[1][1]
+    figure.line([core_cell["bottom"], (core_cell["bottom"][0], core_bus_y), (445, core_bus_y)], POWER[1], width=2.4)
+    figure.line([rows[0][1]["right"], (955, 95), (955, 330)], POWER[1], width=2.4, arrow_end=True)
+    regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, always on", "follows cell 1 below ~3.4 V"], POWER)
+    boost = figure.box(580, 330, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
+    switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "storms, daily clock"], POWER)
+    for x in (445, 690):
+        figure.line([(x, core_bus_y), (x, 330)], POWER[1], arrow_end=True)
+    loads = figure.box(340, 440, 210, "Always on", ["SEN0290s, SHT45, PCA9548A"], STATION)
+    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["takes 5 V only"], STATION)
+    nodes = figure.box(870, 440, 170, "8 flash sensors", ["a PTC each; GNSS LDO"], LIGHT)
+    figure.line([(445, 330 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)
+    figure.line([(690, 330 + boost["h"]), (690, beetle["y"])], POWER[1], arrow_end=True)
+    figure.line([(955, 330 + switch["h"]), (955, nodes["y"])], POWER[1], arrow_end=True)
 
-    # The cell feeds three branches.
-    bus_y = 225
-    figure.line([(780, cell_bottom), (780, bus_y)], POWER[1], width=2.4)
-    figure.line([(445, bus_y), (935, bus_y)], POWER[1], width=2.4)
-    regulator = figure.box(340, 250, 210, "3.3 V regulator", ["linear: no switching", "follows a cell below ~3.4 V"],
-                           POWER)
-    boost = figure.box(580, 250, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
-    switches = figure.box(830, 250, 210, "8 lane switches", ["AO3401A + AO3400 each", "on for storms"], POWER)
-    for x in (445, 690, 935):
-        figure.line([(x, bus_y), (x, 250)], POWER[1], arrow_end=True)
-    loads = figure.box(340, 360, 210, "SEN0290s, SHT45", ["DS3231, GNSS (switched)"], STATION)
-    beetle = figure.box(580, 360, 220, "FireBeetle 2", ["takes 5 V only"], STATION)
-    nodes = figure.box(830, 360, 210, "8 flash sensors", ["5 V pin → own LDO"], LIGHT)
-    figure.line([(445, 250 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)
-    figure.line([(690, 250 + boost["h"]), (690, beetle["y"])], POWER[1], arrow_end=True)
-    figure.line([(935, 250 + switches["h"]), (935, nodes["y"])], POWER[1], arrow_end=True)
-
-    figure.box(20, 250, 290, "Why not a 150 kHz module",
+    figure.box(20, 330, 290, "Why not a 150 kHz module",
                ["3rd harmonic at 450 kHz", "a cheap oscillator drifts", "pulse skipping at light load",
                 "drops into the AS3935's band"],
                PLAIN)
@@ -550,12 +613,13 @@ def power():
 
 def lane():
     figure = Figure("lane", 960, 450)
-    figure.text(20, 30, "A lane switch: off by default, on for storms", 16, bold=True)
-    pull_up, series, miller = 100e3, 10e3, 47e-9
+    figure.text(20, 30, "The switched rail: the ring and the GNSS, off by default, on for storms", 16, bold=True)
+    pull_up, series, miller = 100e3, 10e3, 220e-9
     # Assumptions for the switch-on estimate, marked approx. in the text: the
     # AO3401A's gate sits about 1.2 V below its source while the lane rises (its
-    # Miller plateau at a small load), and the sensor puts about 10 µF on the lane.
-    plateau, lane_capacitance, cell_high = 1.2, 10e-6, 4.2
+    # Miller plateau at a small load), and the eight sensors and the GNSS put about
+    # 90 µF on the rail.
+    plateau, lane_capacitance, cell_high = 1.2, 90e-6, 4.2
 
     def resistor(x, top, bottom, label, label_side):
         figure.rect(x - 13, top, 26, bottom - top, PLAIN, radius=3)
@@ -568,23 +632,19 @@ def lane():
         figure.line([(x - 18, y), (x + 18, y)], INK, width=2)
         figure.line([(x - 10, y + 6), (x + 10, y + 6)], INK, width=2)
 
-    # The cell's rail, the P-channel switch on the high side, a PTC, then the lane.
-    figure.text(40, 85, "cell +", 13, bold=True)
-    figure.line([(90, 80), (420, 80)], INK, width=2)
+    # Cell 2, the P-channel switch on the high side, then up the mast.
+    figure.text(40, 85, "cell 2 +", 13, bold=True)
+    figure.line([(108, 80), (420, 80)], INK, width=2)
     figure.box(420, 52, 140, "AO3401A", ["P-channel"], POWER, height=56)
     figure.text(414, 74, "S", 11, bold=True, anchor="end")
     figure.text(566, 74, "D", 11, bold=True)
     figure.text(498, 124, "G", 11, bold=True)
-    figure.line([(560, 80), (680, 80)], INK, width=2)
-    figure.rect(680, 66, 70, 28, PLAIN, radius=3)
-    figure.text(715, 85, "PTC", 11, bold=True, anchor="middle", check=False)
-    figure.text(715, 58, "~200 mA hold", 11, anchor="middle")
-    figure.line([(750, 80), (920, 80)], INK, width=2, arrow_end=True)
-    figure.text(835, 70, "lane +", 12, anchor="middle")
-    figure.text(835, 100, "to the 5 V pin", 11, anchor="middle", colour=MUTED)
+    figure.line([(560, 80), (920, 80)], INK, width=2, arrow_end=True)
+    figure.text(800, 70, "switched rail, up the mast", 12, anchor="middle")
+    figure.text(800, 100, "8 lanes (a PTC each), the GNSS", 11, anchor="middle", colour=MUTED)
 
     # The gate: 100 kΩ to the cell holds it off; 10 kΩ in series from the driver
-    # pulls it on; 47 nF from gate to drain slows the lane's rise (a Miller soft start).
+    # pulls it on; 220 nF from gate to drain slows the rail's rise (a Miller soft start).
     gate_y = 190
     figure.line([(490, 108), (490, gate_y)], INK, width=1.6)
     figure.line([(300, 80), (300, 105)], INK, width=1.6)
@@ -594,7 +654,7 @@ def lane():
     figure.line([(584, 122), (616, 122)], INK, width=2.4)
     figure.line([(584, 132), (616, 132)], INK, width=2.4)
     figure.line([(600, 132), (600, gate_y), (490, gate_y)], INK, width=1.6)
-    figure.text(624, 132, "47 nF", 12)
+    figure.text(624, 132, "220 nF", 12)
     for x in (300, 490, 600):
         figure.raw(f'<circle cx="{x}" cy="{gate_y}" r="3.5" fill="{INK}"/>')
     figure.raw(f'<circle cx="600" cy="80" r="3.5" fill="{INK}"/>')
@@ -610,7 +670,7 @@ def lane():
     figure.line([(490, 341), (490, 372)], INK, width=1.6)
     ground(490, 372)
     figure.line([(110, 313), (420, 313)], INK, width=1.6, arrow_end=True)
-    figure.text(110, 303, "FireBeetle pin: high = lane on", 12)
+    figure.text(110, 303, "FireBeetle pin: high = rail on", 12)
     figure.raw(f'<circle cx="250" cy="313" r="3.5" fill="{INK}"/>')
     figure.line([(250, 313), (250, 325)], INK, width=1.6)
     resistor(250, 325, 372, "100 kΩ", "left")
@@ -626,9 +686,9 @@ def lane():
                    "at boot: 100 kΩ holds the AO3400 off",
                    f"gate when on: −{3.0 * on_fraction:.1f} to −{4.2 * on_fraction:.1f} V",
                    "AO3401A: specified down to −2.5 V",
-                   f"lane rises ~{slew / 1000:.0f} V/ms: ~{inrush * 1000:.0f} mA into 10 µF",
-                   "power the lane, then its channel",
-                   "cut: the channel first, then power",
+                   f"rail rises ~{slew / 1000:.1f} V/ms: ~{inrush * 1000:.0f} mA into 90 µF",
+                   "power the rail, then the channels",
+                   "cut: the channels first, then power",
                    "never a sensor's USB on a lane",
                ],
                PLAIN)
@@ -752,7 +812,7 @@ def timing(celsius=25):
 
 
 def main():
-    paths = [overview(), receivers(), ring(), flash_sensor(), lane(), power(), card(), timing()]
+    paths = [overview(), layout(), receivers(), ring(), flash_sensor(), lane(), power(), card(), timing()]
     for path in paths:
         print(path.relative_to(HERE.parent.parent))
 

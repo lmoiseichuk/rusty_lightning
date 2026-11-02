@@ -35,39 +35,79 @@ Everything that listens moves onto the roof, on its own solar power, with no
 wire to the house. The panel stays almost as it is, with new firmware: it keeps
 the screen and the log, and talks to the station over Wi-Fi.
 
+![The station from the side](layout.svg)
+
+**The layout.**
+- **The core box** sits on the roof. It holds the FireBeetle, the DS3231, the
+  boost, both cells with their chargers, gauges and NTCs, and the switched
+  rail's switch. The solar panel on its lid shades the cells.
+- **A 50 cm mast**, a fiberglass or plastic tube, rises from the core box. Four
+  sheathed cables and a spare run inside it, in about 15 mm of bore. The SHT45 sits on its side in a radiation
+  shield, out of any box, where it reads the air and not a sun-baked lid.
+- **The octagon** on top holds the four SEN0290s on one plate, the GNSS, the
+  PCA9548A, the 3.3 V regulator and a PTC fuse per lane. Eight arms, one from
+  each side, carry the flash sensors at their ends, each with its lane cable
+  along the arm. Each sensor's window looks out and about 20° up: a flash 7 km
+  up in a cloud sits 10° above the horizon at 40 km and 35° at 10 km.
+- **Why this way.** The boost and the FireBeetle's own regulators end up 50 cm
+  from the SEN0290s instead of beside them. A magnetic near field falls as the
+  cube of the distance, so they are about 42 dB quieter than at 10 cm (approx.).
+  Phase 0 or 1 still measures it.
+- **Wind.** The octagon and its arms are a sail on a thin mast. Give the tube a
+  wide base, keep the arms short and stiff, and take the station down before a
+  big storm.
+- **Height.** The octagon's top stays below the roof's ridge line.
+
+**Up the mast, four sheathed 24 AWG cables, 17 wires, and a spare:**
+
+| Cable | Cores | What |
+| --- | --- | --- |
+| Power | 4 | cell 1's positive for the octagon's regulator, the switched rail, two grounds |
+| Buses | 5 | SDA and SCL of bus A and of bus B, a ground |
+| Interrupts | 5 | the four IRQs, the PCA9548A's RESET |
+| GNSS | 3 | TX, RX, PPS |
+| Spare | 5 | pulled now while the tube is open: SCK, MOSI, MISO, CS and IRQ for the SPI receiver, if it is ever fitted |
+
+Each arm carries a 4-core cable: the switched rail, a ground, SDA and SCL. A
+short 4-core pigtail runs down from the octagon to the SHT45's shield: 3.3 V, a
+ground, and bus A's SDA and SCL.
+- **SCL stays out of the interrupt cable.** During a storm SCL clocks without
+  pause. Its edges, coupled into an IRQ line in the same jacket, would be
+  interrupts no SEN0290 sent.
+- **24 AWG is about 84 mΩ/m.** Over about 0.8 m with slack, the rail's 200 mA or
+  so in a storm drops about 13 mV.
+
 ## Station core
 
 A FireBeetle 2 ESP32-P4 (DFR1237) on an IO shield is the whole station's brain.
 Its P4 runs the AS3935s, the eight flash sensors, GNSS and DS3231 time, and the
 log on its card. Its on-board ESP32-C6, which comes with an antenna attached, is
-the radio, with an ESP32-C3 Pro on UART as the fallback.
+the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box,
+50 cm below everything that listens.
 
 | FireBeetle 2 resource | Used for |
 | --- | --- |
-| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), MAX17043 (0x36), DS3231 (0x68) |
-| I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; a second MAX17043 (0x36) only if a second, separate cell is fitted |
+| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68) |
+| I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
 | 4 GPIOs | one IRQ per SEN0290 |
-| 8 GPIOs, or an expander | the lane switches, one per flash sensor |
+| 1 GPIO | the switched rail: the eight lanes and the GNSS |
 | 1 GPIO | the PCA9548A's RESET |
-| 1 GPIO | the GNSS's power switch |
 | 1 GPIO | the DS3231's 1 Hz output, between GNSS fixes |
-| SPI | optionally a fifth receiver: an AS3935 board with an MA5532-AE antenna |
+| SPI + CS + 1 GPIO | optionally a fifth receiver, with its IRQ: an AS3935 board with an MA5532-AE antenna |
 | UART + 1 GPIO | the ATGM336H-5N-31: sentences and PPS |
-| 2 GPIOs | the CN3065's CHRG and DONE: charging, full or no sun |
-| 2 ADC inputs | the two NTCs on the cell |
+| 4 GPIOs | each CN3065's CHRG and DONE: charging, full or no sun |
+| 2 ADC inputs | one NTC per cell |
 | TF card | 64 GB: a FAT32 partition and the log ring |
 | UART | only if the on-board C6 falls short: an ESP32-C3 Pro with its antenna socket as the radio, nothing more |
 
-**The lane switches** can go through an expander if pins run short, but only one
-whose pins power up as inputs without pull-ups (MCP23008 class). A PCF8574's
-pins come up high, which would switch every lane on at once. Direct GPIOs need
-the same care: a pin that pulls up at reset turns its lane on, so use pins that
-come up floating, away from the strapping, JTAG, USB and UART0 pins.
+**The rail switch's pin** comes up floating, away from the strapping, JTAG, USB
+and UART0 pins, and the switch's gate has a pull-down, so nothing upstairs
+powers on before the firmware says so.
 
 **The PCA9548A's RESET** is pulled low through a resistor and driven high by the
 firmware. Whenever the P4 resets, browns out or trips its watchdog, every
-channel drops at the moment the lanes lose power, and no dead sensor is left on
-bus B.
+channel drops at the moment the switched rail loses power, and no dead sensor is
+left on bus B.
 
 **The bus clock.** Both buses run at 200 kHz rather than 100 kHz, where SCL's
 fifth harmonic falls on 500 kHz, the AS3935's own band. That moves the energy
@@ -77,10 +117,11 @@ to test: phase 4 measures the disturber rate with the ring polling against idle,
 at 100 against 200 kHz.
 
 **Time.** While the GNSS is on, the ATGM336H-5N-31's PPS disciplines the P4's
-clock. To save power the GNSS runs a few minutes every six hours, through its
-own switch. Between fixes the DS3231 (±2 ppm, approx.) keeps the second through
-its 1 Hz output, and the date in its registers; it also covers indoor testing,
-a power loss and a cold start. Each flash sensor gets station time in two steps
+clock. It sits on the switched rail, so it is on through every storm, when its
+PPS matters, and the FireBeetle switches the rail on for a few minutes once a
+day to correct the clock. Between fixes the DS3231 (±2 ppm, about 0.17 s a
+day, approx.) keeps the second through its 1 Hz output, and the date in its
+registers; it also covers indoor testing, a power loss and a cold start. Each flash sensor gets station time in two steps
 over its own lane: a "mark", which the FireBeetle timestamps in its
 transaction-complete interrupt and the sensor in its receive interrupt, then
 "that mark was at t". The sensor's handler sits in IRAM, so a flash write
@@ -93,20 +134,37 @@ call, which the SEN0290 on bus B would also hear.
 
 ![The power chain, from the solar panel to the loads](power.svg)
 
-A 5–6 V panel feeds a CN3065 and a 5000 mAh Li-ion cell (about 18 Wh), with the
-MAX17043 across the cell, before anything converts its voltage:
-- **A 3.3 V linear regulator** serves the SEN0290s, the SHT45, the DS3231 and the
-  GNSS. Below about 3.4 V its rail follows the cell down (approx.: its dropout),
-  which sets the station's floor, about 3.5 V (approx.): below it nothing is
-  written to the card and the ring stays off.
-- **A 5 V boost** serves the FireBeetle, which takes 5 V only.
-- **Eight switches** serve the flash sensors' lanes, straight from the cell.
+One 5–6 V panel, on the core box's lid, feeds two CN3065s. Each charges its own
+5000 mAh Li-ion cell (about 18 Wh), with its own MAX17043 across it, before
+anything converts its voltage. Two cells rather than one bigger one, so the ring
+can never drain the core:
+- **Cell 1, the core.**
+  - It feeds the FireBeetle through the 5 V boost; the FireBeetle takes 5 V
+    only.
+  - It feeds the octagon and the SHT45 below it through a 3.3 V linear
+    regulator up there: the SEN0290s, the SHT45 and the PCA9548A, always on.
+    The regulator must idle in microamps (HT7333 or ME6211 class); an
+    AMS1117-class part idles near 5 mA, about 0.44 Wh a day.
+  - Below about 3.4 V the octagon's 3.3 V follows cell 1 down (approx.: the
+    regulator's dropout), and the boost draws its most current from a low cell.
+    So cell 1 has a floor, about 3.5 V (approx.), read from its gauge: below it
+    nothing is written to the card.
+  - Its MAX17043 sits on bus A.
+- **Cell 2, the switched rail.**
+  - One switch feeds the eight lanes and the GNSS.
+  - The rail is the raw cell, 3.0–4.2 V. The bare ATGM336H-5N-31 is specified
+    for 2.7–3.6 V, so the GNSS gets a small 3.3 V LDO of its own, in the
+    octagon, unless its board carries one. Its UART is 3.3 V either way.
+  - The rail stays off below the same floor on its own cell.
+  - Its MAX17043 sits on bus B, since both gauges are fixed at 0x36.
+- **The SEN0290s stay on.** They detect the storm and wake the FireBeetle,
+  which switches the rail on. All four together draw about 0.3 mA.
 
 The CN3065 is linear, as on the moisture project's relays, so it adds no
-switching noise. Three cautions around it:
+switching noise. Three cautions around each:
 - **The thermostat.** The module brings out no TEMP pin, so a 45 °C
-  normally-closed bimetal thermostat (KSD9700 class) taped to the cell, in series
-  with the solar input, stops charging when the cell is hot.
+  normally-closed bimetal thermostat (KSD9700 class), taped to its cell and in
+  series with that charger's input, stops charging when the cell is hot.
 - **The panel's voltage.** A 6 V-class panel reaches about 7 V open-circuit on a
   cold, bright morning with the cell full, above the CN3065's absolute maximum
   of about 6.5 V (approx.; check the datasheet). Pick a panel whose cold
@@ -130,8 +188,9 @@ switching noise. Three cautions around it:
   about 20 cm away, count its disturbers and noise per minute three ways: with
   no boost, then with each module, each loaded at about 30 and about 80 mA at
   5 V. A scope on the switch node shows whether a module bursts. A module that
-  raises the disturber rate has four remedies, in order:
-  1. move it to the far end of the box from the SEN0290 plate;
+  raises the disturber rate, at 20 cm and again at the real 50 cm, has four
+  remedies, in order:
+  1. turn or move it to the side of the core box away from the mast;
   2. filter its output;
   3. hold it out of bursting with a minimum load (20 mA at 5 V costs about
      2.4 Wh a day);
@@ -140,8 +199,9 @@ switching noise. Three cautions around it:
 - **Not a 150 kHz module:** its third harmonic sits at 450 kHz, a cheap
   oscillator drifts, and it skips pulses at light load.
 - **The FireBeetle's own regulators.** It carries buck converters of its own (to
-  3.3 V, and to the P4's core voltage), right beside the SEN0290 plate. Phase 0
-  or 1 measures the FireBeetle alone, idling, next to one SEN0290.
+  3.3 V, and to the P4's core voltage), in the core box, 50 cm below the
+  SEN0290 plate. Phase 0 or 1 measures the FireBeetle alone, idling, next to
+  one SEN0290: the worst case.
 
 | Load | From the cell (mA) | Duty | Energy (Wh/day) |
 | --- | --- | --- | --- |
@@ -149,15 +209,17 @@ switching noise. Three cautions around it:
 | FireBeetle 2 awake, Wi-Fi off (DFRobot: 80 mA at 5 V) | ~125 | storm hours | 0.47 per hour |
 | Wi-Fi reports (DFRobot: 80 mA average, 1050 mA peak, at 5 V) | | seconds per report | measure |
 | 4 × SEN0290, power LEDs removed | 0.28 | 100 % | 0.02 |
-| GNSS, a few minutes every 6 h, switched | ~25 | ~1 % | 0.01–0.02 |
+| GNSS, on the switched rail: storms, and a few minutes a day | ~25 | storm hours | 0.09 per hour |
 | The SD card, idle, behind the FireBeetle's regulators | measure | 100 % | about 0.1 per mA |
-| Flash-sensor ring, on during storms | 8 × 18–22 (datasheet, 80 MHz, chip only) | storm hours | 0.5–0.65 per hour |
+| Flash-sensor ring, on the switched rail | 8 × 18–22 (datasheet, 80 MHz, chip only) | storm hours | 0.5–0.65 per hour |
 
 The FireBeetle's rows price DFRobot's figures at 5 V through a boost of about
 85 %.
 
-A 5 W panel puts an estimated 17 Wh into the cell on a sunny day and about 1 Wh
-on a dull one (approx.):
+A 5 W panel puts an estimated 17 Wh into the two cells together on a sunny day,
+and about 1 Wh on a dull one (approx.). Each charger takes up to its set
+current, and a full cell's charger stops and leaves the rest to the other, so on
+a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
 - **The 17 Wh** is about five sun-hours of the panel's current, at the cell's
   voltage, since a linear charger turns the rest into heat.
 - **The CN3065 module's current-setting resistor** caps it, so read that before
@@ -166,10 +228,14 @@ on a dull one (approx.):
   so phase 2 measures this station's panel.
 
 **The station's budget:**
-- **Between storms** the base load is about 4.5–5 Wh a day, almost all of it the
-  FireBeetle's deep sleep. Each dull day costs about 4 Wh, so the 18 Wh cell
-  rides out about 4 of them, fewer counting the floor.
-- **A storm hour** adds about 1.1 Wh: the FireBeetle awake plus the ring.
+- **Between storms** cell 1 carries about 4.5–5 Wh a day, almost all of it the
+  FireBeetle's deep sleep. Each dull day costs it about 4 Wh, so it rides out
+  about 4 of them, fewer counting the floor.
+- **Cell 2 rests between storms.** It carries only the daily clock fix, a few
+  minutes of the rail.
+- **A storm hour** costs cell 1 about 0.5 Wh (the FireBeetle awake) and cell 2
+  about 0.6–0.75 Wh (the ring and the GNSS). Cell 2's 18 Wh is about 25 storm
+  hours.
 - **The FireBeetle cannot idle awake.** DFRobot's own figures rule it out: 80 mA
   at 5 V is about 11 Wh a day from the cell. It has to deep-sleep between storms
   and wake on an AS3935 interrupt.
@@ -179,16 +245,9 @@ on a dull one (approx.):
   160 MHz. That is enough for consolidating results, since the flash sensors do
   their own processing.
 
-**The ring decides the rest.**
-- **On only for storms,** it costs 0.5–0.65 Wh per storm hour.
-- **On all day,** it would take 13–16 Wh, more than this panel and cell can
-  carry.
-- **A second cell in parallel** is the room to grow. Match the two cells'
-  voltages before joining them, and give each its own fuse and its own NTC. Keep
-  one CN3065 and one MAX17043, which then see a single 10 Ah cell.
-- **Two separate cells** are the other way: cell 2 feeds the lanes and cell 1
-  the core, each with its own CN3065 and its own MAX17043. The second gauge has
-  the same fixed address, 0x36, so it goes on bus B.
+**The rail on all day**, the ring and the GNSS, would take 15–18 Wh, more than
+cell 2 and its share of the panel can carry. So it is switched on for storms,
+and for a few minutes a day for the clock.
 
 **Power LEDs.** Each SEN0290 carries a red power LED drawing 1–2 mA (approx.),
 and each C3 SuperMini one more; lift their resistors.
@@ -263,20 +322,23 @@ the card, the way the moisture project's `backlog` crate tests its ring.
 
 | Item | Status | Why |
 | --- | --- | --- |
-| FireBeetle 2 and IO shields, SEN0290s, ATGM336H, CN3065, the cell, MAX17043, C3s, TEMT6000s, DS3231, SHT45, MS3625s | on hand | the boards |
-| 45 °C normally-closed bimetal thermostat (KSD9700 class) | on hand | the charge cut-off the CN3065 module cannot give |
-| Two 10 kΩ NTCs | on hand | the cell's temperature on both sides, logged |
+| FireBeetle 2 and IO shields, SEN0290s, ATGM336H, two CN3065s, two cells, two MAX17043s, C3s, TEMT6000s, DS3231, SHT45, MS3625s | on hand | the boards |
+| Two 45 °C normally-closed bimetal thermostats (KSD9700 class) | on hand | the charge cut-off each CN3065 module cannot give |
+| Two 10 kΩ NTCs | on hand | each cell's temperature, logged |
 | A radiation shield for the SHT45 | on hand | air temperature for the speed of sound, humidity, weather in the log |
-| Cable glands, a breathing vent, desiccant, 1 mm stainless mesh | on hand | the white ASA box against rain, condensation and animals |
+| Cable glands, breathing vents, desiccant, 1 mm stainless mesh | on hand | the core box and the octagon against rain, condensation and animals |
 | Acoustic membranes and fur windscreens | on hand | the microphones in rain and wind |
-| PCA9548A, AO3401A and AO3400 | on hand | a channel and a power switch for each lane, and the GNSS's switch |
+| PCA9548A, AO3401A and AO3400 | on hand | a channel for each lane; the switched rail |
 | MAX4466 modules and 6050 electret capsules (−52 dB) | ordered | compare a 6050 against the module's own capsule with a slow low sweep; turn the gain up for distant thunder |
 | 5 V boost: two modules (8628 + SS24, A17v5u + SS12) | on hand | the FireBeetle takes 5 V only; the bench test above picks the quieter |
 | 64 GB high-endurance microSD | check stock | the log ring and the FAT32 partition |
 | Eight BPW34 photodiodes (Vishay's BPW34 and BPW34S differ only in packing) | check stock | the fast light channel |
 | Eight dual rail-to-rail op-amps (MCP6002 or TLV9002 class) | check stock | each photodiode's amplifier and peak detector |
 | Eight low-capacitance analog switches (74LVC1G66 or TS5A3166 class) | check stock | each amplifier's day and night gain |
-| Eight PTC fuses, about 200 mA hold | check stock | one per lane |
+| Eight PTC fuses, about 200 mA hold | check stock | one per lane, in the octagon |
+| Two low-quiescent 3.3 V LDOs (HT7333 or ME6211 class) | check stock | the octagon's always-on rail, and the GNSS on the switched rail |
+| A 50 cm fiberglass or plastic tube, an octagonal box, eight arms, eight small sensor boxes with windows | to make | the mast, the octagon and the arms |
+| Sheathed 24 AWG copper cable: 3, 4 and 5 cores | on hand | up the mast, and along each arm |
 | TVS arrays, 4 lines each (SRV05-4 class), one per lane, and more for the IRQ and power lines | check stock | where the cables enter the box |
 
 ## AS3935 receivers
@@ -303,8 +365,8 @@ marked confirmed when two or more agree within a few milliseconds. A USB plug-in
 or a neighbour's hammer reaches all four at once, so votes catch only local
 faults; they do not replace the satellite check.
 
-**They arm the ring.** Any board's strike switches the flash sensors on (below),
-and wakes the FireBeetle. The boards hear storms out to about 40 km: they miss
+**They arm the rail.** Any board's strike wakes the FireBeetle, which switches
+the flash sensors and the GNSS on (below). The boards hear storms out to about 40 km: they miss
 single flashes, not whole storms.
 
 **Different tuning, one way.** Three boards run the panel's noise-floor tuner;
@@ -321,8 +383,8 @@ unit, so this is an experiment: compare it with GLM.
 is a statistical estimate in 15 bins up to 40 km, which read 6–14 km for flashes
 GLM placed tens of kilometres away.
 
-**Mounting and tuning.** The four boards lie flat on one plastic plate, at least
-10 cm apart. The self-test sets one antenna oscillating at 500 kHz, which its
+**Mounting and tuning.** The four boards lie flat on one plastic plate in the
+octagon, at least 10 cm apart. The self-test sets one antenna oscillating at 500 kHz, which its
 neighbours hear, so tune one board at a time, then clear every board's
 statistics. Each board has its own IRQ line.
 
@@ -337,10 +399,11 @@ combining four reports into one.
 
 ## Flash sensors
 
-![Eight flash sensors around the core, each on its own lane](ring.svg)
+![Eight flash sensors on the octagon's arms, each on its own lane](ring.svg)
 
-Eight identical flash sensors sit around the FireBeetle, each facing its own 45°
-sector, each on its own 4-wire lane: the cell's positive, GND, SDA and SCL. A
+Eight identical flash sensors sit at the ends of the octagon's arms, each facing
+its own 45° sector, each on its own 4-wire lane: the switched rail, GND, SDA and
+SCL. A
 star rather than a chain, so a broken or wet cable costs one sensor, not every
 sensor after it. Each is an ESP32-C3 (SuperMini or C3 Pro) with two light
 channels, a BPW34 photodiode and a TEMT6000, and two sound channels, a MAX4466
@@ -349,20 +412,21 @@ results, never raw signals.
 
 **On for storms.**
 - **Switching on.** When any SEN0290 reports a strike, the FireBeetle switches
-  all eight lanes on. The sensors boot in well under a second (approx.) and stay
+  the rail on, and with it all eight sensors and the GNSS. The sensors boot in well under a second (approx.) and stay
   awake, sampling, at 80 MHz; anything from 40 to 160 MHz will do.
-- **Switching off.** After an hour without a strike the lanes go off, and a
-  switched-off lane draws nothing.
-- **The cell comes first.** Arming is refused below the floor.
+- **Switching off.** After an hour without a strike the rail goes off, and a
+  switched-off rail draws nothing.
+- **Cell 2 comes first.** Arming is refused below its floor.
 - **The log shows what it costs.** It records each arming and the ring's hours
   a day. A board that reports false strikes more often than hourly (the fully
-  open fourth is the likeliest) would keep the ring on, and that would show
+  open fourth is the likeliest) would keep the rail on, and that would show
   there.
 - **What it loses** is the light of the first flash of a storm that forms
   overhead. That flash's thunder still arrives seconds later, after the sensors
   are up.
-- **The console setting.** `ring storm` is the default. `ring on` keeps the ring
-  on all the time, for testing or a bigger supply, and `ring off` silences it.
+- **The console setting.** `rail storm` is the default. `rail on` keeps the
+  rail, the ring and the GNSS, on all the time, for testing or a bigger supply.
+  `rail off` stops storms from arming it, but the daily clock fix still runs.
 
 **Why awake, and why a C3.**
 - **Why awake.** A sleeping C3 wakes only on a digital edge. A sensor that slept
@@ -377,8 +441,8 @@ results, never raw signals.
     80 MHz with the peripherals clocked, 25 mA against 18.
 
 **One PCA9548A channel per lane.**
-- **Isolation.** A stuck sensor or a wet lane is switched off alone, and each
-  lane's capacitance counts on its own.
+- **Isolation.** A stuck sensor's bus is switched off alone, and each lane's
+  capacitance counts on its own.
 - **One address.** Every sensor answers at 0x10, which must stay clear of
   everything else on bus B: 0x01, 0x36 and 0x70. All eight carry the same image,
   and the channel is a sensor's place.
@@ -389,35 +453,44 @@ results, never raw signals.
   its own 3.3 V. At 200 kHz the limit is the 300 ns rise time, about 230 pF with
   1.5 kΩ (approx.), so measure a lane's edge in phase 4.
 
-![One lane's power switch](lane.svg)
+![The switched rail's power switch](lane.svg)
 
-**A switch per lane.** An AO3401A on the high side, driven by an AO3400, with a
-PTC fuse after it:
+**One switch for the rail.** An AO3401A on the high side of cell 2, driven by an
+AO3400, in the core box, feeds all eight lanes and the GNSS. Each lane has its
+own PTC fuse in the octagon. A sensor is rebooted first by a command over I2C;
+it has no power switch of its own.
 - **Not the AO3401A alone:** its source sits on the cell at up to 4.2 V, so a
   3.3 V pin at its gate leaves −0.9 V, inside its −0.5 to −1.3 V threshold, and
   "off" may still be half on.
 - **Not the AO3400 alone, switching the ground side:** the sensor's ground would
   float while SDA and SCL stay connected, and it would power itself through the
   bus.
-- **Off by default.** Lanes come up one at a time, as follows:
-  1. The firmware writes "lane k going on" to NVS, then powers the lane.
-  2. It selects the lane's PCA9548A channel.
-  3. It clears the note once the sensor answers.
-  4. If the lane shorts and browns the station out, the next boot finds the
-     note and leaves lane k off.
-- **A wet lane** leaking tens of milliamps causes no brownout, which is what the
-  PTC (about 200 mA hold) is for.
-- **A soft start.** 47 nF from gate to drain slows the lane's rise to a few
-  volts per millisecond (approx.), so the sensor's capacitors charge at tens of
-  milliamps. Check the cell rail on a scope as a lane switches on: the aim is no
-  dip.
-- **Cutting a lane:** its channel first, then its power. A P4 reset does both at
-  once, through the PCA9548A's RESET.
+- **Off by default.** The rail comes on only when the firmware switches it on,
+  and the lanes' PCA9548A channels after it. The rail runs on cell 2 and the
+  FireBeetle on cell 1, so a short on the rail can collapse cell 2 but never the
+  core. If cell 2 sags hard as the rail comes on, the firmware switches it off
+  again and says so.
+- **A wet lane** is the PTC's job (about 200 mA hold). It opens on that lane
+  alone, and the PCA9548A drops that lane's bus.
+- **A soft start.** All eight sensors and the GNSS charge through the one
+  switch, about 90 µF together (approx.). 220 nF from gate to drain slows the
+  rail's rise to about 1.3 V/ms, so they charge at about 120 mA (approx.).
+  Check cell 2 on a scope as the rail switches on, and cell 1 for any coupling:
+  the aim is no dip.
+- **Cutting the rail:** the channels first, then its power. A P4 reset does both
+  at once, through the PCA9548A's RESET and the switch's pull-down.
+- **The GNSS's UART, while the rail is off.** The firmware sets its TX, RX and
+  PPS pins to inputs without pull-ups, and a 1 kΩ resistor sits in series with
+  the P4's TX, so an idle-high line does not power the GNSS through its inputs.
 - **Never plug a sensor's USB in while it is on a lane.** The SuperMini's 5 V
-  pin is its USB supply, and the AO3401A's body diode would carry that into the
-  station's cell.
-- **A sensor that stops answering** is power-cycled through its switch; no trip
-  to the roof.
+  pin is its USB supply, and the AO3401A's body diode would carry that into
+  cell 2.
+- **A sensor that stops answering** is restarted in three steps, with no trip to
+  the roof:
+  1. a reboot command over I2C;
+  2. its own watchdog, if it cannot hear even that;
+  3. failing both, the FireBeetle cycles the whole rail, which costs every
+     sensor a few seconds.
 - **Each sensor board's regulator.** The SuperMini's ME6211 runs the C3 to a
   cell of about 3.4 V (approx.). A board with an AMS1117-class regulator, about
   1 V of dropout, would not run from a Li-ion cell at all, so check the C3 Pros
@@ -572,7 +645,7 @@ over Wi-Fi in seconds; updates still wait for a storm-free day.
 - **Two app slots with rollback.** A new image confirms itself only after these
   three checks:
   - every device that answered under the previous image answers again. That list
-    is kept in NVS, and the lanes are powered one at a time for the check.
+    is kept in NVS, and the rail is switched on for the check.
   - the panel acknowledges a report.
   - the loop has run 5 minutes under the watchdog.
 - **Safe mode** after three failed boots in a row: sensors off, radio and
@@ -581,9 +654,9 @@ over Wi-Fi in seconds; updates still wait for a storm-free day.
   lines appear on the panel as `station: …`, and `station <command>` sends one.
 - **Every setting in NVS**, each with a command, so tuning never needs an image.
   Flash-sensor images ride along and go out over I2C.
-- **Lanes.** A sensor that stops answering is power-cycled through its switch. A
-  lane that browned the station out stays off after the next boot, and the
-  station says so.
+- **The rail.** A sensor that stops answering gets a reboot command over I2C,
+  then its own watchdog, then a cycle of the whole rail. A rail that drags
+  cell 2 down is switched off and reported.
 - **Its own transmits.** Mark any AS3935 interrupt within about 10 ms of a Wi-Fi
   transmit as `own`. Measure first: one report a second for 10 minutes against a
   quiet baseline.
@@ -591,24 +664,25 @@ over Wi-Fi in seconds; updates still wait for a storm-free day.
 **The roof.**
 
 - **Lightning.** The station must not be the highest point: keep it low, away
-  from the ridge. Solar plus radio means no wire into the house, the main
-  protection. TVS diodes where cables enter the box. A direct hit costs the
-  station.
+  from the ridge, with the octagon's top below the ridge line. Solar plus radio means no wire into the house, the main
+  protection. TVS diodes where cables enter each box: the mast's lines at both
+  ends, and each lane at its sensor. A direct hit costs the station.
 - **Plastic near the antennas.** Aluminium's skin depth at 500 kHz is 0.12 mm: a
   metal box blinds the SEN0290s.
-- **Heat.** The white ASA box resists sun and UV, but a roof surface in summer
+- **Heat.** White ASA boxes resist sun and UV, but a roof surface in summer
   sun reaches 60–70 °C (approx.).
-  - Shade the Li-ion cell under the solar panel and give it airflow.
-  - The bimetal thermostat on the cell breaks the solar input above 45 °C and
+  - The panel on the core box's lid shades both cells; give them airflow.
+  - Each cell's bimetal thermostat breaks its charger's input above 45 °C and
     closes again near 35 °C. It is passive, so it works even if the firmware
     hangs.
-  - The two 10 kΩ NTCs, one on each side of the cell, go to FireBeetle ADC
-    inputs for logging and a firmware alarm.
+  - The two 10 kΩ NTCs, one on each cell, go to FireBeetle ADC inputs for
+    logging and a firmware alarm.
   - The MCU's die temperature runs hotter and lags, so it serves for logging
     only.
   - Discharge is fine to 60 °C. LiFePO4 copes better, for a later version.
-- **Water and animals.** IP66 box, cable glands, drip loops, a breathing vent,
-  desiccant; 1 mm stainless mesh over every opening against ants, wasps, frogs
+- **Water and animals.** IP66 boxes for the core and the octagon, cable glands,
+  drip loops, a breathing vent and desiccant in each; the sensor boxes have
+  sealed windows; 1 mm stainless mesh over every opening against ants, wasps, frogs
   and lizards. A spider web over a TEMT6000 triggers it at night.
 - **Storm winds.** Through-bolt everything, or plan to take it down before a
   big storm.
@@ -629,9 +703,9 @@ ground network such as Blitzortung, or ears with times noted.
 | --- | --- | --- |
 | 0. Roof survey | a C3 with one SEN0290 on a cell at the roof spot for 30 minutes; Wi-Fi from the roof spot to the panel | under 0.1 disturbers a second, 30 times under the 3.1 measured indoors on the cell; the link delivers every frame |
 | 1. Does it hear outside | the FireBeetle 2 with one SEN0290, the DS3231, the card and the cell; reports over Wi-Fi; the FireBeetle alone beside one SEN0290, idling | one storm with at least 50 GLM flashes within 20 km: at least 50 % detected (indoors: a tenth at best), unmatched strikes at most 20 % of detections |
-| 2. Self-powered on the roof | solar panel, CN3065, MAX17043, 5 V boost, SHT45, ATGM336H; deep sleep between storms; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the boost running; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero over 7 days with 2 dull ones; cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption |
+| 2. Self-powered on the roof | solar panel, two CN3065s, two cells and MAX17043s, 5 V boost, SHT45, the rail switch with the ATGM336H on it; deep sleep between storms; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the boost running; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero on each cell over 7 days with 2 dull ones; each cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption |
 | 3. Four receivers | three more SEN0290s, rods at 45° steps | misses spread evenly across bearings; the energy-ratio bearing's error against GLM reported |
-| 4. One flash sensor | a C3 with a BPW34 and its op-amp, a TEMT6000, a MAX4466 and an MS3625 on one switched lane; time marks; OTA over I2C; storm arming | time-mark error measured; at night at least 50 % of GLM flashes within 20 km seen by light, under 1 false trigger an hour; thunder onsets for at least 50 % of strikes under 10 km; the lane up within a second of a strike; the disturber rate with the ring polling against idle, and at 100 against 200 kHz; a lane's rise time on a scope |
+| 4. One flash sensor | a C3 with a BPW34 and its op-amp, a TEMT6000, a MAX4466 and an MS3625 on one lane of the switched rail; time marks; OTA over I2C; storm arming | time-mark error measured; at night at least 50 % of GLM flashes within 20 km seen by light, under 1 false trigger an hour; thunder onsets for at least 50 % of strikes under 10 km; the rail up within a second of a strike; the disturber rate with the ring polling against idle, and at 100 against 200 kHz; a lane's rise time on a scope |
 | 5. Full ring | the other seven sensors, calibrated with a strobe | night bearings within ±20° of GLM |
 
 **The season.** The proposal was written as the lightning season ended, so the
@@ -646,8 +720,8 @@ before it:
 - the MAX4466 against the 6050 capsules;
 - the log ring, on a PC and then on a card with the power pulled mid-write;
 - one flash sensor on the bench: its peak detector against a camera flash, its
-  time-mark error, a lane switching on with the cell rail on a scope, and an
-  update over I2C.
+  time-mark error, the rail switching on with cell 2's voltage on a scope, a
+  reboot and an update over I2C.
 
 ## Open questions
 
@@ -664,8 +738,10 @@ before it:
 - [ ] **The SD card.** Its idle current. The FireBeetle's schematic appears to
   switch the card's supply; check that its data-line pull-ups go off with it.
 - [ ] **The C3 Pros' regulator.** Do they run from a Li-ion cell?
-- [ ] **The roof spot.** Low and away from the ridge; shade for the cell; how far
-  from the A/C condenser and the panel?
+- [ ] **The roof spot.** Low and away from the ridge; how far from the A/C
+  condenser and the panel?
+- [ ] **The arms.** How long? Long enough that the octagon stays out of each
+  window's view, short enough to stay stiff in wind.
 - [ ] **The radio.** ESP-NOW, as the relays use, or Wi-Fi for the link?
 - [ ] **Strobe calibration.** Calibrate the ring once at known bearings, on a
   turntable or across the yard?

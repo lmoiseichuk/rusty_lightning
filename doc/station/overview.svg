@@ -10,15 +10,16 @@
 <text x="52.0" y="303.0" font-size="12" text-anchor="start" fill="#1f2933">screen, CSV log, console</text>
 <text x="52.0" y="321.0" font-size="12" text-anchor="start" fill="#1f2933">its SEN0290: indoor tests</text>
 <rect x="300.0" y="50.0" width="720.0" height="500.0" rx="12" fill="#f2f4f6" stroke="#7b8794" stroke-width="1.6" stroke-dasharray="6 4"/>
-<text x="316.0" y="76.0" font-size="14" font-weight="bold" text-anchor="start" fill="#7b8794">Roof: low, away from the ridge, white ASA box</text>
+<text x="316.0" y="76.0" font-size="14" font-weight="bold" text-anchor="start" fill="#7b8794">Roof: low, away from the ridge, white ASA boxes</text>
 <rect x="320.0" y="95.0" width="170.0" height="70.0" rx="8" fill="#efe7fa" stroke="#6b46c1" stroke-width="1.6" stroke-dasharray="6 4"/>
 <text x="332.0" y="117.0" font-size="14" font-weight="bold" text-anchor="start" fill="#6b46c1">ESP32-C3 Pro</text>
 <text x="332.0" y="135.0" font-size="12" text-anchor="start" fill="#1f2933">fallback radio</text>
 <text x="332.0" y="153.0" font-size="12" text-anchor="start" fill="#1f2933">antenna socket</text>
-<rect x="510.0" y="95.0" width="240.0" height="70.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
-<text x="522.0" y="117.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">4 × SEN0290 (AS3935)</text>
-<text x="522.0" y="135.0" font-size="12" text-anchor="start" fill="#1f2933">rods at 0°, 45°, 90°, 135°</text>
-<text x="522.0" y="153.0" font-size="12" text-anchor="start" fill="#1f2933">one IRQ line each</text>
+<rect x="510.0" y="90.0" width="240.0" height="88.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
+<text x="522.0" y="112.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">4 × SEN0290 (AS3935)</text>
+<text x="522.0" y="130.0" font-size="12" text-anchor="start" fill="#1f2933">in the octagon, 50 cm up</text>
+<text x="522.0" y="148.0" font-size="12" text-anchor="start" fill="#1f2933">rods at 0°, 45°, 90°, 135°</text>
+<text x="522.0" y="166.0" font-size="12" text-anchor="start" fill="#1f2933">one IRQ line each</text>
 <rect x="510.0" y="245.0" width="240.0" height="88.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
 <text x="522.0" y="267.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">FireBeetle 2 ESP32-P4</text>
 <text x="522.0" y="285.0" font-size="12" text-anchor="start" fill="#1f2933">P4: receivers, ring, time, log</text>
@@ -32,19 +33,19 @@
 <text x="832.0" y="316.0" font-size="12" text-anchor="start" fill="#1f2933">on for storms</text>
 <rect x="320.0" y="405.0" width="230.0" height="88.0" rx="8" fill="#e0f4f4" stroke="#2c7a7b" stroke-width="1.6"/>
 <text x="332.0" y="427.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2c7a7b">Time and weather</text>
-<text x="332.0" y="445.0" font-size="12" text-anchor="start" fill="#1f2933">ATGM336H-5N-31 with PPS</text>
-<text x="332.0" y="463.0" font-size="12" text-anchor="start" fill="#1f2933">DS3231: no satellites</text>
-<text x="332.0" y="481.0" font-size="12" text-anchor="start" fill="#1f2933">SHT45: speed of sound</text>
+<text x="332.0" y="445.0" font-size="12" text-anchor="start" fill="#1f2933">GNSS with PPS: the octagon</text>
+<text x="332.0" y="463.0" font-size="12" text-anchor="start" fill="#1f2933">DS3231: the core box</text>
+<text x="332.0" y="481.0" font-size="12" text-anchor="start" fill="#1f2933">SHT45: shielded, on the mast</text>
 <rect x="590.0" y="405.0" width="410.0" height="124.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="602.0" y="427.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">Power</text>
-<text x="602.0" y="445.0" font-size="12" text-anchor="start" fill="#1f2933">5–6 V solar panel → 45 °C thermostat → CN3065</text>
-<text x="602.0" y="463.0" font-size="12" text-anchor="start" fill="#1f2933">5000 mAh Li-ion, two NTCs, MAX17043 gauge</text>
-<text x="602.0" y="481.0" font-size="12" text-anchor="start" fill="#1f2933">3.3 V regulator: SEN0290s, SHT45, DS3231, GNSS</text>
-<text x="602.0" y="499.0" font-size="12" text-anchor="start" fill="#1f2933">5 V boost, chosen by its noise: the FireBeetle</text>
-<text x="602.0" y="517.0" font-size="12" text-anchor="start" fill="#1f2933">8 switched lanes: the flash sensors</text>
-<polyline points="630.0,165.0 630.0,245.0" fill="none" stroke="#2f6fae" stroke-width="1.6" stroke-linejoin="round"/>
+<text x="602.0" y="445.0" font-size="12" text-anchor="start" fill="#1f2933">solar panel on the core box → two chargers</text>
+<text x="602.0" y="463.0" font-size="12" text-anchor="start" fill="#1f2933">cell 1, its own MAX17043: the core</text>
+<text x="602.0" y="481.0" font-size="12" text-anchor="start" fill="#1f2933">cell 2, its own MAX17043: ring and GNSS</text>
+<text x="602.0" y="499.0" font-size="12" text-anchor="start" fill="#1f2933">3.3 V regulator in the octagon</text>
+<text x="602.0" y="517.0" font-size="12" text-anchor="start" fill="#1f2933">5 V boost, chosen by its noise: the FireBeetle</text>
+<polyline points="630.0,178.0 630.0,245.0" fill="none" stroke="#2f6fae" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="630.0,245.0 634.5,235.0 625.5,235.0" fill="#2f6fae"/>
-<text x="640.0" y="205.0" font-size="12" text-anchor="start" fill="#2f6fae">I2C A (3 boards), I2C B (1), 4 IRQs</text>
+<text x="640.0" y="214.0" font-size="12" text-anchor="start" fill="#2f6fae">up the mast: I2C A and B, 4 IRQs</text>
 <polyline points="405.0,165.0 405.0,268.0 510.0,268.0" fill="none" stroke="#6b46c1" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="6 4"/>
 <text x="413.0" y="258.0" font-size="12" text-anchor="start" fill="#6b46c1">UART</text>
 <polyline points="250.0,305.0 510.0,305.0" fill="none" stroke="#6b46c1" stroke-width="2.4" stroke-linejoin="round"/>
