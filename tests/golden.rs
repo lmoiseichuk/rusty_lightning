@@ -76,33 +76,6 @@ fn main() {
         Combo::unpack(combo(0, 0, 0, true).pack()) == combo(0, 0, 0, true),
     );
 
-    println!("\n  which of two is more open");
-    let base = combo(3, 2, 0, false);
-    check("equal counts as at least as open", base.at_least_as_open_as(base));
-    check(
-        "a lower noise floor is more open",
-        combo(1, 2, 0, false).at_least_as_open_as(base),
-    );
-    check(
-        "a higher noise floor is not",
-        !combo(5, 2, 0, false).at_least_as_open_as(base),
-    );
-    check(
-        "a higher watchdog is not",
-        !combo(3, 4, 0, false).at_least_as_open_as(base),
-    );
-    // **The knobs do not trade.** A strike the watchdog discarded is not
-    // recovered by a lower noise floor, so a gain in one must not pay for a
-    // loss in another.
-    check(
-        "a lower floor does not pay for a higher watchdog",
-        !combo(0, 4, 0, false).at_least_as_open_as(base),
-    );
-    check(
-        "across a gain change the answer is no",
-        !combo(0, 0, 0, true).at_least_as_open_as(base),
-    );
-
     println!("\n  the fall-back rule");
     let good = combo(1, 2, 0, false);
     let deaf = combo(6, 2, 0, false);
@@ -117,7 +90,7 @@ fn main() {
     );
     check(
         "trusted, deaf and quiet a long time -- go back",
-        fall_back_to(deaf, trusted(good), PATIENCE_MINUTES) == Some(good),
+        fall_back_to(deaf, trusted(good), PATIENCE_MINUTES) == Some(good.nf),
     );
     check(
         "...but not before the patience runs out",
@@ -136,6 +109,30 @@ fn main() {
     check(
         "a record from the other gain does not apply",
         fall_back_to(deaf, trusted(combo(1, 2, 0, true)), 600).is_none(),
+    );
+
+    // **The noise floor is all the rescue moves, so it is all it compares.**
+    // Comparing the other two made a rescue that no move of `nf` could finish:
+    // with the chip at sr 2 against a record at sr 1 -- `srej 2` typed after a
+    // trusted record -- it fired every window and froze the walk.
+    let record = combo(3, 0, 1, false);
+    check(
+        "at the record's nf with a deafer srej, there is nothing to do",
+        fall_back_to(combo(3, 0, 2, false), trusted(record), PATIENCE_MINUTES + 5).is_none(),
+    );
+    check(
+        "...nor with a stored watchdog above the record's",
+        fall_back_to(combo(3, 2, 1, false), trusted(record), 600).is_none(),
+    );
+    // And the other way it went wrong: a noise floor more open than the
+    // record's, with a higher srej, was "returned" up to the record's rung.
+    check(
+        "a noise floor more open than the record's is never pulled up to it",
+        fall_back_to(combo(1, 0, 2, false), trusted(record), 600).is_none(),
+    );
+    check(
+        "deafer in nf and srej both: the noise floor comes back, and only it",
+        fall_back_to(combo(5, 0, 2, false), trusted(record), PATIENCE_MINUTES) == Some(3),
     );
 
     println!("\n  building the record");
@@ -162,8 +159,7 @@ fn main() {
     // the sky is not the likeliest explanation.
     check(
         "a deaf tuner in a storm is pulled back",
-        fall_back_to(combo(6, 2, 0, false), trusted(combo(1, 2, 0, false)), 30)
-            == Some(combo(1, 2, 0, false)),
+        fall_back_to(combo(6, 2, 0, false), trusted(combo(1, 2, 0, false)), 30) == Some(1),
     );
     // And the reverse: an honestly quiet night at the known-good setting is
     // left entirely alone, however long it lasts.

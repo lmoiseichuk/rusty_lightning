@@ -271,11 +271,13 @@ impl Tuning {
     ///
     /// Separate from [`Tuner::due`] because freezing the tuner must not stop
     /// the device *measuring* — only deciding. See [`Tuner::publish`].
-    /// Whether to return to the last combination known to have heard lightning.
+    /// Whether to return to the noise floor of the last combination known to
+    /// have heard lightning, and which rung that is.
     ///
     /// All the judgement is in `golden::fall_back_to`, which is host-tested;
-    /// this only gathers the four current settings and the silence.
-    fn rescue(&self, now_ms: u32) -> Option<crate::golden::Combo> {
+    /// this only gathers the current settings and the silence. It compares the
+    /// noise floor and the gain, because the noise floor is all it moves.
+    fn rescue(&self, now_ms: u32) -> Option<u8> {
         // A frozen tuner is under explicit operator control, and a sweep owns
         // the point for its duration. Neither should be overruled.
         //
@@ -288,6 +290,10 @@ impl Tuning {
         if self.frozen || self.sweep.is_some() || self.dip_restore.is_some() {
             return None;
         }
+        // All four, so the comparison is handed the device as it is; it reads
+        // `nf` and the gain. A watchdog or spike rejection deafer than the
+        // record's is a person's setting, which the rescue does not overrule
+        // -- and comparing them is what once froze the walk.
         let current = crate::golden::Combo {
             nf: self.point.raw() as u8,
             wdth: crate::settings::watchdog().unwrap_or(0),
@@ -438,16 +444,21 @@ impl Tuning {
         // Deliberately not a competing controller: it can only move the point
         // toward something already proved, never past it, and it does nothing
         // at all until the record is trusted and the patience has run out.
+        //
+        // **The noise floor only.** The rescue compares and moves `nf` and
+        // nothing else; a deafer `wdth` or `srej` is a person's, and comparing
+        // them made a rescue that could never finish fire every window, which
+        // froze the walk below -- see `golden::fall_back_to`.
         let rescue = self.rescue(now_ms);
-        if let Some(combo) = rescue {
+        if let Some(nf) = rescue {
             println!(
                 "gold: nothing heard for {}+ min at nf {} -- returning to nf {}, which has heard {} strike(s) here",
                 crate::golden::PATIENCE_MINUTES,
                 self.point.raw(),
-                combo.nf,
+                nf,
                 crate::settings::golden().map(|g| g.strikes).unwrap_or(0),
             );
-            self.point = defence::Point::new(combo.nf as u16);
+            self.point = defence::Point::new(nf as u16);
             if let Err(e) = session::apply(sensor, i2c, self.point) {
                 println!("gold: could not program -- {e}");
             }

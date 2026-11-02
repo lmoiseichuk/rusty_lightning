@@ -159,26 +159,6 @@ impl Combo {
             outdoor: (packed >> 11) & 1 == 1,
         }
     }
-
-    /// Whether `self` is at least as able to hear a weak strike as `other`.
-    ///
-    /// **Only comparable at the same gain.** Across a gain change the question
-    /// is meaningless and the honest answer is "no", not a guess.
-    ///
-    /// Deafness here is ordered by the three knobs that can lose a strike, each
-    /// of which loses it a different way: `nf` by refusing to look at a signal
-    /// that quiet, `wdth` by discarding a waveform that rises that slowly,
-    /// `srej` by discarding one that short. Lower is more receptive in all
-    /// three, so this is a plain per-field comparison and not a score — a score
-    /// would let a gain in one knob pay for a loss in another, and they do not
-    /// trade: a strike rejected by the watchdog is not recovered by a lower
-    /// noise floor.
-    pub fn at_least_as_open_as(self, other: Combo) -> bool {
-        self.outdoor == other.outdoor
-            && self.nf <= other.nf
-            && self.wdth <= other.wdth
-            && self.srej <= other.srej
-    }
 }
 
 /// A combination that has demonstrably heard lightning, and how often.
@@ -211,7 +191,8 @@ pub const TRUSTED_STRIKES: u32 = 2;
 /// every three to five minutes gives this several chances.
 pub const PATIENCE_MINUTES: u32 = 20;
 
-/// Whether the tuner should be pulled back to a combination known to work.
+/// Whether the tuner should be pulled back toward a combination known to work,
+/// and to which noise floor.
 ///
 /// The rule, in one sentence: **if the device is deafer than something that
 /// provably heard lightning here, and it has heard nothing for a long time,
@@ -222,13 +203,33 @@ pub const PATIENCE_MINUTES: u32 = 20;
 /// the knowledge that this room *has* produced strikes at a more open setting,
 /// it becomes evidence about the receiver instead.
 ///
-/// Returns `None` when there is nothing to say — no record, not yet trusted, a
-/// different gain, or the tuner already at least as open as the record.
+/// **The noise floor is the only knob the rescue moves, so it is the only one
+/// it compares.** `wdth` and `srej` are a person's settings -- `wdth <n>` and
+/// `srej <n>` write them, and boot reconciles them with a trusted record
+/// (`defence::spike_rejection_at_boot`) -- and the rescue does not overrule a
+/// person in the middle of a session. Until 0.22.1 it compared all three and
+/// moved one, which failed two ways:
+///
+/// * **It froze the walk.** With the chip at `sr 2` and a record at `sr 1` --
+///   one `srej 2` typed after a trusted record, which 0.22.0's boot warning
+///   invites -- or a stored watchdog above the record's, no move of `nf` could
+///   make the device "as open as the record". So once the patience ran out it
+///   fired every window: re-applied the same rung, restarted the window and
+///   returned before the walk, so the hold, the climb, the dip, stuck detection
+///   and the save all stopped until a located strike or a restart, even if the
+///   rung began to drown.
+/// * **It could deafen.** With the noise floor already more open than the
+///   record's and `srej` higher, it "returned" the point *up* to the record's
+///   rung.
+///
+/// Returns `None` when there is nothing to say -- no record, not yet trusted, a
+/// different gain, a noise floor already at the record's or more open, or not
+/// yet quiet for long enough. Otherwise the record's `nf`.
 pub fn fall_back_to(
     current: Combo,
     golden: Option<Golden>,
     quiet_minutes: u32,
-) -> Option<Combo> {
+) -> Option<u8> {
     let golden = golden?;
     if golden.strikes < TRUSTED_STRIKES {
         return None;
@@ -237,15 +238,15 @@ pub fn fall_back_to(
     if golden.combo.outdoor != current.outdoor {
         return None;
     }
-    // Already as open, or more so: nothing to go back to, and forcing the point
-    // would *reduce* sensitivity.
-    if current.at_least_as_open_as(golden.combo) {
+    // At the record's rung, or more open: nothing to go back to, and forcing
+    // the point would *reduce* sensitivity. Lower `nf` looks at more.
+    if current.nf <= golden.combo.nf {
         return None;
     }
     if quiet_minutes < PATIENCE_MINUTES {
         return None;
     }
-    Some(golden.combo)
+    Some(golden.combo.nf)
 }
 
 /// Fold a strike heard at `combo` into the record.

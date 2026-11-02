@@ -674,7 +674,11 @@ used three ways:
 * **As a rescue.** If the tuner sits deafer than the record and hears nothing
   for 20 minutes, it returns to the record and says so. Silence at a deafer
   setting than one this room has produced strikes at is evidence about the
-  receiver, not about the sky.
+  receiver, not about the sky. **It moves the noise floor, and compares only
+  that**: a watchdog or spike rejection deafer than the record's is a setting
+  somebody typed, which boot reconciles with the record and the rescue leaves
+  alone. (Until 0.22.1 it compared all three, so after `srej 2` on top of a
+  record at `sr 1` it could never finish, fired every minute and froze the walk.)
 * **As a report.** `golden` prints it.
 
 Two strikes are needed before the record is trusted. **One is not evidence that
