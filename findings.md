@@ -322,7 +322,8 @@ LM, on the board's sleep: "you can lock board on 160mgz no sleep", then "add
 console command". The board sits indoors on USB, a daily 08:00 cross-check
 against GOES-19 reads its log, and every console open restarts it. 0.22.1's
 no-light-sleep image was flashed for that; this is the default image's way to
-do the same. **Not verified on the board.**
+do the same. The feature is c615f2f0825a, released as 0.22.2. **Not verified
+on the board.**
 
 **What the board needs after the 0.22.2 default image is flashed**, once:
 `./tools/send.py --clock "awake on"` (or `release/send.py --port <by-id path>
