@@ -691,11 +691,12 @@ coming in (distance ↓), moving out (distance ↑), stronger (same distance, hi
 >
 > Two deliberate asymmetries:
 >
-> * **`Totals::strikes` counts flashes; `Batch::strikes` still counts strokes.** The batch figure's
->   confirmed part — strokes that carried a distance, `Batch::confirmed` — is §4.2's evidence that
->   lightning is present, and the strike-hold rule wants all of it; the totals figure is what a
->   person reads. Since 0.22.0 an `overhead` stroke is in the totals and not in the evidence, and
->   a merged flash teaches the device what its recorded distance says (`golden::may_record`).
+> * **`Totals::strikes` counts flashes; `Batch::strikes` still counts strokes.** The batch figure is
+>   what the strike-hold rule reads, and it wants all of them; its confirmed part — strokes that
+>   carried a distance, `Batch::confirmed` — is what a dip and the rescue read; the totals figure is
+>   what a person reads. Since 0.22.0 an `overhead` stroke is in the totals and the hold and not in
+>   the evidence, and a merged flash teaches the device what its recorded distance says
+>   (`golden::may_record`).
 > * **Overhead is not averaged into the distance.** With no measured kilometres in the window,
 >   overhead wins if any stroke reported it — folding it in as a number is the bug `history::Bucket`
 >   documents at length.

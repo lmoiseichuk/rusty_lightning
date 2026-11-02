@@ -21,13 +21,23 @@
 //!
 //! ## And the second one, since 0.22.0
 //!
-//! A lightning interrupt is not, by itself, a strike the tuner may act on. The
-//! chip's `overhead` reading has been man-made every time it could be checked
-//! -- see `golden::is_evidence` -- and a window that held for it, or a dip that
-//! stayed open for it, was being steered by the hammer next door. So a
-//! [`Batch`] counts every lightning interrupt for the console, and separately
-//! the ones that are evidence; a [`Window`] carries only the second kind into
-//! the decisions, and the first only as a number to report.
+//! A lightning interrupt is not, by itself, a strike the device may learn
+//! from. The chip's `overhead` reading has been man-made on the days it could
+//! be checked and lightning on others -- see `golden::is_evidence` -- and
+//! nothing in the reading tells the two apart. So a [`Batch`] counts every
+//! lightning interrupt, and separately the ones that are evidence, and a
+//! [`Window`] carries both. Which a decision reads depends on what it costs to
+//! be wrong:
+//!
+//! * **Refusing to step reads every lightning interrupt** -- [`Window::walk`].
+//!   A hold changes nothing, so holding for the hammer costs a window the walk
+//!   did not take. Not holding for a real storm overhead costs the climb into
+//!   deafness the hold exists to prevent, at the moment the device exists for.
+//! * **Everything that commits the device to something reads only evidence**:
+//!   a dip that stays wide open ([`Window::heard_lightning`]), the dip a strike
+//!   makes unnecessary, the silence the rescue waits out, and the golden
+//!   record. Those are what September's stream of `overhead`, one every
+//!   7-10 s for nine days, would otherwise have steered.
 
 use crate::golden;
 use crate::strike::Distance;
@@ -89,6 +99,33 @@ impl Batch {
     }
 }
 
+/// The ±1 walk's move for one window -- see [`Window::walk`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Walk {
+    /// Stay where it is.
+    ///
+    /// **For any lightning interrupt, `overhead` included.** The storm of
+    /// 2026-08-12 is why: 917 detections, every one in the nearest bin, while
+    /// thunder was audible every 10-30 s, and a band at 208-299 noise/min
+    /// against a 120/min threshold. Every window with a strike in it held, and
+    /// that is what kept the point open for three and a half hours
+    /// (doc/specs.md §9). 0.22.0 held only for a strike with a distance, so the
+    /// same night would have climbed noise/threshold -- three or four notches a
+    /// window -- to `nf 7` within two windows, with no record written to bring
+    /// it back.
+    ///
+    /// A hold cannot deafen anything, which is why this is the one decision
+    /// that does not ask whether a strike is evidence. What holding for a
+    /// man-made `overhead` costs is a walk that did not step; September's
+    /// stream would have held it for nine days, while the dip -- which reads
+    /// only evidence -- still opened every ten minutes to look.
+    Hold,
+    /// Tighten, by as many notches as the rate is multiples of the threshold.
+    Climb,
+    /// Relax one notch, if the learned floor allows it.
+    Relax,
+}
+
 /// The evidence one window gathered.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Window {
@@ -97,15 +134,17 @@ pub struct Window {
     /// Validated waveforms the chip rejected. Counted, reported, and not
     /// evidence about the noise floor.
     pub disturbers: u32,
-    /// Strikes that are evidence (`golden::is_evidence`), which veto a climb —
-    /// a near strike throws harmonics that arrive as disturbers, so a window
-    /// that heard one cannot judge the band. **The only strike count a decision
-    /// reads**: the hold, the dip that stays open, and the silence the rescue
-    /// waits out.
+    /// Strikes that are evidence (`golden::is_evidence`). What a dip reads, both
+    /// to stay open and to be skipped; the hold reads these and
+    /// [`Window::unconfirmed`] together.
     pub strikes: u32,
     /// Lightning interrupts that were not evidence -- `overhead`, or unreadable.
-    /// Counted so the console can say the window had them; never a reason to
-    /// hold, to stay open, or to reset the silence.
+    ///
+    /// **They hold the walk** ([`Window::walk`]): a near strike throws
+    /// harmonics that arrive as disturbers and raises the noise floor for its
+    /// duration, so a window that heard one cannot judge the band, whatever the
+    /// chip made of its distance. They are never a reason for a dip to stay
+    /// open, for one to be skipped, or for the rescue's silence to start again.
     pub unconfirmed: u32,
     /// Batches folded in, and how many of them heard any noise at all.
     ///
@@ -149,9 +188,32 @@ impl Window {
         }
     }
 
-    /// Whether this window heard lightning it may act on.
+    /// Whether this window heard lightning that is evidence: what keeps a dip
+    /// open, and what makes the next one unnecessary.
     pub fn heard_lightning(&self) -> bool {
         self.strikes > 0
+    }
+
+    /// Whether this window heard any lightning interrupt, evidence or not.
+    pub fn heard_any_lightning(&self) -> bool {
+        self.strikes > 0 || self.unconfirmed > 0
+    }
+
+    /// What the ±1 walk does with this window, when neither a sweep nor a dip
+    /// owns it.
+    ///
+    /// **Here rather than in `tuning`, so the hold is host-tested**: `tuning`
+    /// drives an I²C sensor and nothing on a workstation can build it. The
+    /// order of the tests is the rule -- a window that heard any lightning
+    /// holds, whatever its noise; otherwise its noise decides.
+    pub fn walk(&self, quiet_per_min: u32, window_s: u32) -> Walk {
+        if self.heard_any_lightning() {
+            return Walk::Hold;
+        }
+        match self.quiet(quiet_per_min, window_s) {
+            true => Walk::Relax,
+            false => Walk::Climb,
+        }
     }
 
     /// A count as a per-minute rate.

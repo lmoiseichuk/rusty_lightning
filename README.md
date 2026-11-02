@@ -122,9 +122,9 @@ gets — everything else it measures is quiet, and quiet is two different things
 wearing one face. The record is what it boots from, and what it returns to when
 it has been deafer than a proven setting for twenty minutes. Silence at a
 setting deafer than one this room has *produced strikes at* is evidence about
-the receiver, not about the sky. Only a strike with a distance writes it: every
-`overhead` this device could check was man-made, so `overhead` is shown and
-never learned from.
+the receiver, not about the sky. Only a strike with a distance writes it:
+`overhead` has been an electric hammer as often as a storm, and nothing in the
+reading says which, so it is shown, held for, and never learned from.
 
 **The learned floor.** The other end of the same idea: a rung measured to drown
 is remembered, and the walk will not relax into it again. Without it, a sweep

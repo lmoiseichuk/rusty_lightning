@@ -17,11 +17,13 @@
 //! ## Not every detection is a strike worth learning from
 //!
 //! "A detected strike breaks that symmetry" was the premise, and the log
-//! disproves it for one reading in particular: **`overhead`**. See
-//! [`is_evidence`] for the measurements. Since 0.22.0 a detection the chip
-//! files in its nearest bin is still logged, charted and shown, and it teaches
-//! the device nothing -- not this record, not its trust, and none of the
-//! tuner's "lightning was heard" decisions.
+//! disproves it for one reading in particular: **`overhead`**, which has been
+//! a hammer as often as it has been a storm. See [`is_evidence`] for the
+//! measurements. Since 0.22.0 a detection the chip files in its nearest bin is
+//! still logged, charted and shown, and it teaches the device nothing -- not
+//! this record, not its trust, and none of the tuner's decisions that commit
+//! it to something. It still holds the walk, which commits it to nothing: see
+//! `verdict::Walk::Hold`.
 //!
 //! A record counted before that rule existed cannot be told apart from one
 //! that was not, so it is set aside rather than trusted: see
@@ -30,34 +32,58 @@
 use crate::strike::Distance;
 
 /// Whether a detection at `distance` is evidence that this receiver can hear
-/// lightning.
+/// lightning -- enough to vouch for the setting it arrived at.
 ///
 /// **The one test everything that learns from a strike goes through**: this
-/// record and its trust (`session::commit_merged`), and the tuner's window --
-/// the hold, the dip that stays open, the silence the rescue waits out, and,
-/// through this record, the floor the walk will not relax below.
+/// record and its trust (`session::commit_merged`), and the tuner's decisions
+/// that commit it to something -- the dip that stays open, the dip a strike
+/// makes unnecessary, the silence the rescue waits out, and, through this
+/// record, the floor the walk will not relax below. The hold is the one
+/// decision that does not ask: it only refuses to step, so it takes every
+/// lightning interrupt (`verdict::Walk::Hold`).
 ///
-/// **`Overhead` is not evidence**, and every measurement of it says so:
+/// **`Overhead` is not evidence, because the reading has been both things and
+/// nothing in it says which.** It has been man-made:
 ///
 /// * **2026-08-14, `srej 0`:** 503 "strikes" in three and a half hours from an
 ///   electric hammer on a neighbouring roof, every one graded `overhead`.
 /// * **2026-09-16 to 09-24:** 9,542 logged strikes, 99 % of them `overhead`,
-///   round the clock -- 3 a.m. included -- with 7-10 s between them. Man-made,
-///   and they fed this record: "840 strikes heard here".
-/// * **2026-11-01, outside on the cell:** 13 strikes in 11 minutes. Seven read
-///   6-14 km, one of them matching thunder LM heard; the six `overhead` each
-///   came 6-9 s after another strike. Three further `overhead` detections that
-///   afternoon matched electrical events -- a USB plug-in to the second, the
-///   end of a short run on the cell, one mid-run -- and none matched thunder.
-///   The nine `overhead` carried 98,724-514,552 raw, eight of them above
-///   290,000, against 12,842-150,818 for the seven with a distance. That day's
-///   record became "trusted, 14 strikes" partly on them.
+///   round the clock -- 3 a.m. included -- with 7-10 s between them. They fed
+///   this record: "840 strikes heard here".
+/// * **2026-11-01, afternoon:** three `overhead` matched electrical events --
+///   a USB plug-in to the second, the end of a short run on the cell, one
+///   mid-run -- and none matched thunder.
 ///
-/// The nearest bin is also where the estimator files a detection it has no
-/// storm statistics for, so a lone impulse -- what all three describe -- reads
-/// `overhead` by construction. A real cell overhead is still recorded, charted
-/// and announced; it just cannot vouch for the setting it arrived at, because
-/// nothing in the reading distinguishes it from the hammer.
+/// And it has been lightning:
+///
+/// * **2026-08-12:** 917 detections, every one in the nearest bin, while
+///   thunder was audible every 10-30 s from 5-10 km (doc/specs.md §9).
+/// * **2026-08-13:** 24 of 27 `overhead`, from a cell that was visibly
+///   overhead.
+/// * **2026-09-10:** a live storm, one audible strike every thirty seconds.
+///   The two strikes that proved `wd 0` that day (2629a2d19aeb) are the log's
+///   12:27:08 and 12:27:32 rows, 22 and 46 s after a boot, and both read
+///   `overhead`; from 12:19 to 13:59 the log has 3 kilometre readings against
+///   63 `overhead`.
+///
+/// **2026-11-01 outside on the cell settles neither way.** Thirteen detections
+/// in eleven minutes, seven at 6-14 km and six `overhead`. Three of the six
+/// came 6-9 s after another detection and three 44-66 s after, so they are not
+/// one echo pattern; and the log cannot say which detections were the two
+/// strikes LM heard. The six carried 98,724-463,994 raw against 12,842-150,818
+/// for the seven, which is not a second observation: the chip estimates
+/// distance from the stored energies of recent events (datasheet v1-04,
+/// page 33), so a high energy and the nearest bin are one reading. Nor does a
+/// detection with no storm statistics behind it read `overhead` by
+/// construction -- the datasheet says nothing of the kind, and that morning's
+/// first detection, 39.5 s after boot had cleared the statistics, read 14 km,
+/// as 2026-08-13's first three did.
+///
+/// So a real cell overhead is recorded, charted, announced and held for, and
+/// it cannot vouch for the setting it arrived at. What that costs is a storm
+/// that reads only `overhead` writing no record, so no rescue can return to
+/// it; what the other choice cost was September writing "840 strikes heard
+/// here" and handing boot, the rescue and the floor to it.
 ///
 /// **`OutOfRange` is evidence.** It is an answer about distance -- the chip
 /// placed the waveform beyond its range -- and none of the false streams above

@@ -370,7 +370,7 @@ the asymmetry is deliberate:
 |---|---|
 | `<= threshold` | relax **one** notch — refunding `SREJ` first, `NF_LEV` last |
 | `> threshold` | tighten `rate / threshold` notches — spending `NF_LEV` first, `SREJ` last |
-| contains a strike with a distance | **hold** — never escalate |
+| contains a strike, `overhead` included | **hold** — never escalate |
 
 Quick to defend, slow to relax. The proportional step is what lets it answer a
 real step change: a microwave door swing here took the band from 6/min to
@@ -385,13 +385,20 @@ that cannot tell them apart — and climbing on that would deafen the device at
 the one moment it exists for. You will see `tune: holding at ...` on the console
 when this fires.
 
-**An `overhead` strike does not hold, since 0.22.0** — nor keep a dip open, nor
-reset the twenty minutes the rescue waits out, nor count toward the golden
-combination below. Every `overhead` this device could check was man-made: 503
-from an electric hammer at `srej 0`, 9,542 round the clock in September, and on
-2026-11-01 three that matched electrical events — a USB plug-in to the second,
-the end of a short run on the cell, and one mid-run — and no thunder.
-They are still logged, charted and printed — the console marks each one
+**An `overhead` strike holds, and since 0.22.0 does nothing else** — it keeps
+no dip open, does not stop the next one, does not restart the twenty minutes
+the rescue waits out, and does not count toward the golden combination below.
+The reading has been man-made — 503 from an electric hammer at `srej 0`, 9,542
+round the clock in September, and on 2026-11-01 three that matched electrical
+events, a USB plug-in to the second, the end of a short run on the cell and one
+mid-run — and it has been lightning: the storm of 2026-08-12 below read the
+nearest bin 917 times while thunder was audible every 10–30 s, and the strikes
+of 2026-09-10 that proved `wd 0` both read `overhead`. Nothing in the reading
+says which, so it may not vouch for a setting. It still holds because a hold
+only refuses to step: holding for the hammer costs a window the walk did not
+take, and not holding for a storm overhead is the climb this rule exists to
+stop. (0.22.0 alone did not hold for it; 0.22.1 does again.) They are still
+logged, charted and printed — the console marks each one
 `[unconfirmed -- not learned from]`, and a window that had some says
 `tune: N unconfirmed strike(s) this window`. A strike whose distance could not
 be read counts the same way.
@@ -497,9 +504,9 @@ could collapse into a single record hours long.
 Two things it deliberately does not do. It does not fold `overhead` into the
 distance average — overhead is not a kilometre figure, and averaging it in as 1
 is what once made a storm read as permanently overhead. And it does not change
-what §4.2 sees: the auto-tune still counts every stroke that carried a distance,
-because that is its evidence that lightning is present and the strike-hold rule
-wants all of it.
+what §4.2 sees: the auto-tune still counts every stroke, because the strike-hold
+rule wants all of them, and the strokes that carried a distance separately,
+because those are what a dip and the rescue read.
 
 **A merged flash teaches the device what its recorded distance says.** One that
 mixed an `overhead` stroke with a kilometre stroke is recorded at kilometres and
@@ -678,7 +685,7 @@ cheap in any real storm and discards the isolated false positive.
 **Only a strike with a distance counts, since 0.22.0.** `overhead` is still
 logged and shown, and writes nothing here: in September a stream of them, one
 every 7–10 s round the clock, made this record read "840 strikes heard here",
-and on 2026-11-01 six more lifted that afternoon's record to fourteen. A record
+and on 2026-11-01 six more lifted that day's record to fourteen. A record
 written before 0.22.0 cannot be split into the strikes that carried a distance
 and the ones that did not, so 0.22.0 keeps its own record under new keys and
 sets the old one aside: `golden` still prints it, marked *set aside*, nothing

@@ -242,9 +242,10 @@ fn main() {
     check("...however many disturbers accompany it", !is_swamped(0, 60));
 
     println!("\n  what a detection may teach");
-    // **The regression this section exists for.** Every `overhead` this device
-    // could check was man-made -- the hammer at srej 0, September's 9,542 round
-    // the clock, November's on a USB plug-in -- and they fed the record.
+    // **The regression this section exists for.** `overhead` has been man-made
+    // -- the hammer at srej 0, September's 9,542 round the clock, November's on
+    // a USB plug-in -- as well as lightning, and nothing in the reading says
+    // which; man-made, it fed the record.
     check("overhead is not evidence", !is_evidence(Distance::Overhead));
     check("a kilometre reading is", is_evidence(Distance::Km(6)));
     // The nearest kilometre bin is 5, one above the sentinel: the line is drawn
@@ -300,8 +301,8 @@ fn main() {
     check("840 overhead strikes write no record at all", september.is_none());
     check("...so nothing can fall back to one", fall_back_to(combo(7, 0, 1, false), september, 600).is_none());
 
-    // 2026-11-01 outside, in the order the log has them: seven with a distance,
-    // six overhead among them.
+    // 2026-11-01 outside that morning, in the order the log has them: seven
+    // with a distance, six overhead among them.
     let november = [
         Distance::Km(14), Distance::Km(6), Distance::Km(6), Distance::Overhead,
         Distance::Overhead, Distance::Overhead, Distance::Km(10), Distance::Km(6),
@@ -313,7 +314,7 @@ fn main() {
         record = fold(record, distance, room);
     }
     check(
-        "that afternoon's thirteen make a record of seven",
+        "that morning's thirteen make a record of seven",
         record == Some(Golden { combo: room, strikes: 7 }),
     );
     check("...which is still trusted", record.map(|r| r.strikes).unwrap_or(0) >= TRUSTED_STRIKES);

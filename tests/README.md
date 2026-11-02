@@ -33,7 +33,7 @@ cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civ
 | `pace.rs` | walks over the whole log: a one-tick block every tenth of the task watchdog's timeout, both read from `sdkconfig.defaults`, and the dump that reset the board walked again at its measured rate |
 | `press.rs` | the button gesture boundaries: too short, gain flip, portal, stuck |
 | `uptime.rs` | interval arithmetic across the 49.7-day millisecond wrap |
-| `verdict.rs` | the noise verdict: what counts as quiet, that only noise feeds it, and that an `overhead` strike never reaches a decision |
+| `verdict.rs` | the noise verdict: what counts as quiet, that only noise feeds it, and that any lightning interrupt holds the walk, `overhead` included, while only one with a distance reaches a decision that commits the device |
 
 ## These compile the real modules, not copies of them
 

@@ -95,8 +95,8 @@ this table is generated from it.
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs` | 213 |
 | `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1161 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1095 |
-| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 186 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1120 |
+| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 248 |
 
 ### Keeping it
 

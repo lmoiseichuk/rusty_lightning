@@ -40,13 +40,16 @@ and hands over to the stuck detector. Only `noise` reaches the quiet verdict
 now — see `src/verdict.rs`, which exists so that claim is host-testable.
 
 **The bottom row has a sub-row, since 0.22.0.** A lightning interrupt whose
-distance reads `overhead` licenses nothing either: not the hold, not a dip that
-stays open, not the rescue's silence, not the golden record. Every one this
-device could check against something else was man-made — the hammer at
+distance reads `overhead` licenses one thing only: the hold, which changes
+nothing. Not a dip that stays open, not skipping the next dip, not the rescue's
+silence, not the golden record. The reading has been man-made — the hammer at
 `srej 0`, September's 9,542 round the clock, November's on a USB plug-in — and
-the nearest bin is where the estimator files a lone impulse it has no storm
-statistics for. `verdict::Batch` splits the two where the interrupt is read, so
-that one is host-tested too.
+it has been lightning, through the storms of 2026-08-12 and 2026-09-10, with
+nothing in it to say which. Its high energies are not a second clue: the chip
+estimates distance from the stored energies of recent events (datasheet v1-04,
+page 33), so a loud strike and the nearest bin are one observation.
+`verdict::Batch` splits the two where the interrupt is read, and
+`verdict::Window::walk` makes the hold, so both are host-tested.
 
 ---
 

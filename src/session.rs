@@ -545,13 +545,13 @@ pub fn commit_merged(
     // write the record would let a bench test pin the device to whatever it
     // happened to be set to.
     //
-    // **And so, since 0.22.0, is `overhead`.** Every `overhead` this device
-    // could check against something else was man-made: the hammer at `srej 0`,
-    // September's 9,542 round the clock, and the November ones that landed on
-    // a USB plug-in. They fed this record anyway -- "840 strikes heard here" --
-    // and the record is what boot, the rescue and the floor trust. A merged
-    // flash is judged on the distance it is recorded with, which settles the
-    // mixed one; see `golden::may_record`.
+    // **And so, since 0.22.0, is `overhead`.** The reading has been man-made
+    // -- the hammer at `srej 0`, September's 9,542 round the clock, November's
+    // that landed on a USB plug-in -- and it has been lightning, on 2026-08-12
+    // and 2026-09-10, and nothing in it says which. Man-made, it fed this
+    // record anyway -- "840 strikes heard here" -- and the record is what boot,
+    // the rescue and the floor trust. See `golden::is_evidence`, and
+    // `golden::may_record` for the mixed flash.
     let learned = crate::golden::may_record(merged.simulated, strike.distance);
     if learned {
         remember_working_point();

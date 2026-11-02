@@ -105,8 +105,8 @@ fn main() {
     check("an unreadable one is unconfirmed", batch.unconfirmed == 2 && batch.confirmed() == 2);
     check("and every one of them is still counted", batch.strikes == 4);
 
-    // **The hold, the dip and the rescue all read `Window::strikes`**, so this
-    // is the line between an overhead and a decision.
+    // **The dip and the rescue read `Window::strikes`**, so this is the line
+    // between an overhead and a decision that commits the device to anything.
     let mut overheads = Batch::default();
     for _ in 0..3 {
         overheads.lightning(Some(Distance::Overhead));
@@ -114,18 +114,59 @@ fn main() {
     overheads.noise = 70;
     let mut window = Window::default();
     window.fold_batch(&overheads);
-    check("a window of overhead alone heard no lightning", !window.heard_lightning());
-    check("...carries no strike a decision could read", window.strikes == 0);
+    check("a window of overhead alone heard no lightning that is evidence", !window.heard_lightning());
+    check("...carries no strike a dip or the rescue could read", window.strikes == 0);
     check("...still says how many it had", window.unconfirmed == 3);
-    check("...and is judged on its noise like any other", !window.quiet(60, 60));
+    check("...and its band is noisy", !window.quiet(60, 60));
+    // **But it holds.** A hold only refuses to step, and the band a near
+    // strike leaves behind is not the room's.
+    check("...and still holds the walk rather than climbing on it", window.walk(60, 60) == Walk::Hold);
     let mut located = Batch::default();
     located.lightning(Some(Distance::Km(12)));
     window.fold_batch(&located);
     check("one strike with a distance and it has heard lightning", window.heard_lightning());
     check("and holds exactly that one", window.strikes == 1 && window.unconfirmed == 3);
 
+    println!("\n  the walk: any lightning holds, then the noise decides");
+    let walk_of = |batch: Batch| {
+        let mut window = Window::default();
+        window.fold_batch(&batch);
+        window.walk(60, 60)
+    };
+    check("a quiet window with no lightning relaxes", walk_of(Batch { noise: 10, ..Batch::default() }) == Walk::Relax);
+    check("a noisy one climbs", walk_of(Batch { noise: 200, ..Batch::default() }) == Walk::Climb);
+    check("...and disturbers alone do not make it climb", walk_of(Batch { disturbers: 500, ..Batch::default() }) == Walk::Relax);
+    let mut located = Batch { noise: 200, ..Batch::default() };
+    located.lightning(Some(Distance::Km(8)));
+    check("a noisy window with a located strike holds", walk_of(located) == Walk::Hold);
+    let mut quiet_strike = Batch::default();
+    quiet_strike.lightning(Some(Distance::Km(8)));
+    check("...and so does a quiet one, rather than relaxing mid-storm", walk_of(quiet_strike) == Walk::Hold);
+    let mut unreadable = Batch { noise: 200, ..Batch::default() };
+    unreadable.lightning(None);
+    check("a strike whose distance could not be read holds too", walk_of(unreadable) == Walk::Hold);
+    // **The night this rule is for**, 2026-08-12 as a repeat would look now:
+    // the band at 208-299 noise/min, the strikes all in the nearest bin. A
+    // window with eight of them at 210/min must hold -- 0.22.0 climbed
+    // 210/60 = 3 notches here, and reached nf 7 in the second window.
+    let mut overhead_storm = Window::default();
+    for second in 0..60 {
+        let mut each = Batch { noise: if second < 30 { 4 } else { 3 }, ..Batch::default() };
+        if second % 8 == 0 {
+            each.lightning(Some(Distance::Overhead));
+        }
+        overhead_storm.fold_batch(&each);
+    }
+    check("the storm overhead runs at 210 noise/min", overhead_storm.noise_per_min(60) == 210);
+    check("...hears no lightning that is evidence", !overhead_storm.heard_lightning());
+    check("...and holds the walk all the same", overhead_storm.walk(60, 60) == Walk::Hold);
+
     // September's stream, one overhead every 8 s for a minute, sixty minutes.
+    // It holds every window -- which costs a walk that did not step -- and
+    // reads as lightning in none, so nothing stops the dip looking every ten
+    // minutes and nothing keeps one open.
     let mut september_heard = false;
+    let mut september_held = true;
     for _ in 0..60 {
         let mut minute = Window::default();
         for second in 0..60 {
@@ -136,8 +177,10 @@ fn main() {
             minute.fold_batch(&each);
         }
         september_heard |= minute.heard_lightning();
+        september_held &= minute.walk(60, 60) == Walk::Hold;
     }
     check("an hour of September's overhead never once reads as lightning", !september_heard);
+    check("...and holds the walk in every window of it", september_held);
 
     println!("\n  the raw count is the verdict, the batches are for comparing with 0.20");
     // A band drowning at the chip's re-raise rate, ~90 ms: 11 a batch for a
