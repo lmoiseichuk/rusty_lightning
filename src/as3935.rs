@@ -46,7 +46,7 @@
 //! | `0x03` | `0x0F` INT, `0x20` MASK_DIST, `0xC0` LCO_FDIV | interrupt reason; disturber mask |
 //! | `0x04..0x06` | energy | 20-bit strike energy, LSB first |
 //! | `0x07` | `0x3F` DISTANCE | estimated distance to the head of the storm |
-//! | `0x08` | `0x0F` TUN_CAP, `0xE0` DISP_* | antenna tuning caps; what appears on IRQ |
+//! | `0x08` | `0x0F` TUN_CAP, `0xE0` DISP_* (`0x40` DISP_SRCO pulsed by the calibration) | antenna tuning caps; what appears on IRQ |
 //! | `0x3A` | `0x80` TRCO_CALIB_DONE, `0x40` TRCO_CALIB_NOK | did the timer RCO calibrate |
 //! | `0x3B` | `0x80` SRCO_CALIB_DONE, `0x40` SRCO_CALIB_NOK | did the system RCO calibrate |
 //! | `0x3C` | — | direct command: reset (write `0x96`) |
@@ -88,21 +88,37 @@ const MASK_MIN_STRIKES: u8 = 0x30;
 const MASK_CLEAR_STATS: u8 = 0x40;
 const MASK_DISTURBER: u8 = 0x20;
 const MASK_INTERRUPT: u8 = 0x0F;
-/// `DISP_TRCO`, register `0x08` **bit 5**.
+/// `DISP_SRCO`, register `0x08` **bit 6** -- the bit the datasheet's
+/// calibration procedure pulses.
 ///
-/// **Named for what the datasheet calls it, not for what the reference called
-/// it.** The MicroPython reference writes this bit during power-up under the
-/// comment `#set DISP_SRCO to 1` — but its own `setIrqOutputSource` maps
-/// `0x20` to TRCO, `0x40` to SRCO and `0x80` to LCO, and the datasheet agrees.
-/// The comment is simply wrong; the value is right, and TRCO is the bit
-/// `CALIB_RCO` actually requires.
+/// AS3935 datasheet v1-04 (ams, 2016-01-13), "Clock Generation", **page 36**:
 ///
-/// This port originally inherited the wrong name. That is worse than it sounds:
-/// anyone checking `MASK_DISPLAY_TRCO = 0x20` against the datasheet would
-/// "correct" it to `0x40`, which pulses the wrong oscillator, leaves the RCO
-/// uncalibrated, and breaks strike validation in a way that presents as
-/// "disturbers but never lightning" — with nothing in the code looking wrong.
-const MASK_DISPLAY_TRCO: u8 = 0x20;
+/// > The output frequency of those oscillators can be displayed on the IRQ pin
+/// > with register setting (REG0x08[5] =1 TRCO, while REG0x08[6] = 1 SRCO).
+/// > [...] It is recommended to first trim the receiver antenna before the
+/// > calibration of both oscillators is done. [...] the TRCO needs to be
+/// > recalibrated using the following procedure:
+/// > 1. Send Direct command CALIB_RCO
+/// > 2. Modify REG0x08[6] = 1
+/// > 3. Wait 2ms
+/// > 4. Modify REG0x08[6] = 0
+///
+/// and the register map (pages 18-19) agrees: bit 7 `DISP_LCO`, bit 6
+/// `DISP_SRCO`, bit 5 `DISP_TRCO`, bits 3:0 `TUN_CAP`.
+///
+/// **Until 0.22.0 this pulsed bit 5, `DISP_TRCO`, and a comment here defended
+/// it.** The MicroPython reference wrote `0x20` under the comment
+/// `#set DISP_SRCO to 1`; this file decided the comment was the mistake and
+/// the value right, on the claim that "TRCO is the bit `CALIB_RCO` actually
+/// requires" -- a claim with no source, which the procedure above contradicts.
+/// The reference's comment named the datasheet's bit and its value did not.
+///
+/// **What would say this is wrong:** the banner line `as: RCO calibration`,
+/// which reads `0x3A`/`0x3B` straight after. On 0.21.2, pulsing bit 5, it read
+/// `TRCO done, SRCO done (0x3A=0x9C 0x3B=0x9E)`. If bit 6 reads anything but
+/// `done` twice, that is the evidence to go back on, and this constant is the
+/// whole of the change.
+const MASK_DISPLAY_SRCO: u8 = 0x40;
 const MASK_DISPLAY_LCO: u8 = 0x80;
 const MASK_LCO_FDIV: u8 = 0xC0;
 const MASK_IRQ_DISPLAY: u8 = 0xE0;
@@ -179,6 +195,19 @@ pub const LCO_DIVISOR: u32 = 16;
 /// which is now the only thing that honours it.
 pub const IRQ_SETTLE_MS: u32 = 8;
 
+/// The LC oscillator's start-up time, and how long the RC oscillators take to
+/// calibrate: **2 ms each**, datasheet v1-04, electrical characteristics,
+/// page 9 (`LCOSUT`, and `TRCOCAL` -- "the calibration of the RC oscillators
+/// starts after the LCO settles"). The calibration procedure's own "Wait 2ms"
+/// (page 36) is the second.
+///
+/// Waited with [`wait_at_least_ms`], never with `FreeRtos::delay_ms(2)`: at
+/// 100 Hz that is one tick, which returns at the next tick interrupt -- from a
+/// few microseconds to 10 ms -- so the procedure's 2 ms was sometimes almost
+/// nothing, which is how it was done until 0.22.0.
+pub const LCO_STARTUP_MS: u32 = 2;
+pub const RCO_CALIBRATION_MS: u32 = 2;
+
 /// Wait at least [`IRQ_SETTLE_MS`] before the reason register is read, yielding
 /// to the scheduler on the way.
 ///
@@ -221,15 +250,31 @@ pub const IRQ_SETTLE_MS: u32 = 8;
 /// guarantee the minimum, at 10-20 ms -- twice as long awake on every event
 /// on the cell, and further from the 8 ms that has heard lightning here.
 pub fn settle() {
-    let wanted_us = i64::from(IRQ_SETTLE_MS) * 1000;
+    wait_at_least_ms(IRQ_SETTLE_MS);
+}
+
+/// Wait **at least** `ms`, yielding one tick first: the shape [`settle`]
+/// explains, for every datasheet wait in this driver.
+///
+/// One yielded tick, so the idle task runs whatever the caller is doing, and
+/// then a busy-wait of whatever the tick did not cover, timed on the
+/// microsecond clock rather than assumed. The wait ends between `ms` and one
+/// tick past it -- never short, which is the property every caller needs: a
+/// datasheet minimum met "on average" is a minimum missed some of the time.
+///
+/// Meant for the few milliseconds the chip asks for. The spin is at most `ms`,
+/// so a caller asking for long waits should block instead.
+pub fn wait_at_least_ms(ms: u32) {
+    let wanted_us = i64::from(ms) * 1000;
     // SAFETY: the IDF's monotonic microsecond clock; a read with no side
     // effects. `vTaskDelay` is a plain FreeRTOS call from task context.
     let started_us = unsafe { esp_idf_hal::sys::esp_timer_get_time() };
     unsafe { esp_idf_hal::sys::vTaskDelay(1) };
     let elapsed_us = unsafe { esp_idf_hal::sys::esp_timer_get_time() } - started_us;
     if elapsed_us < wanted_us {
-        // `Ets` is the ROM's busy-wait. Never more than 8 ms here, so it cannot
-        // starve anything: the tick above already let the idle task in.
+        // `Ets` is the ROM's busy-wait. Never more than `ms` here -- 8 ms at
+        // the most this driver asks for -- so it cannot starve anything: the
+        // tick above already let the idle task in.
         esp_idf_hal::delay::Ets::delay_us((wanted_us - elapsed_us) as u32);
     }
 }
@@ -394,36 +439,58 @@ impl As3935 {
 
     pub fn reset(&self, i2c: &mut I2cDriver<'_>) -> Result<(), EspError> {
         self.write(i2c, CMD_RESET, DIRECT_COMMAND)?;
-        esp_idf_hal::delay::FreeRtos::delay_ms(2);
+        // The reference's 2 ms, as a real 2 ms -- see [`wait_at_least_ms`].
+        wait_at_least_ms(2);
         Ok(())
     }
 
-    /// Bring the AFE out of power-down and calibrate the internal oscillators.
+    /// Bring the AFE out of power-down, trim the antenna, and calibrate the
+    /// internal oscillators -- **in the datasheet's order**.
     ///
     /// The RCO calibration is not optional after a reset: the chip's timing —
     /// and therefore its whole notion of what a lightning waveform looks like —
-    /// depends on it. The `DISP_SRCO` toggle at the end is what the datasheet
-    /// asks for to latch the calibration; it briefly routes SRCO to the IRQ pin,
-    /// which is harmless because nothing is listening yet.
-    pub fn power_up(&self, i2c: &mut I2cDriver<'_>) -> Result<(), EspError> {
+    /// depends on it. Page 36 of datasheet v1-04 gives the order, quoted at
+    /// [`MASK_DISPLAY_SRCO`]: trim the antenna first, then `CALIB_RCO`, then
+    /// `REG0x08[6]` up for 2 ms and down again.
+    ///
+    /// **Until 0.22.0 this ran before `TUN_CAP` was written**, so the
+    /// oscillators were calibrated against the LC oscillator at 0 pF -- off its
+    /// 500 kHz -- and the 120 pF that puts it there arrived half a second
+    /// later; it pulsed bit 5, `DISP_TRCO`, not the procedure's bit 6; and both
+    /// of its 2 ms waits were one scheduler tick, anything from microseconds to
+    /// 10 ms. All three are the datasheet's now. `boot::configure` reads
+    /// `0x3A`/`0x3B` straight after, and `boot::antenna_self_test` measures the
+    /// trimmed antenna after that, as before.
+    ///
+    /// The pulse briefly routes SRCO (~1.1 MHz) to the IRQ pin, which is
+    /// harmless because nothing is listening yet: `main` sets the pin's
+    /// interrupt type only after this returns.
+    pub fn power_up(&self, i2c: &mut I2cDriver<'_>, tuning_caps_pf: u8) -> Result<(), EspError> {
         self.modify(i2c, REG_CONFIG0, MASK_POWER_DOWN, 0x00)?;
+        // Antenna first, and the LC oscillator given its start-up time at the
+        // new capacitance -- the calibration measures against it, and starts
+        // only once it has settled (page 9).
+        self.set_tuning_caps(i2c, tuning_caps_pf)?;
+        wait_at_least_ms(LCO_STARTUP_MS);
+        // 1. CALIB_RCO.
         self.write(i2c, CMD_CALIB_RCO, DIRECT_COMMAND)?;
-        esp_idf_hal::delay::FreeRtos::delay_ms(2);
-        self.modify(i2c, REG_TUNING, MASK_DISPLAY_TRCO, MASK_DISPLAY_TRCO)?;
-        esp_idf_hal::delay::FreeRtos::delay_ms(2);
-        self.modify(i2c, REG_TUNING, MASK_DISPLAY_TRCO, 0x00)
+        // 2-4. REG0x08[6] = 1, wait 2 ms, REG0x08[6] = 0.
+        self.modify(i2c, REG_TUNING, MASK_DISPLAY_SRCO, MASK_DISPLAY_SRCO)?;
+        wait_at_least_ms(RCO_CALIBRATION_MS);
+        self.modify(i2c, REG_TUNING, MASK_DISPLAY_SRCO, 0x00)
     }
 
     /// Whether the two RC oscillators calibrated, from `0x3A` and `0x3B`.
     ///
-    /// **A report, and the evidence for a question this port has not settled.**
-    /// The chip's timing -- and so its whole idea of what a lightning waveform
-    /// looks like -- runs on these two oscillators, and [`Self::power_up`]
-    /// calibrates them by pulsing `DISP_TRCO` (bit 5), as the reference did.
-    /// The datasheet's own recalibration procedure (v1-04, "Clock Generation")
-    /// pulses `REG0x08[6]`, which is `DISP_SRCO`. Nothing here changes which bit
-    /// is pulsed; this reads what the chip says came of it, so the next boot
-    /// answers the question instead of an argument.
+    /// **A report, and the evidence for the change 0.22.0 made.** The chip's
+    /// timing -- and so its whole idea of what a lightning waveform looks like
+    /// -- runs on these two oscillators. Until 0.22.0 [`Self::power_up`]
+    /// calibrated them by pulsing `DISP_TRCO` (bit 5), as the reference did,
+    /// before the antenna was trimmed; it now follows the datasheet's procedure
+    /// (v1-04, "Clock Generation", page 36), which pulses `REG0x08[6]`,
+    /// `DISP_SRCO`, after it. This reads what the chip says came of it, so a
+    /// boot answers the question instead of an argument: 0.21.2 read
+    /// `0x3A=0x9C 0x3B=0x9E`, both done.
     ///
     /// Returns `(timer RCO, system RCO)` with the raw bytes, which are printed
     /// beside the decoding for the same reason `regs` prints raw registers.
@@ -627,9 +694,10 @@ impl As3935 {
     /// Put the analogue front end to sleep.
     ///
     /// Kept for §7's battery mode. Note the wake path is not symmetric:
-    /// [`As3935::power_up`] re-runs the RCO calibration, and skipping that
-    /// leaves the chip timing-uncalibrated and its idea of a strike waveform
-    /// wrong.
+    /// [`As3935::power_up`] re-runs the RCO calibration -- the datasheet's
+    /// procedure on page 36 is written for exactly this, a chip back from
+    /// power-down -- and skipping that leaves the chip timing-uncalibrated and
+    /// its idea of a strike waveform wrong.
     #[allow(dead_code)]
     pub fn power_down(&self, i2c: &mut I2cDriver<'_>) -> Result<(), EspError> {
         self.modify(i2c, REG_CONFIG0, MASK_POWER_DOWN, MASK_POWER_DOWN)

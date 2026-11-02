@@ -230,7 +230,8 @@ Register access and semantics per the reference driver (`DFRobot_AS3935_Lib.py`)
 1. **Detect:** probe I2C **0x01/0x02/0x03**, `reset()` (write `0x3C=0x96`) until one ACKs (this unit
    is **0x03**).
 2. `powerUp()` — clear PWD (reg 0x00 bit0) + **RCO calibration** (`0x3D=0x96`, then toggle `DISP_SRCO`
-   in reg 0x08).
+   in reg 0x08). *Since 0.22.0 the firmware writes step 5's tuning caps first, as the datasheet asks
+   — see the 0.22.0 note below.*
 3. **Indoor/outdoor** — reg 0x00 mask 0x3E → `0x24` indoor / `0x1C` outdoor.
 4. `disturberEn()` (reg 0x03 `MASK_DIST`), `setIrqOutputSource(0)`, wait 500 ms.
 5. **Antenna tuning** `setTuningCaps(120)` (reg 0x08, 120 pF default; scope-tune only if strikes read
@@ -326,6 +327,24 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 > first only partly: *done* says the calibration finished, not that it was against the right
 > reference. Changing the order is a one-line move; it is not made here because it changes the
 > receiver, and the receiver changes only on evidence from a storm.
+
+> #### AS BUILT, 0.22.0: the calibration follows the datasheet — order, bit and waits
+>
+> Datasheet v1-04, "Clock Generation", page 36: *"It is recommended to first trim the receiver
+> antenna before the calibration of both oscillators is done"*, and the procedure *"1. Send Direct
+> command CALIB_RCO 2. Modify REG0x08[6] = 1 3. Wait 2ms 4. Modify REG0x08[6] = 0"*; the register map
+> (pages 18–19) has bit 6 as `DISP_SRCO` and bit 5 as `DISP_TRCO`; page 9 gives the LC oscillator
+> 2 ms to start (`LCOSUT`) and the calibration 2 ms, starting *"after the LCO settles"* (`TRCOCAL`).
+> So `As3935::power_up` now clears PWD, writes the 120 pF, waits 2 ms, sends `CALIB_RCO`, raises
+> bit 6, waits 2 ms and lowers it — each wait through `as3935::wait_at_least_ms`, the IRQ settle's
+> yielded tick plus a timed busy-wait, so never under 2 ms where `FreeRtos::delay_ms(2)` was one
+> tick and sometimes almost nothing. `reset`'s 2 ms goes the same way. The banner still reads
+> `0x3A`/`0x3B` straight after, and the antenna self-test still runs after that.
+>
+> Changed without a storm, against the paragraph above, because LM asked for the datasheet's
+> procedure and the banner is the check that costs nothing: 0.21.2 read
+> `TRCO done, SRCO done (0x3A=0x9C 0x3B=0x9E)`. Anything but *done* twice on the first 0.22.0 boot is
+> the evidence to go back on, and `MASK_DISPLAY_SRCO` is the whole of the bit change.
 
 ---
 
@@ -1145,6 +1164,11 @@ a file about to be removed.
 >    to `0x40`, which pulses the wrong oscillator, leaves the RCO uncalibrated, and breaks strike
 >    validation into exactly the disturbers-but-never-lightning symptom — with nothing looking wrong.
 >    Now named `MASK_DISPLAY_TRCO`, with the reasoning at the constant.
+>
+>    **Superseded in 0.22.0.** "TRCO is the bit `CALIB_RCO` requires" had no source, and the
+>    datasheet's procedure (v1-04 page 36) pulses `REG0x08[6]`, `DISP_SRCO` — so the reference's
+>    comment named the datasheet's bit and its value did not. `power_up` pulses bit 6 now; see the
+>    0.22.0 note in §3, and the banner line that would say otherwise.
 >
 > The bundle was then deleted again. `src/as3935.rs` remains the record.
 

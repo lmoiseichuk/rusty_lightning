@@ -90,7 +90,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 678 |
+| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 746 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 495 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs` | 213 |
 | `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1139 |
@@ -137,7 +137,7 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 437 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 442 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |

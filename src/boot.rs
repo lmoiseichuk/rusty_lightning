@@ -34,19 +34,24 @@ pub const TUNING_CAPS_PF: u8 = 120;
 
 
 
-/// §3's init sequence, in the order the datasheet and the reference agree on.
+/// §3's init sequence, in the datasheet's order.
 pub fn configure(
     sensor: &As3935,
     i2c: &mut I2cDriver<'_>,
     location: Location,
 ) -> Result<defence::Point, esp_idf_hal::sys::EspError> {
-    sensor.power_up(i2c)?;
+    // **The antenna is trimmed inside `power_up`, before the calibration**,
+    // which is the datasheet's order (v1-04 page 36). It was the last write of
+    // this init until 0.22.0, half a second after the oscillators had been
+    // calibrated against an LC oscillator still at 0 pF.
+    sensor.power_up(i2c, TUNING_CAPS_PF)?;
 
     // **Did the oscillators calibrate?** Read straight after `power_up`, which
     // is the calibration. Reported and nothing more: a failure here would
     // explain disturbers-but-never-lightning, and the chip has been saying
     // whether it happened on every boot without anyone asking. See
-    // `As3935::calibration_status` for the open question it is evidence for.
+    // `As3935::calibration_status` for what 0.21.2 read, which is what this
+    // line is to be compared with.
     match sensor.calibration_status(i2c) {
         Ok(((trco, trco_raw), (srco, srco_raw))) => println!(
             "as:   RCO calibration -- TRCO {}, SRCO {} (0x3A=0x{trco_raw:02X} 0x3B=0x{srco_raw:02X})",
@@ -118,12 +123,12 @@ pub fn configure(
     sensor.clear_irq_display(i2c)?;
     FreeRtos::delay_ms(500);
 
-    sensor.set_tuning_caps(i2c, TUNING_CAPS_PF)?;
-
     // **And that is the end of the init, deliberately.**
     //
     // The reference's whole configuration is the six calls above — power up,
-    // indoor/outdoor, disturbers on, IRQ source, 500 ms, tuning caps. It never
+    // indoor/outdoor, disturbers on, IRQ source, 500 ms, tuning caps — with
+    // the tuning caps moved to the front in 0.22.0, into `power_up`, where the
+    // datasheet wants them: before the calibration, not after it. It never
     // writes `NF_LEV`, `WDTH`, `SREJ` or `MIN_NUM_LIGH` at start-up, and never
     // writes the last three at all. That is the configuration which has actually
     // detected lightning on this hardware.
