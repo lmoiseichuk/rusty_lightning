@@ -63,7 +63,7 @@
 <polyline points="921.3,92.0 921.3,102.0" fill="none" stroke="#2c7a7b" stroke-width="1.2" stroke-linejoin="round"/>
 <polyline points="935.7,92.0 935.7,102.0" fill="none" stroke="#2c7a7b" stroke-width="1.2" stroke-linejoin="round"/>
 <polyline points="950.0,92.0 950.0,102.0" fill="none" stroke="#2c7a7b" stroke-width="1.2" stroke-linejoin="round"/>
-<text x="90.0" y="82.0" font-size="12" text-anchor="start" fill="#2c7a7b">PPS time marks, one a second, down the I2C chain: every node on station time</text>
+<text x="90.0" y="82.0" font-size="12" text-anchor="start" fill="#2c7a7b">Station time: PPS while the GNSS is on, the DS3231's 1 Hz between; each sensor gets it in two steps</text>
 <polyline points="90.0,230.0 950.0,230.0" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="950.0,230.0 940.0,225.5 940.0,234.5" fill="#1f2933"/>
 <polyline points="90.0,230.0 90.0,236.0" fill="none" stroke="#1f2933" stroke-width="1.2" stroke-linejoin="round"/>
@@ -82,7 +82,7 @@
 <text x="950.0" y="252.0" font-size="12" text-anchor="middle" fill="#1f2933">60 s</text>
 <polyline points="90.0,112.0 90.0,230.0" fill="none" stroke="#b7791f" stroke-width="3" stroke-linejoin="round"/>
 <text x="98.0" y="128.0" font-size="12" text-anchor="start" fill="#b7791f">flash: light at the ring in nanoseconds;</text>
-<text x="98.0" y="145.0" font-size="12" text-anchor="start" fill="#b7791f">AS3935 IRQ and the sensors' wake within about 1 ms</text>
+<text x="98.0" y="145.0" font-size="12" text-anchor="start" fill="#b7791f">each sensor's peak detector holds it ~1 ms for the ADC</text>
 <polyline points="131.4,165.0 131.4,230.0" fill="none" stroke="#2f855a" stroke-width="2" stroke-linejoin="round"/>
 <text x="131.4" y="160.0" font-size="12" font-weight="bold" text-anchor="middle" fill="#2f855a">1 km</text>
 <text x="137.4" y="196.0" font-size="11" text-anchor="start" fill="#2f855a">2.9 s</text>

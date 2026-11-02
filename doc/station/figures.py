@@ -231,7 +231,7 @@ def speed_of_sound(celsius):
 
 def overview():
     figure = Figure("overview", 1040, 570)
-    figure.text(20, 30, "The station listens on the roof; the panel shows, logs and relays", 16, bold=True)
+    figure.text(20, 30, "The station listens on the roof; the panel shows and logs", 16, bold=True)
 
     figure.rect(20, 50, 250, 500, HOUSE, radius=12, dashed=True)
     figure.text(36, 76, "House", 14, bold=True, colour=HOUSE[1])
@@ -250,12 +250,12 @@ def overview():
     )
     core = figure.box(
         510, 245, 240, "FireBeetle 2 ESP32-P4",
-        ["P4: receivers, ring, time, log", "on-board C6: the radio", "TF card: the full log"],
+        ["P4: receivers, ring, time, log", "on-board C6: the radio", "64 GB card: log ring, FAT32"],
         STATION,
     )
     ring = figure.box(
-        820, 245, 180, "8 flash sensors",
-        ["ESP32-C3 each", "TEMT6000 + MAX4466", "sleep, wake on a flash"],
+        820, 222, 180, "8 flash sensors",
+        ["ESP32-C3 each", "BPW34, TEMT6000", "MAX4466, MS3625", "on for storms"],
         LIGHT,
     )
     time = figure.box(
@@ -268,8 +268,9 @@ def overview():
         [
             "5–6 V solar panel → 45 °C thermostat → CN3065",
             "5000 mAh Li-ion, two NTCs, MAX17043 gauge",
-            "3.3 V regulator: receivers, sensors",
-            "5 V boost at 1 MHz or more: the FireBeetle",
+            "3.3 V regulator: SEN0290s, SHT45, DS3231, GNSS",
+            "5 V boost, forced PWM, 1 MHz +: the FireBeetle",
+            "8 switched lanes: the flash sensors",
         ],
         POWER,
     )
@@ -288,10 +289,10 @@ def overview():
                 arrow_end=True, arrow_start=True)
     figure.text(380, link_y - 9, "Wi-Fi or ESP-NOW", 12, bold=True, anchor="middle", colour=RADIO[1])
     figure.text(380, link_y + 20, "no wire to the house", 12, anchor="middle", colour=RADIO[1])
-    # The ring to the core.
+    # The ring to the core: eight lanes through the PCA9548A.
     figure.line([(ring["x"], 290), (core["x"] + core["w"], 290)], LIGHT[1], arrow_end=True)
-    figure.text(785, 282, "I2C B", 12, anchor="middle", colour=LIGHT[1])
-    figure.text(785, 307, "4 wires", 12, anchor="middle", colour=LIGHT[1])
+    figure.text(785, 282, "8 lanes", 12, anchor="middle", colour=LIGHT[1])
+    figure.text(785, 307, "PCA9548A", 11, anchor="middle", colour=LIGHT[1])
     # Time and power to the core, power to the ring.
     core_bottom = core["y"] + core["h"]
     figure.line([(530, time["y"]), (530, core_bottom)], TIME[1], arrow_end=True)
@@ -299,7 +300,7 @@ def overview():
     figure.line([(720, power["y"]), (720, core_bottom)], POWER[1], arrow_end=True)
     figure.text(728, 375, "5 V", 12, colour=POWER[1])
     figure.line([(910, power["y"]), (910, ring["y"] + ring["h"])], POWER[1], arrow_end=True)
-    figure.text(918, 375, "the cell", 12, colour=POWER[1])
+    figure.text(918, 385, "switched", 12, colour=POWER[1])
     return figure.save()
 
 
@@ -373,8 +374,8 @@ def receivers():
 
 
 def ring():
-    figure = Figure("ring", 780, 760)
-    figure.text(20, 30, "Eight flash sensors, one 45° sector each, on one cable", 16, bold=True)
+    figure = Figure("ring", 780, 810)
+    figure.text(20, 30, "Eight flash sensors, one 45° sector each, each on its own lane", 16, bold=True)
     centre_x, centre_y = 390, 400
     node_radius, wedge_inner, wedge_outer = 215, 262, 318
     names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
@@ -383,7 +384,7 @@ def ring():
         angle = math.radians(bearing)
         return centre_x + r * math.sin(angle), centre_y - r * math.cos(angle)
 
-    # The sectors, alternately shaded, each a 45° wedge facing out from its node.
+    # The sectors, alternately shaded, each a 45° wedge facing out from its sensor.
     for index in range(8):
         start, end = index * 45 - 22.5, index * 45 + 22.5
         outer_start, outer_end = at(start, wedge_outer), at(end, wedge_outer)
@@ -399,27 +400,24 @@ def ring():
         x, y = at(index * 45, (wedge_inner + wedge_outer) / 2)
         figure.text(x, y + 5, names[index], 13, bold=True, anchor="middle", colour=LIGHT[1])
 
-    # The chain: out of the core to the north node, then round clockwise, open at the end.
-    figure.line([(centre_x, centre_y - 70), at(0, node_radius)], INK, width=3)
-    arc_start, arc_end = at(0, node_radius), at(315, node_radius)
-    figure.raw(
-        f'<path d="M {arc_start[0]:.1f} {arc_start[1]:.1f} A {node_radius} {node_radius} 0 1 1 '
-        f'{arc_end[0]:.1f} {arc_end[1]:.1f}" fill="none" stroke="{INK}" stroke-width="3"/>'
-    )
+    # The lanes: a star, one spoke per sensor, so a broken or wet cable costs one
+    # sensor and not every sensor after it. Drawn first, so the core covers their
+    # inner ends.
+    for index in range(8):
+        figure.line([(centre_x, centre_y), at(index * 45, node_radius)], INK, width=3)
 
-    # The nodes.
     for index in range(8):
         x, y = at(index * 45, node_radius)
         figure.rect(x - 34, y - 20, 68, 40, LIGHT, radius=6)
-        figure.text(x, y + 5, f"0x{0x10 + index:02X}", 13, bold=True, anchor="middle", colour=INK, check=False)
+        figure.text(x, y + 5, f"ch {index}", 13, bold=True, anchor="middle", colour=INK, check=False)
 
-    # The core in the middle.
-    figure.rect(centre_x - 95, centre_y - 70, 190, 140, STATION, radius=10)
-    figure.text(centre_x, centre_y - 36, "FireBeetle 2", 14, bold=True, anchor="middle", colour=STATION[1])
-    figure.text(centre_x, centre_y - 16, "polls each node", 12, anchor="middle")
-    figure.text(centre_x, centre_y + 2, "every 100–200 ms", 12, anchor="middle")
-    figure.text(centre_x, centre_y + 30, "SEN0290 plate", 13, bold=True, anchor="middle", colour=STATION[1])
-    figure.text(centre_x, centre_y + 50, "under the ring", 12, anchor="middle")
+    figure.rect(centre_x - 100, centre_y - 75, 200, 150, STATION, radius=10)
+    figure.text(centre_x, centre_y - 42, "FireBeetle 2", 14, bold=True, anchor="middle", colour=STATION[1])
+    figure.text(centre_x, centre_y - 22, "PCA9548A: a channel", 12, anchor="middle")
+    figure.text(centre_x, centre_y - 6, "and a power switch", 12, anchor="middle")
+    figure.text(centre_x, centre_y + 10, "for every lane", 12, anchor="middle")
+    figure.text(centre_x, centre_y + 38, "SEN0290 plate", 13, bold=True, anchor="middle", colour=STATION[1])
+    figure.text(centre_x, centre_y + 56, "under the ring", 12, anchor="middle")
 
     # A flash at 70°: the two brightest neighbours, NE and E, give the bearing.
     flash_bearing = 70
@@ -430,65 +428,76 @@ def ring():
     coordinates = " ".join(f"{bolt_x + dx:.1f},{bolt_y + dy:.1f}" for dx, dy in bolt)
     figure.raw(f'<polygon points="{coordinates}" fill="#f6c343" stroke="{LIGHT[1]}" stroke-width="1.2"/>')
 
-    figure.line([(30, 706), (70, 706)], INK, width=3)
-    figure.text(80, 711, "the 4-wire chain: cell +, GND, SDA, SCL; about 1–2 m, 2.2 kΩ pull-ups", 12)
-    figure.text(30, 736, "A flash at 70°: the two brightest neighbours, NE and E, give the bearing, to about ±20°.", 12)
+    figure.line([(30, 738), (70, 738)], INK, width=3)
+    figure.text(80, 743, "a lane: 4 wires (cell +, GND, SDA, SCL), its own PCA9548A channel and power switch", 12)
+    figure.text(30, 768, "Every sensor answers at 0x10: the channel is its place; each reports its own id.", 12)
+    figure.text(30, 790, "A flash at 70°: the two brightest neighbours, NE and E, give the bearing, to about ±20°.", 12)
     return figure.save()
 
 
 def flash_sensor():
-    figure = Figure("flash_sensor", 1000, 640)
-    figure.text(20, 30, "One flash sensor: light wakes it, sound gives the distance", 16, bold=True)
+    figure = Figure("flash_sensor", 1010, 690)
+    figure.text(20, 30, "One flash sensor: two light channels, two sound channels, awake while its lane is on",
+                16, bold=True)
 
-    temt = figure.box(30, 115, 170, "TEMT6000", ["phototransistor"], LIGHT, height=70)
-    front = figure.box(240, 115, 200, "Load + AC coupling", ["load lowered for daylight"], LIGHT, height=70)
-    comparator = figure.box(490, 48, 220, "Comparator", ["LMV331 or TLV7011 class"], LIGHT, height=56)
-    peak = figure.box(490, 128, 220, "Peak-hold", ["a diode and a capacitor"], LIGHT, height=56)
-    microphone = figure.box(30, 258, 250, "MAX4466 + electret", ["gain by trimmer, 25–125×"], SOUND, height=70)
-    digital = figure.box(30, 345, 250, "MS3625, optional", ["I2S, for close strikes"], SOUND, dashed=True,
-                         height=60)
-    figure.rect(760, 45, 220, 380, STATION, radius=10)
-    figure.text(775, 410, "ESP32-C3", 16, bold=True, colour=STATION[1], check=False)
+    # Row one: the photodiode's chain. One dual op-amp is both the amplifier and the peak detector.
+    photodiode = figure.box(30, 64, 140, "BPW34", ["photodiode"], LIGHT)
+    amplifier = figure.box(200, 64, 200, "Transimpedance amp", ["op-amp A; gain: day, night"], LIGHT)
+    coupling = figure.box(430, 64, 150, "AC coupling", ["corner ~1 kHz"], LIGHT)
+    peak = figure.box(610, 64, 190, "Peak detector", ["op-amp B; ~1 ms decay"], LIGHT)
+    temt = figure.box(30, 244, 250, "TEMT6000", ["phototransistor: the level"], LIGHT)
+    microphone = figure.box(30, 319, 250, "MAX4466 + electret", ["gain by trimmer, 25–125×"], SOUND)
+    digital = figure.box(30, 394, 250, "MS3625", ["I2S, for close strikes"], SOUND)
 
-    # Ports on the chip's left edge, at the height of the line that reaches each.
+    chip_x, chip_top, chip_bottom = 830, 45, 520
+    figure.rect(chip_x, chip_top, 170, chip_bottom - chip_top, STATION, radius=10)
+    figure.text(chip_x + 14, chip_bottom - 14, "ESP32-C3", 16, bold=True, colour=STATION[1], check=False)
     ports = [
-        (76, "GPIO: light-sleep wake"),
-        (156, "ADC1: first stroke's peak"),
-        (221, "ADC1: edges, DMA ~20 kHz"),
-        (293, "ADC1: thunder, ~1 kHz"),
-        (375, "I2S, if fitted"),
+        (90, "ADC: photodiode peak"),
+        (150, "ADC: photodiode, AC"),
+        (205, "GPIO: amplifier gain"),
+        (270, "ADC: TEMT6000"),
+        (345, "ADC: MAX4466"),
+        (420, "I2S: MS3625"),
+        (468, "I2C slave"),
     ]
     for y, label in ports:
-        if text_width(label, 12) > 220 - 24:
+        if text_width(label, 12) > 170 - 24:
             raise ValueError(f"port label '{label}' overflows the chip")
-        figure.text(772, y + 4, label, 12, check=False)
+        figure.text(chip_x + 12, y + 4, label, 12, check=False)
 
-    figure.line([temt["right"], front["left"]], LIGHT[1], arrow_end=True)
-    branch_x = 465
-    figure.line([front["right"], (branch_x, 150)], LIGHT[1])
-    figure.line([(branch_x, 150), (branch_x, 76), comparator["left"]], LIGHT[1], arrow_end=True)
-    figure.line([(branch_x, 150), (branch_x, 156), peak["left"]], LIGHT[1], arrow_end=True)
-    figure.line([(branch_x, 150), (branch_x, 221), (760, 221)], LIGHT[1], arrow_end=True)
-    figure.line([comparator["right"], (760, 76)], LIGHT[1], arrow_end=True)
-    figure.line([peak["right"], (760, 156)], LIGHT[1], arrow_end=True)
-    figure.text(600, 207, "fast edges only: the steady daylight is blocked", 12, anchor="middle", colour=LIGHT[1])
-    figure.line([microphone["right"], (760, 293)], SOUND[1], arrow_end=True)
-    figure.text(520, 286, "band-pass 5–300 Hz in firmware", 12, anchor="middle", colour=SOUND[1])
-    figure.line([digital["right"], (760, 375)], SOUND[1], dashed=True, arrow_end=True)
-    figure.text(520, 368, "BCLK, WS, SD", 12, anchor="middle", colour=SOUND[1])
+    row = 90
+    figure.line([photodiode["right"], amplifier["left"]], LIGHT[1], arrow_end=True)
+    figure.line([amplifier["right"], coupling["left"]], LIGHT[1], arrow_end=True)
+    figure.line([coupling["right"], peak["left"]], LIGHT[1], arrow_end=True)
+    figure.line([peak["right"], (chip_x, row)], LIGHT[1], arrow_end=True)
+    branch_x = 595
+    figure.line([(branch_x, row), (branch_x, 150), (chip_x, 150)], LIGHT[1], arrow_end=True)
+    figure.text(712, 143, "later strokes, their shape", 12, anchor="middle", colour=LIGHT[1])
+    # The gain line runs back from the chip to the amplifier: an AO3400 switches its feedback resistor.
+    amplifier_bottom = amplifier["y"] + amplifier["h"]
+    figure.line([(chip_x, 205), (300, 205), (300, amplifier_bottom)], INK, width=1.4, arrow_end=True)
+    figure.text(560, 198, "GPIO21 → analog switch: the amplifier's gain", 12, anchor="middle", colour=INK)
 
-    # The cable leaves the bottom of the chip.
-    figure.line([(870, 425), (870, 458)], INK, width=3)
-    figure.text(860, 476, "4-wire chain: cell +, GND, SDA, SCL", 12, bold=True, anchor="end")
+    figure.line([temt["right"], (chip_x, 270)], LIGHT[1], arrow_end=True)
+    figure.text(555, 263, "day or night, the background", 12, anchor="middle", colour=LIGHT[1])
+    figure.line([microphone["right"], (chip_x, 345)], SOUND[1], arrow_end=True)
+    figure.text(555, 338, "thunder: decimated to 1 kHz, 5–300 Hz", 12, anchor="middle", colour=SOUND[1])
+    figure.line([digital["right"], (chip_x, 420)], SOUND[1], arrow_end=True)
+    figure.text(555, 413, "BCLK, WS, SD", 12, anchor="middle", colour=SOUND[1])
 
-    figure.box(30, 500, 300, "Sleep",
-               ["light sleep at about 0.15 mA", "wakes about 1 ms after a flash", "awake 60 s for strokes, thunder"],
+    # The lane leaves the bottom of the chip.
+    figure.line([(915, chip_bottom), (915, 548)], INK, width=3)
+    figure.text(905, 556, "lane: cell +, GND, SDA, SCL", 12, bold=True, anchor="end")
+
+    figure.box(30, 578, 310, "Awake while its lane is on",
+               ["80 MHz; 40 to 160 is fine", "datasheet: 18–22 mA at 80 MHz", "ADC: 4 channels, ~20 kHz each"],
                PLAIN)
-    figure.box(350, 500, 300, "Reports, polled over I2C",
+    figure.box(355, 578, 310, "Reports, polled over I2C",
                ["flash: time, peak, rise, length", "thunder: onset, level, 3 bands", "about 12 and 16 bytes"],
                PLAIN)
-    figure.box(670, 500, 310, "Bus and power",
-               ["I2C slave, 0x10–0x17 from NVS", "time mark: general call at PPS", "cell → 5 V pin → on-board LDO"],
+    figure.box(680, 578, 320, "Lane and time",
+               ["address 0x10 on every sensor", "time marks in two steps", "1.5 kΩ pull-ups here, to its 3.3 V"],
                PLAIN)
     return figure.save()
 
@@ -498,7 +507,8 @@ def power():
     figure.text(20, 30, "Power: one linear charger, one fast boost, nothing switching near 500 kHz", 16, bold=True)
 
     solar = figure.box(20, 60, 150, "Solar panel", ["5–6 V, about 5 W"], POWER, height=70)
-    thermostat = figure.box(205, 60, 190, "Thermostat", ["KSD9700, 45 °C, NC", "taped to the cell"], POWER, height=70)
+    thermostat = figure.box(205, 60, 190, "Thermostat", ["KSD9700, 45 °C, NC", "taped to the cell"], POWER,
+                            height=70)
     charger = figure.box(430, 60, 170, "CN3065", ["linear charger", "CHRG, DONE → GPIO"], POWER, height=70)
     cell = figure.box(635, 60, 190, "Li-ion, 5000 mAh", ["about 18 Wh", "two NTCs → ADC"], POWER, height=70)
     gauge = figure.box(860, 60, 180, "MAX17043", ["across the cell", "I2C A, 0x36"], POWER, height=70)
@@ -517,24 +527,180 @@ def power():
     # The cell feeds three branches.
     bus_y = 225
     figure.line([(780, cell_bottom), (780, bus_y)], POWER[1], width=2.4)
-    figure.line([(420, bus_y), (930, bus_y)], POWER[1], width=2.4)
-    regulator = figure.box(340, 250, 210, "3.3 V regulator", ["linear: no switching", "SEN0290s, SHT45, DS3231"],
+    figure.line([(445, bus_y), (935, bus_y)], POWER[1], width=2.4)
+    regulator = figure.box(340, 250, 210, "3.3 V regulator", ["linear: no switching", "follows a cell below ~3.4 V"],
                            POWER)
-    boost = figure.box(580, 250, 220, "5 V boost", ["fixed frequency, 1 MHz +", "MT3608 class, 500 mA"], POWER)
-    figure.box(830, 250, 210, "The cell itself", ["to the ring's 5 V pins", "each node's own LDO"], POWER)
+    boost = figure.box(580, 250, 220, "5 V boost", ["forced PWM, 1 MHz +", "1.5 A at 5 V, from 3.0 V"], POWER)
+    switches = figure.box(830, 250, 210, "8 lane switches", ["AO3401A + AO3400 each", "on for storms"], POWER)
     for x in (445, 690, 935):
         figure.line([(x, bus_y), (x, 250)], POWER[1], arrow_end=True)
-    loads = figure.box(340, 360, 210, "Receivers, sensors", ["and the GNSS"], STATION)
+    loads = figure.box(340, 360, 210, "SEN0290s, SHT45", ["DS3231, GNSS (switched)"], STATION)
     beetle = figure.box(580, 360, 220, "FireBeetle 2", ["takes 5 V only"], STATION)
-    nodes = figure.box(830, 360, 210, "8 flash sensors", ["ESP32-C3 each"], LIGHT)
+    nodes = figure.box(830, 360, 210, "8 flash sensors", ["5 V pin → own LDO"], LIGHT)
     figure.line([(445, 250 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)
     figure.line([(690, 250 + boost["h"]), (690, beetle["y"])], POWER[1], arrow_end=True)
-    figure.line([(935, 250 + boost["h"]), (935, nodes["y"])], POWER[1], arrow_end=True)
+    figure.line([(935, 250 + switches["h"]), (935, nodes["y"])], POWER[1], arrow_end=True)
 
     figure.box(20, 250, 290, "Why not a 150 kHz module",
-               ["3rd harmonic at 450 kHz", "4th harmonic at 600 kHz", "pulse skipping at light load",
+               ["3rd harmonic at 450 kHz", "a cheap oscillator drifts", "pulse skipping at light load",
                 "drops into the AS3935's band"],
                PLAIN)
+    return figure.save()
+
+
+def lane():
+    figure = Figure("lane", 960, 450)
+    figure.text(20, 30, "A lane switch: off by default, on for storms", 16, bold=True)
+    pull_up, series, miller = 100e3, 10e3, 47e-9
+    # Assumptions for the switch-on estimate, marked approx. in the text: the
+    # AO3401A's gate sits about 1.2 V below its source while the lane rises (its
+    # Miller plateau at a small load), and the sensor puts about 10 µF on the lane.
+    plateau, lane_capacitance, cell_high = 1.2, 10e-6, 4.2
+
+    def resistor(x, top, bottom, label, label_side):
+        figure.rect(x - 13, top, 26, bottom - top, PLAIN, radius=3)
+        if label_side == "left":
+            figure.text(x - 20, (top + bottom) / 2 + 4, label, 12, anchor="end")
+        else:
+            figure.text(x + 20, (top + bottom) / 2 + 4, label, 12)
+
+    def ground(x, y):
+        figure.line([(x - 18, y), (x + 18, y)], INK, width=2)
+        figure.line([(x - 10, y + 6), (x + 10, y + 6)], INK, width=2)
+
+    # The cell's rail, the P-channel switch on the high side, a PTC, then the lane.
+    figure.text(40, 85, "cell +", 13, bold=True)
+    figure.line([(90, 80), (420, 80)], INK, width=2)
+    figure.box(420, 52, 140, "AO3401A", ["P-channel"], POWER, height=56)
+    figure.text(414, 74, "S", 11, bold=True, anchor="end")
+    figure.text(566, 74, "D", 11, bold=True)
+    figure.text(498, 124, "G", 11, bold=True)
+    figure.line([(560, 80), (680, 80)], INK, width=2)
+    figure.rect(680, 66, 70, 28, PLAIN, radius=3)
+    figure.text(715, 85, "PTC", 11, bold=True, anchor="middle", check=False)
+    figure.text(715, 58, "~200 mA hold", 11, anchor="middle")
+    figure.line([(750, 80), (920, 80)], INK, width=2, arrow_end=True)
+    figure.text(835, 70, "lane +", 12, anchor="middle")
+    figure.text(835, 100, "to the 5 V pin", 11, anchor="middle", colour=MUTED)
+
+    # The gate: 100 kΩ to the cell holds it off; 10 kΩ in series from the driver
+    # pulls it on; 47 nF from gate to drain slows the lane's rise (a Miller soft start).
+    gate_y = 190
+    figure.line([(490, 108), (490, gate_y)], INK, width=1.6)
+    figure.line([(300, 80), (300, 105)], INK, width=1.6)
+    resistor(300, 105, 165, "100 kΩ", "left")
+    figure.line([(300, 165), (300, gate_y), (490, gate_y)], INK, width=1.6)
+    figure.line([(600, 80), (600, 122)], INK, width=1.6)
+    figure.line([(584, 122), (616, 122)], INK, width=2.4)
+    figure.line([(584, 132), (616, 132)], INK, width=2.4)
+    figure.line([(600, 132), (600, gate_y), (490, gate_y)], INK, width=1.6)
+    figure.text(624, 132, "47 nF", 12)
+    for x in (300, 490, 600):
+        figure.raw(f'<circle cx="{x}" cy="{gate_y}" r="3.5" fill="{INK}"/>')
+    figure.raw(f'<circle cx="600" cy="80" r="3.5" fill="{INK}"/>')
+    figure.line([(490, gate_y), (490, 210)], INK, width=1.6)
+    resistor(490, 210, 262, "10 kΩ", "right")
+    figure.line([(490, 262), (490, 285)], INK, width=1.6)
+
+    # The driver: an N-channel the FireBeetle's 3.3 V pin can switch fully.
+    figure.box(420, 285, 140, "AO3400", ["N-channel"], POWER, height=56)
+    figure.text(498, 281, "D", 11, bold=True)
+    figure.text(498, 358, "S", 11, bold=True)
+    figure.text(414, 309, "G", 11, bold=True, anchor="end")
+    figure.line([(490, 341), (490, 372)], INK, width=1.6)
+    ground(490, 372)
+    figure.line([(110, 313), (420, 313)], INK, width=1.6, arrow_end=True)
+    figure.text(110, 303, "FireBeetle pin: high = lane on", 12)
+    figure.raw(f'<circle cx="250" cy="313" r="3.5" fill="{INK}"/>')
+    figure.line([(250, 313), (250, 325)], INK, width=1.6)
+    resistor(250, 325, 372, "100 kΩ", "left")
+    figure.line([(250, 372), (250, 386)], INK, width=1.6)
+    ground(250, 386)
+
+    on_fraction = pull_up / (pull_up + series)
+    gate_current = (cell_high - plateau) / series - plateau / pull_up
+    slew = gate_current / miller
+    inrush = lane_capacitance * slew
+    figure.box(640, 160, 300, "What it does",
+               [
+                   "at boot: 100 kΩ holds the AO3400 off",
+                   f"gate when on: −{3.0 * on_fraction:.1f} to −{4.2 * on_fraction:.1f} V",
+                   "AO3401A: specified down to −2.5 V",
+                   f"lane rises ~{slew / 1000:.0f} V/ms: ~{inrush * 1000:.0f} mA into 10 µF",
+                   "power the lane, then its channel",
+                   "cut: the channel first, then power",
+                   "never a sensor's USB on a lane",
+               ],
+               PLAIN)
+    return figure.save()
+
+
+def card():
+    figure = Figure("card", 1000, 500)
+    figure.text(20, 30, "The card: a small FAT32 partition and a log ring", 16, bold=True)
+    card_bytes, block_bytes, header_bytes = 64e9, 512, 20
+    blocks = card_bytes / block_bytes
+    search_reads = math.ceil(math.log2(blocks))
+
+    figure.text(40, 58, "64 GB microSD, high-endurance", 12, colour=MUTED)
+    figure.rect(40, 68, 40, 40, PLAIN, radius=3)
+    figure.text(60, 93, "MBR", 11, bold=True, anchor="middle", check=False)
+    figure.rect(80, 68, 220, 40, TIME, radius=3)
+    figure.text(190, 93, "FAT32: images, settings", 12, bold=True, anchor="middle", colour=TIME[1], check=False)
+    figure.rect(300, 68, 660, 40, STATION, radius=3)
+    figure.text(630, 93, "log ring: the rest of the card, in 512-byte blocks", 12, bold=True, anchor="middle",
+                colour=STATION[1], check=False)
+
+    # A stretch of the ring, magnified: physical order left to right, the newest
+    # block just before the oldest, which is the next to be written over.
+    figure.line([(600, 108), (120, 150)], MUTED, width=1, dashed=True)
+    figure.line([(700, 108), (880, 150)], MUTED, width=1, dashed=True)
+    streams = {7: LIGHT, 8: SOUND, 9: RADIO}
+    cells = [
+        (2001, 7, 40), (2002, 8, 0), (2003, 8, 1), (2004, 8, 2), (2005, 7, 41), (2006, 9, 0), (2007, 9, 1),
+        (1990, 7, 33), (1991, 7, 34), (1992, 7, 35), (1993, 7, 36), (1994, 7, 37),
+    ]
+    width = (880 - 120) / len(cells)
+    for index, (sequence, stream, position) in enumerate(cells):
+        x = 120 + index * width
+        figure.rect(x + 2, 160, width - 4, 46, streams[stream], radius=4)
+        figure.text(x + width / 2, 179, f"{sequence}", 11, bold=True, anchor="middle", check=False)
+        figure.text(x + width / 2, 196, f"s{stream} #{position}", 11, anchor="middle", check=False)
+    newest_x = 120 + 6.5 * width
+    oldest_x = 120 + 7.5 * width
+    figure.text(newest_x, 150, "newest", 12, bold=True, anchor="middle")
+    figure.line([(newest_x, 154), (newest_x, 160)], INK, width=1.4)
+    figure.text(oldest_x, 226, "oldest: written over next", 12, bold=True, anchor="middle")
+    figure.line([(oldest_x, 206), (oldest_x, 214)], INK, width=1.4)
+    figure.text(120, 226, "s7 a log, s8 a recording, s9 an image (an 18-block ring)", 12, colour=MUTED)
+
+    # One block, field by field.
+    figure.text(60, 262, "One block = one 512-byte sector", 13, bold=True)
+    fields = [
+        ("magic+format", 2, 110), ("length", 2, 80), ("sequence", 4, 100), ("stream", 4, 90),
+        ("index", 4, 80), ("CRC32", 4, 80), ("payload", block_bytes - header_bytes, 340),
+    ]
+    if sum(size for _, size, _ in fields) != block_bytes:
+        raise ValueError("the block's fields do not add up to a sector")
+    x = 60
+    for name, size, box_width in fields:
+        palette = PLAIN if name == "payload" else STATION
+        figure.rect(x, 272, box_width, 36, palette, radius=2)
+        if text_width(name, 12, True) > box_width - 8:
+            raise ValueError(f"field label '{name}' overflows its box")
+        figure.text(x + box_width / 2, 295, name, 12, bold=True, anchor="middle", check=False)
+        figure.text(x + box_width / 2, 326, f"{size} B", 11, anchor="middle", colour=MUTED)
+        x += box_width
+    overhead = header_bytes / block_bytes * 100
+    figure.text(60, 350, f"Header {header_bytes} bytes, payload {block_bytes - header_bytes}: {overhead:.1f} % overhead. "
+                "The CRC covers the rest, seeded with the card's id.", 12)
+
+    figure.box(40, 372, 300, "The newest block",
+               ["the sequence drops at one place", f"binary search: {search_reads} reads", "then a scan past bad blocks"], PLAIN)
+    figure.box(355, 372, 300, "Streams",
+               ["the first block describes it", "NVS lists the open ones", "a cut transfer resumes"], PLAIN)
+    figure.box(670, 372, 290, "Images",
+               ["copied into FAT32 when landed", "read back before it counts", "the ring copy kept till then"], PLAIN)
     return figure.save()
 
 
@@ -549,10 +715,10 @@ def timing(celsius=25):
     def x_of(seconds):
         return left + (right - left) * seconds / span
 
-    # PPS marks: one a second, each sent down the chain as an I2C general call.
+    # PPS marks: one a second; each sensor is given station time over its lane.
     for second in range(0, 61):
         figure.line([(x_of(second), 92), (x_of(second), 102)], TIME[1], width=1.2)
-    figure.text(left, 82, "PPS time marks, one a second, down the I2C chain: every node on station time", 12,
+    figure.text(left, 82, "Station time: PPS while the GNSS is on, the DS3231's 1 Hz between; each sensor gets it in two steps", 12,
                 colour=TIME[1])
 
     figure.line([(left, axis_y), (right, axis_y)], INK, width=1.6, arrow_end=True)
@@ -563,7 +729,7 @@ def timing(celsius=25):
     # The flash, at zero.
     figure.line([(x_of(0), 112), (x_of(0), axis_y)], LIGHT[1], width=3)
     figure.text(x_of(0) + 8, 128, "flash: light at the ring in nanoseconds;", 12, colour=LIGHT[1])
-    figure.text(x_of(0) + 8, 145, "AS3935 IRQ and the sensors' wake within about 1 ms", 12, colour=LIGHT[1])
+    figure.text(x_of(0) + 8, 145, "each sensor's peak detector holds it ~1 ms for the ADC", 12, colour=LIGHT[1])
 
     for distance in (1, 5, 10, 16):
         arrival = distance * seconds_per_km
@@ -586,7 +752,7 @@ def timing(celsius=25):
 
 
 def main():
-    paths = [overview(), receivers(), ring(), flash_sensor(), power(), timing()]
+    paths = [overview(), receivers(), ring(), flash_sensor(), lane(), power(), card(), timing()]
     for path in paths:
         print(path.relative_to(HERE.parent.parent))
 
