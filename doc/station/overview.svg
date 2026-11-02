@@ -40,7 +40,7 @@
 <text x="602.0" y="445.0" font-size="12" text-anchor="start" fill="#1f2933">5–6 V solar panel → 45 °C thermostat → CN3065</text>
 <text x="602.0" y="463.0" font-size="12" text-anchor="start" fill="#1f2933">5000 mAh Li-ion, two NTCs, MAX17043 gauge</text>
 <text x="602.0" y="481.0" font-size="12" text-anchor="start" fill="#1f2933">3.3 V regulator: SEN0290s, SHT45, DS3231, GNSS</text>
-<text x="602.0" y="499.0" font-size="12" text-anchor="start" fill="#1f2933">5 V boost, forced PWM, 1 MHz +: the FireBeetle</text>
+<text x="602.0" y="499.0" font-size="12" text-anchor="start" fill="#1f2933">5 V boost, chosen by its noise: the FireBeetle</text>
 <text x="602.0" y="517.0" font-size="12" text-anchor="start" fill="#1f2933">8 switched lanes: the flash sensors</text>
 <polyline points="630.0,165.0 630.0,245.0" fill="none" stroke="#2f6fae" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="630.0,245.0 634.5,235.0 625.5,235.0" fill="#2f6fae"/>

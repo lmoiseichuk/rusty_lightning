@@ -269,7 +269,7 @@ def overview():
             "5–6 V solar panel → 45 °C thermostat → CN3065",
             "5000 mAh Li-ion, two NTCs, MAX17043 gauge",
             "3.3 V regulator: SEN0290s, SHT45, DS3231, GNSS",
-            "5 V boost, forced PWM, 1 MHz +: the FireBeetle",
+            "5 V boost, chosen by its noise: the FireBeetle",
             "8 switched lanes: the flash sensors",
         ],
         POWER,
@@ -530,7 +530,7 @@ def power():
     figure.line([(445, bus_y), (935, bus_y)], POWER[1], width=2.4)
     regulator = figure.box(340, 250, 210, "3.3 V regulator", ["linear: no switching", "follows a cell below ~3.4 V"],
                            POWER)
-    boost = figure.box(580, 250, 220, "5 V boost", ["forced PWM, 1 MHz +", "1.5 A at 5 V, from 3.0 V"], POWER)
+    boost = figure.box(580, 250, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
     switches = figure.box(830, 250, 210, "8 lane switches", ["AO3401A + AO3400 each", "on for storms"], POWER)
     for x in (445, 690, 935):
         figure.line([(x, bus_y), (x, 250)], POWER[1], arrow_end=True)

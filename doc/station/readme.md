@@ -116,13 +116,27 @@ switching noise. Three cautions around it:
   5 V tolerant.
 
 **The boost is the switcher the design adds.**
-- **Forced PWM.** It must be fixed-frequency at 1 MHz or more, with a
-  forced-PWM mode, because many small boosts skip pulses at light load and drop
-  into the AS3935's band. The MT3608 does exactly that at light load, so it is
-  not the part.
-- **Current.** DFRobot gives the FireBeetle's Wi-Fi peaks as 1050 mA at 5 V.
-  Size the boost for 1.5 A at 5 V from a 3.0 V cell, with bulk capacitance at the
-  FireBeetle's input.
+- **The modules on hand.** Two boost modules already carry a P4, its sensors and
+  a second board on another project. One is built on a chip marked 8628 with an
+  SS24 diode, the other on one marked A17v5u with an SS12. DFRobot gives the
+  FireBeetle's Wi-Fi peaks as 1050 mA at 5 V, which they handle; keep bulk
+  capacitance at the FireBeetle's input.
+- **Light load is the risk.** Between storms the FireBeetle sleeps at about
+  31.5 mA at 5 V, a light load on which most small boosts stop switching
+  steadily and switch in bursts, and bursts can land in the AS3935's band.
+  - The MT3608, marked B628, is known to do this.
+  - A forced-PWM part at 1 MHz or more avoids it.
+- **The bench decides between them.** Outdoors on the cell, with a SEN0290
+  about 20 cm away, count its disturbers and noise per minute three ways: with
+  no boost, then with each module, each loaded at about 30 and about 80 mA at
+  5 V. A scope on the switch node shows whether a module bursts. A module that
+  raises the disturber rate has four remedies, in order:
+  1. move it to the far end of the box from the SEN0290 plate;
+  2. filter its output;
+  3. hold it out of bursting with a minimum load (20 mA at 5 V costs about
+     2.4 Wh a day);
+  4. drop the boost altogether, if the cell can feed the FireBeetle's 5 V input
+     directly.
 - **Not a 150 kHz module:** its third harmonic sits at 450 kHz, a cheap
   oscillator drifts, and it skips pulses at light load.
 - **The FireBeetle's own regulators.** It carries buck converters of its own (to
@@ -257,7 +271,7 @@ the card, the way the moisture project's `backlog` crate tests its ring.
 | Acoustic membranes and fur windscreens | on hand | the microphones in rain and wind |
 | PCA9548A, AO3401A and AO3400 | on hand | a channel and a power switch for each lane, and the GNSS's switch |
 | MAX4466 modules and 6050 electret capsules (−52 dB) | ordered | compare a 6050 against the module's own capsule with a slow low sweep; turn the gain up for distant thunder |
-| 5 V boost: forced PWM, 1 MHz or more, 1.5 A at 5 V from a 3.0 V cell | to choose | the FireBeetle takes 5 V only; no pulse skipping into the AS3935's band |
+| 5 V boost: two modules (8628 + SS24, A17v5u + SS12) | on hand | the FireBeetle takes 5 V only; the bench test above picks the quieter |
 | 64 GB high-endurance microSD | check stock | the log ring and the FAT32 partition |
 | Eight BPW34 photodiodes (Vishay's BPW34 and BPW34S differ only in packing) | check stock | the fast light channel |
 | Eight dual rail-to-rail op-amps (MCP6002 or TLV9002 class) | check stock | each photodiode's amplifier and peak detector |
@@ -628,7 +642,7 @@ before it:
   and the SD card's;
 - a C3's current at 40, 80 and 160 MHz with four ADC channels and I2S running;
 - ESP-NOW through ESP-Hosted;
-- the boost's noise against one SEN0290;
+- the two boost modules' noise against one SEN0290, at the FireBeetle's sleep and idle loads;
 - the MAX4466 against the 6050 capsules;
 - the log ring, on a PC and then on a card with the power pulled mid-write;
 - one flash sensor on the bench: its peak detector against a camera flash, its
