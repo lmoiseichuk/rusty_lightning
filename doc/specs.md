@@ -1008,7 +1008,8 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 > board on USB that has to be reachable when a script comes to read it, across the restart every
 > console open causes. It is unconditional — it outranks the cell's rule too — because the
 > detection above cannot be trusted in the direction that would drop the port on USB, and on the
-> cell it costs the table's difference: ~2.5 days instead of ~30. Every boot, `status`, `health`
+> cell it costs about 2.5 days of running against the week a sleeping board has lasted — the
+> observed week, not the table's ~30, which is idle current alone. Every boot, `status`, `health`
 > and the web page say so. The argument in full is in doc/console.md, "Across restarts".
 
 > #### ⚠ AS BUILT, 0.21.0: the sensor's IRQ wakes the chip — the "IRQ + timer wake" above, finally

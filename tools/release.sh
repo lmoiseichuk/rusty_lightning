@@ -56,7 +56,7 @@ BINARY="lightning"
 #
 # variant | cargo flags | what it is for
 VARIANTS=(
-  "default|(default)|THE INSTRUMENT: light sleep on, so the battery lasts. The USB console is only reachable in the waking windows -- send \`freq 160\` to keep the port up until the next restart, or \`awake on\` to keep it up across restarts (saved; ~2.5 days on the cell against ~30)."
+  "default|(default)|THE INSTRUMENT: light sleep on, so the battery lasts. The USB console is only reachable in the waking windows -- send \`freq 160\` to keep the port up until the next restart, or \`awake on\` to keep it up across restarts (saved; ~2.5 days on the cell, against up to a week asleep)."
   "no-light-sleep|--features no-light-sleep|RECOVERY BUILD: light sleep compiled out entirely, so the USB port never goes away. Costs the battery saving; buys a board that can always be talked to. Flash this before a long debugging session, and the ordinary build afterwards -- or keep the ordinary build and send \`awake on\`, which holds the port up across restarts without a reflash."
 )
 

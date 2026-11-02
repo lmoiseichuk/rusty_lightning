@@ -257,33 +257,54 @@ pub fn handle(
             // next boot, so the save is the half that matters, and the answer
             // says whether it landed.
             //
-            // **What a failed save means depends on the direction**, so it is
-            // said from what NVS still holds rather than guessed: a failed
-            // `awake on` is lost by a restart, a failed `awake off` is undone
-            // by one.
-            let held_before = crate::policy::awake_lock(settings::awake_lock());
-            let saved = match settings::store_awake_lock(on) {
-                Ok(()) => "saved".to_string(),
-                Err(e) => format!(
-                    "NOT saved ({e}) -- a restart goes back to {}",
-                    match held_before {
-                        true => "holding it awake",
-                        false => "sleeping on its own",
+            // **The lock in RAM only ever takes a value NVS holds.** Every
+            // report reads `rt.awake_lock` and calls it saved -- `status` says
+            // "from every boot", a bare `awake` says "(saved)", the web page's
+            // warning says "saved" -- and none of them can see whether the
+            // save behind it landed. So a save that failed leaves the lock as
+            // NVS still holds it, read back exactly as boot reads it, and
+            // those reports stay true without each one checking. Holding
+            // the asked-for value in RAM anyway made a failed `awake on`
+            // report "ON (saved)" until the restart that then booted
+            // unlocked -- the one thing the command promises, said falsely.
+            // The session-only form is `freq 160` (or `sleep on`), which the
+            // failure names.
+            match settings::store_awake_lock(on) {
+                Ok(()) => {
+                    *rt.awake_lock = on;
+                    match on {
+                        true => println!(
+                            "awake: held at 160 MHz with light sleep off, from every boot until `awake off` (saved)"
+                        ),
+                        false => println!("awake: off -- the board sleeps on its own again (saved)"),
                     }
-                ),
-            };
-            *rt.awake_lock = on;
-            match on {
-                true => println!(
-                    "awake: held at 160 MHz with light sleep off, from every boot until `awake off` ({saved})"
-                ),
-                false => println!("awake: off -- the board sleeps on its own again ({saved})"),
+                }
+                Err(e) => {
+                    *rt.awake_lock = crate::policy::awake_lock(settings::awake_lock());
+                    println!(
+                        "awake: NOT saved ({e}) -- left as NVS holds it: {}",
+                        match *rt.awake_lock {
+                            true => "held awake from every boot",
+                            false => "sleeps on its own",
+                        }
+                    );
+                    // What a person who asked for the other state can still
+                    // have, for this session only.
+                    match (on, *rt.awake_lock) {
+                        (true, false) => println!("awake:   `freq 160` holds it awake until the next restart"),
+                        (false, true) => println!("awake:   `sleep on` lets it sleep until the next restart"),
+                        _ => {}
+                    }
+                }
             }
+            // What the lock is now, saved or not -- everything below acts on
+            // this rather than on what was asked for.
+            let held = *rt.awake_lock;
 
             // **A `freq` or `sleep` override in force is left alone.** It is a
             // person's choice for this session, newer than the lock's, and
             // `freq auto` is the documented way to hand the clock back -- to a
-            // policy that is now awake or not as this command said.
+            // policy that is now awake or not as the lock stands.
             match *rt.freq_override {
                 Some(mhz) => println!(
                     "awake:   `freq`/`sleep` still pins {mhz} MHz until `freq auto` or a restart"
@@ -298,13 +319,13 @@ pub fn handle(
                         Some(now_ms / 1000),
                         None,
                         power::Supply::Unknown,
-                        on,
+                        held,
                     );
                     match power::apply(want) {
                         Ok(()) => *rt.policy = want,
                         Err(e) => println!("awake:   could not apply the {} policy -- {e}", want.label()),
                     }
-                    if !on && !cfg!(feature = "no-light-sleep") {
+                    if !held && !cfg!(feature = "no-light-sleep") {
                         println!(
                             "awake:   the console holds it {} min, then it light-sleeps and the USB port goes",
                             crate::policy::CONSOLE_AWAKE_S / 60
@@ -312,7 +333,7 @@ pub fn handle(
                     }
                 }
             }
-            if on {
+            if held {
                 println!("awake:   costs the battery -- {}", crate::policy::AWAKE_LOCK_COST);
                 println!("awake:   `awake off` before it goes out on its cell");
             }

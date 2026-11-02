@@ -84,12 +84,25 @@ pub const AWAKE_LOCK_DEFAULT: bool = false;
 
 /// What the lock costs on the cell, in the words every report uses.
 ///
-/// One copy, because it is printed at boot, by `status`, `health` and a bare
-/// `awake`, and a figure written out at four call sites is four figures. From
-/// specs §7's table: 33.5 mA awake is ~2.5 days of the 2000 mAh cell, against
-/// 2.5-3.0 mA frugal, ~28-33 days. Both are idle current measured at the port;
-/// the ratio between them, 13x, is the part that holds in practice.
-pub const AWAKE_LOCK_COST: &str = "~2.5 days on the 2000 mAh cell against ~30 asleep";
+/// One copy, because it is printed at boot, by `status`, `health`, a bare
+/// `awake` and in the web page's warning, and a figure written out at five call
+/// sites is five figures.
+///
+/// **The asleep half is what the board has lasted, not the arithmetic.** Specs
+/// §7's table gives 2.5-3.0 mA frugal as ~28-33 days of the 2000 mAh cell, but
+/// that is idle current alone, and `power`'s module comment says what it leaves
+/// out and which number to quote instead: the frugal board has lasted **up to
+/// a week**, and "a week is the number to quote to somebody asking how long it
+/// lasts". This line is that question answered, beside the toggle that decides
+/// it -- so quoting ~30 here promised a month from a cell that is flat in a
+/// week.
+///
+/// The awake half, ~2.5 days, is still the arithmetic (33.5 mA at the port),
+/// because it is the only awake figure on record. It is the nearer of the two:
+/// what the arithmetic leaves out -- the panel's refreshes, an access-point
+/// window, the cell's self-discharge -- is a far smaller share of 33.5 mA than
+/// of 2.75.
+pub const AWAKE_LOCK_COST: &str = "~2.5 days on the 2000 mAh cell, against up to a week asleep";
 
 /// The awake lock in force, from what NVS holds.
 ///

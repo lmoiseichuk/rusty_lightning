@@ -525,7 +525,7 @@ pub fn print_help() {
     println!("Typing anything also keeps the device awake for 10 minutes.");
     println!("Otherwise it light-sleeps and the USB port goes with it.");
     println!("`freq 160` holds it open until a restart; `freq auto` gives it back.");
-    println!("`awake on` holds it open across restarts -- ~2.5 days on the cell against ~30.");
+    println!("`awake on` holds it open across restarts -- ~2.5 days on the cell, against up to a week asleep.");
     println!("Full guide: doc/console.md");
 }
 

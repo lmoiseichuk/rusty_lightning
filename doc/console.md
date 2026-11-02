@@ -181,10 +181,17 @@ through every restart until `awake off`. It answers at once:
 ```
 awake on
 awake: held at 160 MHz with light sleep off, from every boot until `awake off` (saved)
-awake:   costs the battery -- ~2.5 days on the 2000 mAh cell against ~30 asleep
+awake:   costs the battery -- ~2.5 days on the 2000 mAh cell, against up to a week asleep
 awake:   `awake off` before it goes out on its cell
 awake: now 160 MHz -- pm 160/160 MHz, light sleep off, policy awake, held by `awake on`
 ```
+
+**A save that fails changes nothing.** The board keeps the lock NVS still
+holds, and says so — `awake: NOT saved (…) -- left as NVS holds it: sleeps on
+its own`, then `freq 160` (or `sleep on`, the other way) as the session-only
+way to get what was asked for. That is what keeps every other report honest:
+`status`, a bare `awake` and the web page all call the lock *saved*, and they
+can only be right if the lock in RAM never holds a value NVS refused.
 
 **`freq` stays as it was, and wins while it is in force.** It is the override
 for this session; the lock is part of the policy. So `freq 80` or `sleep on`
@@ -200,7 +207,7 @@ Every place that reports the device's state says so:
 
 ```
 pm:   ⚠ held awake by `awake on` (saved) -- 160 MHz, light sleep off, on USB or the cell
-pm:     costs the battery: ~2.5 days on the 2000 mAh cell against ~30 asleep -- `awake off` lets it sleep
+pm:     costs the battery: ~2.5 days on the 2000 mAh cell, against up to a week asleep -- `awake off` lets it sleep
 ```
 
 at every boot; a `status` line (`HELD AWAKE from every boot`), a `health` line,
@@ -231,10 +238,13 @@ drop the port on USB — the one thing the lock is for:
 
 So the lock is unconditional, and the cost of that is bounded and stated.
 **On a cell outside, with the lock left on:** it runs at the measured 33.5 mA
-instead of 2.5–3.0, about **2.5 days of the 2000 mAh cell instead of about
-30** (§7 — both from idle current measured at the port; the frugal board has
-lasted up to a week in practice, and the 13× between them is the part that
-holds). The USB port stays up the whole time, so a cable reaches it — plugging
+instead of 2.5–3.0, about **2.5 days of the 2000 mAh cell, against the week a
+sleeping board has lasted**. The week is the observed figure and the one every
+report quotes; §7's table turns the frugal current into about thirty days, but
+that is idle current alone and leaves out the refreshes, the grace periods and
+the access point, which the awake figure barely notices and the frugal one
+does. The 13× between the two currents is the ratio to reason with; the week
+is the runtime. The USB port stays up the whole time, so a cable reaches it — plugging
 one in restarts the board, the lock comes back with it, and `awake off` typed
 after `con:  listening` lands as usual — and the web page's toggle turns it off
 with no cable at all. **`awake off` before it goes outside.** The
@@ -276,7 +286,7 @@ which is why it no longer gives a number.)
 | `mode indoor\|outdoor` | AFE gain — the same switch as holding the BOOT button |
 | `clear` | erase the strike log. No confirmation. |
 | `merge [ms]` | strike-merge window (§4.3). Bare, it reports. `0` logs every return stroke. |
-| `awake [on\|off]` | hold 160 MHz with light sleep off from every boot (`on`), or let the board sleep on its own (`off`, the default). Saved; bare, it reports. Costs the battery while on — ~2.5 days on the cell against ~30. See [Across restarts](#across-restarts--awake-on) |
+| `awake [on\|off]` | hold 160 MHz with light sleep off from every boot (`on`), or let the board sleep on its own (`off`, the default). Saved; bare, it reports. Costs the battery while on — ~2.5 days on the cell, against up to a week asleep. See [Across restarts](#across-restarts--awake-on) |
 
 Setting the clock from the host, which is almost always what you want:
 

@@ -126,10 +126,10 @@ this table is generated from it.
 | `commands` | What the console commands actually do (§5). | -- | 680 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 599 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 646 |
+| `effects` | Applying the console's hardware effects. | -- | 667 |
 | `portal` | The access point and the web server it carries. | -- | 644 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 423 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 425 |
 | `webui` | The page the access point serves. | -- | 298 |
 
 ### The board underneath
@@ -140,7 +140,7 @@ this table is generated from it.
 | `boot` | Bring-up: everything that happens once, before the loop. | -- | 497 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
-| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 191 |
+| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 204 |
 | `power` | Clock and sleep policy (§7). | -- | 223 |
 | `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
 | `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs`, `tests/verdict.rs` | 70 |

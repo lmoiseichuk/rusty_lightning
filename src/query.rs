@@ -144,10 +144,12 @@ pub const TOGGLES: &[Toggle] = &[
         while_off: "panel left powered -- power it down",
     },
     // The cost is on both labels, because the button is the decision: about
-    // 2.5 days of the cell held awake against about 30 asleep (specs §7).
+    // 2.5 days of the cell held awake, against the week a sleeping board has
+    // lasted -- the observed figure, not specs §7's idle-current thirty days,
+    // for the reason `policy::AWAKE_LOCK_COST` gives.
     Toggle {
         command: "awake",
-        while_on: "HELD AWAKE, ~2.5 days on the cell -- let it sleep (~30)",
+        while_on: "HELD AWAKE, ~2.5 days on the cell -- let it sleep (up to a week)",
         while_off: "sleeps on its own -- hold it awake (~2.5 days on the cell)",
     },
 ];
