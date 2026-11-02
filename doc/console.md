@@ -444,20 +444,26 @@ fills during obvious local work — construction, a failing appliance, anything
 impulsive — and remember that every notch also costs real detections, so raise
 it only as far as it needs to go.
 
-**A saved value is left alone.** Only `srej <n>` writes one, so a board told
-`srej 1` before 0.22.0 keeps 1, and every boot says so —
+**A saved value is left alone by the device on its own account.** Only
+`srej <n>` writes one, so a board told `srej 1` before 0.22.0 keeps 1, and every
+boot says so —
 ``as: ⚠ spike rejection 1 -- saved by `srej 1`, below the default of 2 since 0.22.0``
 — with `srej 2` as the way to the default. The device does not migrate a person's
-setting, and least of all one that is about to be compared in the field.
+setting, and least of all one that is about to be compared in the field. The one
+thing that overrules a saved value is a measurement, below.
 
 **A trusted golden record can lower it at boot**, as it does the watchdog: boot
 takes the more permissive of the saved value and the record's, never below 1.
 Boot says when it did (`lowered from 2, lightning with a distance has been heard
 at it`), and `srej <n>` says at the time when the next restart would undo it —
 which, since every open of the console port is a restart, is the trap for a
-comparison of 1 against 2: `golden clear` is the way out of it. A record from
-before 0.22.0 is set aside (see the golden combination below) and lowers
-nothing.
+comparison of 1 against 2. **So the order matters.** `srej 2` typed before two
+strikes with a distance have been heard at 1 stands: the strikes after it are
+heard at 2, and the record follows them. Typed after, it lasts until the next
+connect, unless `golden clear` comes first — which also forgets the record's
+noise floor and its trust, to be earned again at 2. The boot line that offers
+`srej 2` says which of the two applies. A record from before 0.22.0 is set aside
+(see the golden combination below) and lowers nothing.
 
 **A person may set 0; the device may not choose it.** That is the rule, and it
 is the same one that took `SREJ` out of the tuning space: what the machine

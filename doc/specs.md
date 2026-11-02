@@ -337,14 +337,19 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 > 2 ms to start (`LCOSUT`) and the calibration 2 ms, starting *"after the LCO settles"* (`TRCOCAL`).
 > So `As3935::power_up` now clears PWD, writes the 120 pF, waits 2 ms, sends `CALIB_RCO`, raises
 > bit 6, waits 2 ms and lowers it — each wait through `as3935::wait_at_least_ms`, the IRQ settle's
-> yielded tick plus a timed busy-wait, so never under 2 ms where `FreeRtos::delay_ms(2)` was one
-> tick and sometimes almost nothing. `reset`'s 2 ms goes the same way. The banner still reads
-> `0x3A`/`0x3B` straight after, and the antenna self-test still runs after that.
+> yielded tick plus a timed busy-wait, so never under 2 ms. `FreeRtos::delay_ms(2)` is one tick,
+> 0–10 ms depending on where in the tick it starts — but in the old sequence only the untimed gap
+> between `CALIB_RCO` and the bit going up was short by chance. The procedure's step 3 followed the
+> first delay's return on a tick and so lasted about 9.7 ms every boot, and lasts 7.5–10 ms now:
+> guaranteed, not changed. The bit and the order are what changed what the chip sees. `reset`'s
+> 2 ms goes the same way. The banner still reads `0x3A`/`0x3B` straight after, and the antenna
+> self-test still runs after that.
 >
 > Changed without a storm, against the paragraph above, because LM asked for the datasheet's
 > procedure and the banner is the check that costs nothing: 0.21.2 read
-> `TRCO done, SRCO done (0x3A=0x9C 0x3B=0x9E)`. Anything but *done* twice on the first 0.22.0 boot is
-> the evidence to go back on, and `MASK_DISPLAY_SRCO` is the whole of the bit change.
+> `TRCO done, SRCO done (0x3A=0x9C 0x3B=0x9E)`. Anything but *done* twice on the first 0.22.x boot is
+> the evidence to go back on, and `MASK_DISPLAY_SRCO` is the whole of the bit change; the order is
+> the other candidate, and the step-3 wait is not one.
 
 ---
 

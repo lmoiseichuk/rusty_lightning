@@ -202,9 +202,10 @@ pub const SPIKE_REJECTION_POWER_ON: u8 = 2;
 ///   tuner had walked it to zero on every quiet spell.
 /// * At **1**, from 2026-09-16 to 09-24, it let through 9,542 "strikes", 99 %
 ///   `overhead`, round the clock with 7-10 s between them -- false, and fed to
-///   the golden record as "840 strikes heard here". The November afternoon
-///   that heard real lightning at 1 (seven strikes at 6-14 km) also logged
-///   nine `overhead` beside them, three on electrical events.
+///   the golden record as "840 strikes heard here". The 2026-11-01 outing
+///   that heard real lightning at 1 (seven strikes at 6-14 km) logged six
+///   `overhead` beside them, and three more that afternoon landed on
+///   electrical events.
 ///
 /// And at **2**, in August: five false strikes in eight hours where 0 had
 /// logged 503 -- at the cost of 5-6 real strikes an hour missed at 10+ km,
@@ -218,9 +219,20 @@ pub const SPIKE_REJECTION_POWER_ON: u8 = 2;
 /// LM's to judge in the field; until then the resting value is the one with
 /// the shorter list of known failures, and `srej 1` is one command away.
 ///
-/// **A stored value is a person's, and is left alone.** Only `srej <n>` ever
-/// writes one, so a board holding 1 was told 1. Boot honours it and says, every
-/// time, that it is below this default -- see [`spike_rejection_below_default`].
+/// **A stored value is a person's, and the device does not change it on its
+/// own account.** Only `srej <n>` ever writes one, so a board holding 1 was
+/// told 1. Boot honours it and says, every time, that it is below this default
+/// -- see [`spike_rejection_below_default`].
+///
+/// **The one thing that overrules it is a measurement**: a trusted golden
+/// record at a more permissive value, at boot ([`spike_rejection_at_boot`]),
+/// the rule since 2629a2d19aeb measured a stored watchdog deaf through a live
+/// storm. That cuts both ways for a person's choice. A `srej 2` typed while
+/// the record is untrusted, or before there is one, stands: the strikes after
+/// it are heard at 2 and the record follows them. A `srej 2` typed after two
+/// strikes with a distance have made a record at 1 lasts until the next
+/// restart -- every open of the console port -- unless `golden clear` comes
+/// first. Boot and `srej` both say so at the moment it matters.
 ///
 /// ## The history, from `git log`, kept because it went wrong before
 ///

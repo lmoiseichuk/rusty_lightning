@@ -323,6 +323,14 @@ pub fn configure(
     // device does not overrule one -- LM is to judge 1 against 2 in the field,
     // and a firmware that moved it quietly would be a second variable in every
     // comparison across the flash. See `defence::SPIKE_REJECTION_DEFAULT`.
+    //
+    // **And when the default offered here would last.** The device does not
+    // overrule a person on its own account, but a trusted record is a
+    // measurement and does, at boot: once two strikes with a distance have
+    // made a record at this value, a `srej 2` typed afterwards is undone at
+    // the next restart, which is every open of the console port. So the
+    // order matters for a 1-against-2 comparison, and this is where it is
+    // said -- the line that offers the default is the one being acted on.
     if defence::spike_rejection_below_default(stored_spike) && Some(spike) == stored_spike {
         println!(
             "as:   ⚠ spike rejection {spike} -- saved by `srej {spike}`, below the default of {} since 0.22.0",
@@ -332,6 +340,18 @@ pub fn configure(
             "as:     kept, because a person set it; `srej {}` takes the default (the chip's own)",
             defence::SPIKE_REJECTION_DEFAULT
         );
+        let record_holds_it = match heard {
+            Some(combo) => combo.srej <= spike,
+            None => false,
+        };
+        match record_holds_it {
+            true => println!(
+                "as:     a trusted record heard lightning at {spike}: `golden clear` first, or the next restart brings {spike} back"
+            ),
+            false => println!(
+                "as:     type it before two strikes with a distance arrive at {spike}, or the record they make brings {spike} back at every restart"
+            ),
+        }
     }
     // What the setting would have been without the record, to say when the
     // record lowered it -- the same courtesy the watchdog line below pays.

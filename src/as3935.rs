@@ -202,9 +202,20 @@ pub const IRQ_SETTLE_MS: u32 = 8;
 /// (page 36) is the second.
 ///
 /// Waited with [`wait_at_least_ms`], never with `FreeRtos::delay_ms(2)`: at
-/// 100 Hz that is one tick, which returns at the next tick interrupt -- from a
-/// few microseconds to 10 ms -- so the procedure's 2 ms was sometimes almost
-/// nothing, which is how it was done until 0.22.0.
+/// 100 Hz that is one tick (esp-idf-hal 0.46.2 rounds 2 ms up to one), which
+/// returns at the next tick interrupt -- anything from a few microseconds to
+/// 10 ms, depending on where in the tick it was called.
+///
+/// **What that did until 0.22.0, exactly**, because it matters if the banner
+/// ever changes: the code had two such delays, and only the first was short
+/// by chance. It ran between `CALIB_RCO` and the bit going up -- a gap the
+/// procedure does not time -- from microseconds to 10 ms. The second, the
+/// procedure's step 3, began a fraction of a millisecond after the first
+/// returned on a tick, so it lasted to the next tick: about 9.7 ms on every
+/// boot. The step-3 wait is 7.5-10 ms now for the same reason, with the 2 ms
+/// guaranteed rather than an accident of where the previous wait ended. So of
+/// 0.22.0's three changes to the calibration, the bit and the order changed
+/// what the chip saw; this one did not.
 pub const LCO_STARTUP_MS: u32 = 2;
 pub const RCO_CALIBRATION_MS: u32 = 2;
 
@@ -456,11 +467,13 @@ impl As3935 {
     /// **Until 0.22.0 this ran before `TUN_CAP` was written**, so the
     /// oscillators were calibrated against the LC oscillator at 0 pF -- off its
     /// 500 kHz -- and the 120 pF that puts it there arrived half a second
-    /// later; it pulsed bit 5, `DISP_TRCO`, not the procedure's bit 6; and both
-    /// of its 2 ms waits were one scheduler tick, anything from microseconds to
-    /// 10 ms. All three are the datasheet's now. `boot::configure` reads
-    /// `0x3A`/`0x3B` straight after, and `boot::antenna_self_test` measures the
-    /// trimmed antenna after that, as before.
+    /// later; and it pulsed bit 5, `DISP_TRCO`, not the procedure's bit 6. Both
+    /// are the datasheet's now. Its two 2 ms waits were one scheduler tick
+    /// each, but the one the procedure times, step 3, came out at about 10 ms
+    /// every boot (see [`LCO_STARTUP_MS`]), so it is now guaranteed rather than
+    /// changed. `boot::configure` reads `0x3A`/`0x3B` straight after, and
+    /// `boot::antenna_self_test` measures the trimmed antenna after that, as
+    /// before.
     ///
     /// The pulse briefly routes SRCO (~1.1 MHz) to the IRQ pin, which is
     /// harmless because nothing is listening yet: `main` sets the pin's
