@@ -216,7 +216,7 @@ landed. `send.py` waits for the console and reads the epoch as it sends.
 | `srej [0-15]` | spike rejection. **`0` reports man-made impulses as lightning** — see below |
 | `wdth [0-15]` | watchdog threshold, aliased `watchdog`. Raising it discards the slow-rising distant arrivals this device exists to report |
 | `ap` | raise the access point and its web UI for 60 s. `ap off` drops it; `ap <ssid> <password>` stores credentials and raises with them |
-| `golden [clear]` | the settings that last heard lightning, and how many strikes at them |
+| `golden [clear]` | the settings that last heard lightning, and how many strikes at them — strikes with a distance only, since 0.22.0; a record from before is shown as set aside |
 | `import <epoch>,<distance>,<energy>,<strokes>` | append one historical record; commas and no spaces, because the console splits on whitespace |
 | `regs` | the sensor's registers as the chip actually holds them, decoded |
 | `defence` | the current tuning point: raw value, percent, and the `NF_LEV` field it holds |
