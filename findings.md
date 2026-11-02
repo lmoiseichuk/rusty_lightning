@@ -301,7 +301,9 @@ Nine findings against the 0.22.0 commits from two reviews, two of them the same
 defect (merged here as L-V1). Each re-checked against the source, the board's
 log (`after_0.21.2.txt`, 9,650 strikes), esp-idf-hal 0.46.2 and datasheet v1-04
 before acting. All real; L-V6 is real as advice and not as code. Fixed in
-0.22.1, most valuable first, one commit each. **Not verified on the board.**
+0.22.1, most valuable first, one commit each -- L-V1 with L-V2, then L-V3,
+L-V4, L-V5, and L-V6..L-V8 together -- and the first 0.22.x boot above is
+rewritten for it. **Not verified on the board.**
 
 | ID | What | Where | Verdict |
 |---|---|---|---|
