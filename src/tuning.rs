@@ -290,7 +290,9 @@ impl Tuning {
         let current = crate::golden::Combo {
             nf: self.point.raw() as u8,
             wdth: crate::settings::watchdog().unwrap_or(0),
-            srej: crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
+            // What the chip holds, as the record does -- see
+            // `session::SPIKE_REJECTION`.
+            srej: crate::session::spike_rejection(),
             outdoor: matches!(crate::settings::location(), Some(crate::as3935::Location::Outdoor)),
         };
         crate::golden::fall_back_to(current, crate::settings::golden(), self.quiet_minutes(now_ms)?)

@@ -305,11 +305,23 @@ pub fn handle(
             }
         }
         if effects.show_spike_rejection {
-            let level =
-                crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection());
+            // What the chip holds, then where it came from -- the two differ
+            // when boot took a golden record's value over the saved one.
+            let level = crate::session::spike_rejection();
             match level {
                 0 => println!("srej: 0 -- man-made impulses will be reported as strikes"),
                 n => println!("srej: {n} (`regs` reads it back off the chip)"),
+            }
+            let default = crate::defence::SPIKE_REJECTION_DEFAULT;
+            match crate::settings::spike_rejection() {
+                None => println!("srej:   nothing saved -- the default, {default}, the chip's own"),
+                Some(saved) if saved != level => println!(
+                    "srej:   saved {saved}; boot took {level} from the golden record -- `golden clear` keeps {saved}"
+                ),
+                Some(saved) if crate::defence::spike_rejection_below_default(Some(saved)) => println!(
+                    "srej:   saved by `srej {saved}`, below the default of {default}"
+                ),
+                Some(_) => {}
             }
         }
         if let Some(level) = effects.set_spike_rejection {
@@ -322,10 +334,40 @@ pub fn handle(
                 println!("srej:   the device will not choose this for itself -- you have.");
             }
             match hw.sensor.set_spike_rejection(hw.i2c, level) {
-                Ok(()) => match crate::settings::store_spike_rejection(level) {
-                    Ok(()) => println!("srej: {level} (saved)"),
-                    Err(e) => println!("srej: {level} applied but NOT saved -- {e}"),
-                },
+                Ok(()) => {
+                    crate::session::SPIKE_REJECTION
+                        .store(level, core::sync::atomic::Ordering::Relaxed);
+                    match crate::settings::store_spike_rejection(level) {
+                        Ok(()) => println!("srej: {level} (saved)"),
+                        Err(e) => println!("srej: {level} applied but NOT saved -- {e}"),
+                    }
+                    // **Say now what the next restart will do**, because every
+                    // open of the console port is one. Boot takes the more
+                    // permissive of this and a trusted record's, so raising it
+                    // above the record's is undone at the next connect -- the
+                    // trap for a 1-against-2 comparison, and invisible unless
+                    // told.
+                    let here_outdoor = matches!(*rt.location, crate::as3935::Location::Outdoor);
+                    // The record boot would act on: trusted, at this gain.
+                    let heard = match crate::settings::golden() {
+                        Some(record)
+                            if record.strikes >= crate::golden::TRUSTED_STRIKES
+                                && record.combo.outdoor == here_outdoor =>
+                        {
+                            Some(record.combo.srej)
+                        }
+                        _ => None,
+                    };
+                    let at_boot = crate::defence::spike_rejection_at_boot(Some(level), heard);
+                    if at_boot < level {
+                        println!(
+                            "srej: note -- the golden record heard lightning at {at_boot}, and boot takes the"
+                        );
+                        println!(
+                            "srej:   more permissive, so the next restart returns to {at_boot}; `golden clear` keeps {level}"
+                        );
+                    }
+                }
                 Err(e) => println!("srej: could not apply -- {e}"),
             }
         }

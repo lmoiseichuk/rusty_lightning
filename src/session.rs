@@ -466,7 +466,7 @@ fn log_event(strike_log: Option<&mut log::Log>, kind: log::Kind) {
         clock::now().unwrap_or(0),
         crate::now_ms(),
         CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
-        crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
+        spike_rejection(),
         kind,
     );
 }
@@ -596,7 +596,7 @@ pub fn commit_merged(
             merged.epoch.unwrap_or(0),
             crate::now_ms(),
             CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
-            crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
+            spike_rejection(),
             strike,
             merged.simulated,
             merged.strokes,
@@ -707,7 +707,7 @@ pub fn describe(point: defence::Point) -> String {
     // line that showed only the tunable third of the configuration would be the
     // "two different things to read at 3am" this function exists to prevent.
     let watchdog = settings::watchdog().unwrap_or(defence::WATCHDOG_DEFAULT);
-    let spike = defence::spike_rejection_for_autorun(settings::spike_rejection());
+    let spike = spike_rejection();
     out.push_str(&format!(
         "[wd {watchdog} sr {spike} fixed] (wait {} strike(s))",
         point.min_strikes_count()
@@ -870,6 +870,26 @@ pub static CURRENT_NF: core::sync::atomic::AtomicU8 = core::sync::atomic::Atomic
 /// only where the bit is written: `boot::configure` and the `mask` command.
 pub static DISTURBERS_MASKED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(true);
+
+/// The spike rejection the chip holds right now -- **not** what NVS holds.
+///
+/// Boot programs the more permissive of the stored value and a trusted
+/// record's (`defence::spike_rejection_at_boot`), so the two can differ -- and
+/// every reader that wrote down "the srej" read NVS: the log's `srej` column,
+/// the golden record, `describe`, the rescue's comparison. A strike heard with
+/// the chip at 1 and NVS at 2 went into the record as `sr 2`, and the next
+/// boot believed it. Kept here like [`CURRENT_NF`], written only where the
+/// register is written: `boot::configure` and the `srej` command.
+///
+/// Starts at the chip's power-on value, which is what the register holds if
+/// boot's write never lands.
+pub static SPIKE_REJECTION: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(defence::SPIKE_REJECTION_POWER_ON);
+
+/// [`SPIKE_REJECTION`], read.
+pub fn spike_rejection() -> u8 {
+    SPIKE_REJECTION.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 pub fn apply(
     sensor: &As3935,
@@ -1103,9 +1123,10 @@ impl Sweep {
 
 /// Fold the current settings into the known-good record.
 ///
-/// Reads the registers' *stored* values rather than the chip's, because the
-/// stored ones are what a reboot will restore -- a record of something the
-/// device cannot get back to would be worse than none.
+/// Reads the stored watchdog, which is what `apply` writes on every move and so
+/// what the chip holds, and the spike rejection the chip holds, which boot can
+/// set from a record over the stored one -- in both cases the setting the strike
+/// was heard at.
 ///
 /// Written to NVS only when the record actually changes. A close storm makes
 /// strikes faster than once a minute, and this is flash.
@@ -1113,10 +1134,11 @@ fn remember_working_point() {
     let combo = crate::golden::Combo {
         nf: CURRENT_NF.load(core::sync::atomic::Ordering::Relaxed),
         wdth: crate::settings::watchdog().unwrap_or(0),
-        // **Not `unwrap_or(0)`.** An unset value means the device is using its
-        // own default, which is 1 and never 0 -- recording 0 here would write a
-        // combination the device has never actually run, and then boot from it.
-        srej: crate::defence::spike_rejection_for_autorun(crate::settings::spike_rejection()),
+        // **What the chip holds, not what NVS holds** -- see
+        // [`SPIKE_REJECTION`]. Boot can program a record's value over the
+        // stored one, and a record written from NVS then claimed a setting
+        // the strike was not heard at.
+        srej: spike_rejection(),
         outdoor: matches!(crate::settings::location(), Some(Location::Outdoor)),
     };
 

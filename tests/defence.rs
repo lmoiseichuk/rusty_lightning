@@ -80,12 +80,17 @@ fn main() {
     // rule the suite enforced. A test that pins a value without pinning the
     // reasoning will defend a regression as loyally as it defends a decision.
     //
-    // The reasoning: SREJ is the only knob that rejects short man-made
-    // impulses, and at zero the chip validated an electric hammer as lightning
-    // 503 times in three and a half hours. One is the least rejection that is
-    // not none.
-    check("spike rejection defaults to one, not none",
-        SPIKE_REJECTION_DEFAULT == 1);
+    // The reasoning, since 0.22.0: SREJ is the only knob that rejects short
+    // man-made impulses; at zero the chip validated an electric hammer as
+    // lightning 503 times in three and a half hours, and at one it let
+    // September's 9,542 `overhead` through round the clock. The resting value
+    // is the chip's own. **Pinned to that reasoning, not to a number**: a
+    // default that drifts away from the power-on value fails here whatever the
+    // number it drifts to.
+    check("spike rejection defaults to the chip's power-on value",
+        SPIKE_REJECTION_DEFAULT == SPIKE_REJECTION_POWER_ON);
+    check("...which the datasheet gives as 2",
+        SPIKE_REJECTION_POWER_ON == 2);
     check("...and is settable across the register's range",
         SPIKE_REJECTION_MAX == 15);
     // Left because it gates on amplitude: raising it discards weaker arrivals,
@@ -277,6 +282,30 @@ fn main() {
         "the default is not none, which is the whole decision",
         SPIKE_REJECTION_DEFAULT >= 1,
     );
+
+    println!("\n  what boot programs, from NVS and a trusted record");
+    check("nothing stored, no record: the default", spike_rejection_at_boot(None, None) == 2);
+    // **The board this was written on**: `srej 1` saved by hand, and its
+    // golden record from before 0.22.0 set aside, so no record reaches here.
+    check("a person's 1 is left alone", spike_rejection_at_boot(Some(1), None) == 1);
+    check("...and announced as below the default", spike_rejection_below_default(Some(1)));
+    // ...and once its owner moves on, nothing drags it back.
+    check("their later `srej 2` stands with no record to lower it", spike_rejection_at_boot(Some(2), None) == 2);
+    check("a deafer value a person chose stands too", spike_rejection_at_boot(Some(4), None) == 4);
+    check("a person's 0 is honoured", spike_rejection_at_boot(Some(0), None) == 0);
+    check("...and is warned about elsewhere, not here", !spike_rejection_below_default(Some(0)));
+    check("the default itself is not below the default", !spike_rejection_below_default(Some(2)));
+    check("nor is a deafer value", !spike_rejection_below_default(Some(4)));
+    check("nor is nothing stored", !spike_rejection_below_default(None));
+    // The more permissive of stored and heard, as boot has always done.
+    check("a record heard at 1 lowers a stored 2", spike_rejection_at_boot(Some(2), Some(1)) == 1);
+    check("a record heard at 2 leaves a person's 1", spike_rejection_at_boot(Some(1), Some(2)) == 1);
+    check("a record fills in when nothing is stored", spike_rejection_at_boot(None, Some(3)) == 3);
+    // **The guard boot's comment claimed and nothing enforced.** A record made
+    // during a person's `srej 0` must not lower a later choice back to zero.
+    check("a record at 0 cannot take a stored 2 below 1", spike_rejection_at_boot(Some(2), Some(0)) == 1);
+    check("...nor fill an unset value with 0", spike_rejection_at_boot(None, Some(0)) == 1);
+    check("a person's own 0 still beats any record", spike_rejection_at_boot(Some(0), Some(3)) == 0);
 
 
     println!(

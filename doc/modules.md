@@ -91,11 +91,11 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 746 |
-| `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 495 |
+| `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 564 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1139 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1161 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1093 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1095 |
 | `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 186 |
 
 ### Keeping it
@@ -126,7 +126,7 @@ this table is generated from it.
 | `commands` | What the console commands actually do (§5). | -- | 647 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 471 |
+| `effects` | Applying the console's hardware effects. | -- | 513 |
 | `portal` | The access point and the web server it carries. | -- | 640 |
 | `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
 | `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 409 |
@@ -137,7 +137,7 @@ this table is generated from it.
 | module | what it owns | tested | lines |
 |---|---|---|---|
 | `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 442 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 477 |
 | `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
 | `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
 | `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 132 |
@@ -166,7 +166,7 @@ program' is not information.
 | `console` | `defence` `query` `session` `strike` |
 | `credentials` | `storage` |
 | `display` | `uptime` |
-| `effects` | `as3935` `battery` `commands` `console` `defence` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
+| `effects` | `as3935` `battery` `commands` `console` `defence` `golden` `history` `log` `power` `screen` `session` `settings` `system` `tuning` |
 | `golden` | `strike` |
 | `history` | `strike` |
 | `log` | `as3935` `budget` `clock` `csv` `history` `pace` `settings` |

@@ -117,7 +117,7 @@ pub const RELEASE: Action = Action {
 pub const FIELDS: &[Field] = &[
     Field { command: "tz", label: "time zone (hours)", hint: "-5" },
     Field { command: "defence", label: "noise floor 0-7", hint: "3" },
-    Field { command: "srej", label: "spike rejection 0-15", hint: "1" },
+    Field { command: "srej", label: "spike rejection 0-15", hint: "2" },
     Field { command: "wdth", label: "watchdog 0-15", hint: "0" },
     Field { command: "merge", label: "merge window ms", hint: "1000" },
     Field { command: "events", label: "log N noise/disturber rows", hint: "5000" },

@@ -427,14 +427,18 @@ immediately**; **60 s with no events** → **−1**. Quick to defend, slow to re
 > `SREJ` rejects short man-made impulses and is the only knob that does. **The walk refunds the least
 > valuable field first, and by the sensitivity weighting that is SREJ** — so every quiet spell walked
 > it to zero, and at zero the chip validated an electric hammer on a neighbouring roof as lightning:
-> 503 false strikes in three and a half hours (§9 item 6). Now a *setting* — default **1**, between
-> the reference driver's 0 and the datasheet's 2, `srej <0-15>` on the console, stored in NVS,
-> written at boot and on change.
+> 503 false strikes in three and a half hours (§9 item 6). Now a *setting* — default **2** since
+> 0.22.0, the chip's power-on value (it was 1, between the reference driver's 0 and the datasheet's
+> 2, until 1 let September's 9,542 `overhead` through round the clock), `srej <0-15>` on the console,
+> stored in NVS, written at boot and on change. A saved value is a person's and is left alone, with
+> a boot line when it sits below the default; see `defence::SPIKE_REJECTION_DEFAULT`.
 >
 > The spread it was chosen against, measured here: **0** gave 503 false strikes in 3.5 h; **2** gave
 > five in eight hours but missed 5–6 real strikes an hour at 10+ km; **8** silenced everything
-> man-made. One is a judgement between them rather than a measured optimum, on the reasoning that a
-> detector reporting hammers is useless where one missing distant storms is merely limited. `session::apply` does
+> man-made. One was a judgement between them rather than a measured optimum, on the reasoning that a
+> detector reporting hammers is useless where one missing distant storms is merely limited — and
+> September showed 1 reporting something man-made for nine days, which moved the judgement to 2 in
+> 0.22.0. `session::apply` does
 > not touch it, which is the actual fix: **what the tuner cannot write, it cannot spend.**
 >
 > #### ⚠⚠ The sweep could not have caught this, and that is a flaw in its objective

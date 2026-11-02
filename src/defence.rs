@@ -158,7 +158,7 @@ pub const NOISE_FLOOR: usize = 0;
 /// **It was two because of a pairing this firmware no longer runs.**
 /// `deep_demo.py` set `setWatchdogThreshold(2)` beside `setSpikeRejection(0)`,
 /// and the 2 was inherited from that record while the 0 was deliberately left
-/// behind -- `SPIKE_REJECTION_DEFAULT` is 1 here, for reasons written there.
+/// behind -- `SPIKE_REJECTION_DEFAULT` is not 0 here, for reasons written there.
 /// Half of a measured pair is not a measured value.
 ///
 /// **The disturber mask is what makes zero affordable.** The 294 above is the
@@ -181,51 +181,73 @@ pub const WATCHDOG_DEFAULT: u8 = 0;
 /// The range `wdth <n>` accepts. The register is four bits.
 pub const WATCHDOG_MAX: u8 = 15;
 
+/// What `SREJ` holds after a reset: **2**, `0010` -- datasheet v1-04, the
+/// register table, page 19.
+pub const SPIKE_REJECTION_POWER_ON: u8 = 2;
+
 /// What `SREJ` is programmed to unless the operator says otherwise.
 ///
-/// **Zero, matching the reference driver and this project's own working Python
-/// setup**, and a *setting* rather than a field, which is the whole point of
-/// this constant.
+/// **Two, the chip's own power-on value, since 0.22.0** -- and a *setting*
+/// rather than a field, which is the whole point of this constant.
 ///
-/// It was 1 -- "between the reference driver's 0 and the datasheet's 2" -- until
-/// the storm of 2026-08-19, when `deep_demo.py` turned out to be the record of
-/// what had actually worked here: `setSpikeRejection(0)` beside
-/// `setWatchdogThreshold(2)`. The watchdog is the filter that earns its keep on
-/// this board; spike rejection was rejecting the weather with the hammers.
+/// ## Why it moved back up from 1
 ///
-/// The measurements it sits between, all on this board: at **0** the chip
-/// logged 503 false strikes in three and a half hours from electric hammers
-/// next door. At **2** that fell to five in eight hours — but the same period
-/// missed 5–6 real strikes an hour at 10+ km, which is the cost of rejection
-/// showing up on the other side. At **8** nothing man-made got through at all.
+/// One was chosen against a spread rather than measured at a point: "the
+/// least rejection that is not none". The two ends of that spread, both on
+/// this board:
 ///
-/// One is chosen against that spread rather than measured at it. It is the
-/// least rejection that is not none, on the reasoning that a detector which
-/// reports hammers is useless and a detector which misses distant storms is
-/// merely limited — and that the interference this room suffers is better
-/// answered by moving the sensor than by deafening it.
+/// * At **0** the chip validated an electric hammer on a neighbouring roof as
+///   lightning: 503 "strikes" in three and a half hours on 2026-08-14, every
+///   one `overhead`. That is what took `SREJ` out of the tuner's reach -- the
+///   tuner had walked it to zero on every quiet spell.
+/// * At **1**, from 2026-09-16 to 09-24, it let through 9,542 "strikes", 99 %
+///   `overhead`, round the clock with 7-10 s between them -- false, and fed to
+///   the golden record as "840 strikes heard here". The November afternoon
+///   that heard real lightning at 1 (seven strikes at 6-14 km) also logged
+///   nine `overhead` beside them, three on electrical events.
 ///
-/// **This constant read `0` for nine days while the paragraph above argued for
-/// `1`.** It was set to 1 deliberately in 45e55184c746, whose whole subject was
-/// this decision, and set back to 0 in aa155a727975, a commit about noticing a
-/// storm that mentions spike rejection nowhere. Nothing failed, because nothing
-/// checks a default against the reasoning printed next to it — the device
-/// simply ran the electric-hammer configuration, and the two "overhead" strikes
-/// it logged on the morning of 2026-08-29, one of them carrying zero energy,
-/// are what that looks like from the outside.
+/// And at **2**, in August: five false strikes in eight hours where 0 had
+/// logged 503 -- at the cost of 5-6 real strikes an hour missed at 10+ km,
+/// which is rejection showing up on the other side. At **8** nothing man-made
+/// got through at all.
+///
+/// So 1 is not "the least rejection that works"; it is a value that has let a
+/// man-made stream through for nine days. 2 is what the chip resets to, and
+/// what [`crate::as3935::As3935::set_spike_rejection`] has always said a storm
+/// was seen to work at. Whether 1 or 2 is right for this room is
+/// LM's to judge in the field; until then the resting value is the one with
+/// the shorter list of known failures, and `srej 1` is one command away.
+///
+/// **A stored value is a person's, and is left alone.** Only `srej <n>` ever
+/// writes one, so a board holding 1 was told 1. Boot honours it and says, every
+/// time, that it is below this default -- see [`spike_rejection_below_default`].
+///
+/// ## The history, from `git log`, kept because it went wrong before
+///
+/// * **2** when it left the tuning space, 2026-08-14 (392335916765).
+/// * **1** the same day -- "between the reference driver's 0 and the
+///   datasheet's 2" (45e55184c746), whose whole subject was this decision.
+/// * **0** on 2026-08-19 (aa155a727975), a commit about noticing a storm that
+///   mentions spike rejection nowhere. Nothing failed, because nothing checked
+///   a default against the reasoning printed next to it -- the device simply
+///   ran the electric-hammer configuration for nine days, and the two
+///   "overhead" strikes it logged on the morning of 2026-08-29, one of them
+///   carrying zero energy, are what that looks like from the outside.
+/// * **1** on 2026-08-29 (39577cae0dae), with the rule that the device may
+///   not choose zero for itself.
+/// * **2** in 0.22.0, for the reasons above. `tests/defence.rs` holds the value
+///   to the reasoning rather than to a number: the default is the power-on
+///   value.
 ///
 /// SREJ rejects short man-made impulses, and it is the only knob that does.
 /// While it was in the search space the tuner treated it as the cheapest thing
 /// to give away — relaxation refunds the least valuable field first, and by the
 /// sensitivity weighting that is SREJ — so every quiet spell walked it to zero.
-/// At zero the chip validated an electric hammer on a neighbouring roof as
-/// lightning: 503 "strikes" in three and a half hours on 2026-08-14 with no
-/// storm within range, statistically indistinguishable from a real one.
 ///
 /// The sweep could not have caught it either. `calibrate` searches for the most
 /// sensitive point that stays *quiet*, and in a quiet room `sr 0` scores
 /// perfectly because there is nothing to reject. Quiet is not correct.
-pub const SPIKE_REJECTION_DEFAULT: u8 = 1;
+pub const SPIKE_REJECTION_DEFAULT: u8 = SPIKE_REJECTION_POWER_ON;
 
 /// The lowest spike rejection the device may choose **for itself**.
 ///
@@ -254,6 +276,53 @@ pub fn spike_rejection_for_autorun(stored: Option<u8>) -> u8 {
         // Nothing stored: the device is choosing, so it does not choose zero.
         None => SPIKE_REJECTION_DEFAULT.max(SPIKE_REJECTION_AUTO_MIN),
     }
+}
+
+/// Whether a stored spike rejection sits below the default, though not at the
+/// zero the console already warns about -- the case boot announces.
+///
+/// **Announced, never migrated.** See [`SPIKE_REJECTION_DEFAULT`]: a stored
+/// value was put there by a person, so the device keeps it and says so.
+pub fn spike_rejection_below_default(stored: Option<u8>) -> bool {
+    match stored {
+        Some(level) => level >= SPIKE_REJECTION_AUTO_MIN && level < SPIKE_REJECTION_DEFAULT,
+        None => false,
+    }
+}
+
+/// The spike rejection boot programs, from what NVS holds and what a trusted
+/// golden record heard lightning at.
+///
+/// `heard` is the record's `srej`, and **only a record the device acts on may
+/// supply it** -- one counted since 0.22.0, trusted, at this gain. A record
+/// from before 0.22.0 is set aside by `settings`, so it never reaches this,
+/// which is what stops its `sr 1` dragging a board back down after its owner
+/// has moved on.
+///
+/// The rule is the one `boot` documents: **the more permissive of the two
+/// wins** -- a person who set something more open keeps it, and a stored
+/// value deafer than one that has heard lightning is overruled -- with two
+/// edges:
+///
+/// * **Nothing stored and no record: the default**, never zero.
+/// * **A record cannot take it below [`SPIKE_REJECTION_AUTO_MIN`].** A person
+///   who sets `srej 0` keeps it, because that is a person's experiment; a
+///   record made during that experiment lowering a later `srej 1` back to 0
+///   would be the device choosing zero. Boot's comment claimed this guard
+///   while the code passed the record's value through
+///   `spike_rejection_for_autorun`, which returns a stored 0 unchanged; this
+///   is where it is actually enforced.
+pub fn spike_rejection_at_boot(stored: Option<u8>, heard: Option<u8>) -> u8 {
+    let heard = match heard {
+        Some(level) => Some(level.max(SPIKE_REJECTION_AUTO_MIN)),
+        None => None,
+    };
+    let chosen = match (stored, heard) {
+        (Some(set), Some(heard)) => Some(set.min(heard)),
+        (None, Some(heard)) => Some(heard),
+        (stored, None) => stored,
+    };
+    spike_rejection_for_autorun(chosen)
 }
 
 /// The range `srej <n>` accepts. The register is four bits.

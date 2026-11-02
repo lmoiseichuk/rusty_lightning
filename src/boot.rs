@@ -297,23 +297,58 @@ pub fn configure(
     //
     // **The more permissive of the two wins, never the deafer.** A person who
     // has set something more sensitive by hand keeps it; a stored value deafer
-    // than the measured one is overruled. Spike rejection still passes through
-    // `spike_rejection_for_autorun`, so a record made at `srej 0` cannot
-    // reopen the scar that took it out of the tuner's reach.
+    // than the measured one is overruled. The rule is
+    // `defence::spike_rejection_at_boot`, host-tested, and it is where a
+    // record made at `srej 0` is kept from reopening the scar that took spike
+    // rejection out of the tuner's reach -- this comment claimed that guard
+    // before anything enforced it.
+    //
+    // **Only a record counted since 0.22.0 reaches it.** `known_good` comes
+    // from `settings::golden`, which does not read the record from before, so
+    // that record's `sr 1` cannot drag a board back down: see
+    // `settings::legacy_golden`.
     let heard = known_good.map(|record| record.combo);
     let stored_spike = crate::settings::spike_rejection();
-    let spike = defence::spike_rejection_for_autorun(match heard {
-        // Unset means "whatever the record says"; set means the more
-        // permissive of the two.
-        Some(combo) => Some(stored_spike.map_or(combo.srej, |s| s.min(combo.srej))),
-        None => stored_spike,
-    });
+    let spike = defence::spike_rejection_at_boot(stored_spike, heard.map(|combo| combo.srej));
     if spike < defence::SPIKE_REJECTION_AUTO_MIN {
         println!("as:   ⚠ spike rejection is 0 -- set by hand, not chosen by the device.");
-        println!("as:     man-made impulses validate as lightning here; `srej 1` to restore.");
+        println!(
+            "as:     man-made impulses validate as lightning here; `srej {}` restores the default.",
+            defence::SPIKE_REJECTION_DEFAULT
+        );
     }
+    // **A stored value below the default is left alone, and said every boot.**
+    // The default became the chip's own 2 in 0.22.0; a board told `srej 1`
+    // before that keeps 1, because only a person writes this setting and the
+    // device does not overrule one -- LM is to judge 1 against 2 in the field,
+    // and a firmware that moved it quietly would be a second variable in every
+    // comparison across the flash. See `defence::SPIKE_REJECTION_DEFAULT`.
+    if defence::spike_rejection_below_default(stored_spike) && Some(spike) == stored_spike {
+        println!(
+            "as:   ⚠ spike rejection {spike} -- saved by `srej {spike}`, below the default of {} since 0.22.0",
+            defence::SPIKE_REJECTION_DEFAULT
+        );
+        println!(
+            "as:     kept, because a person set it; `srej {}` takes the default (the chip's own)",
+            defence::SPIKE_REJECTION_DEFAULT
+        );
+    }
+    // What the setting would have been without the record, to say when the
+    // record lowered it -- the same courtesy the watchdog line below pays.
+    let unheard = defence::spike_rejection_for_autorun(stored_spike);
     match sensor.set_spike_rejection(i2c, spike) {
-        Ok(()) => println!("as:   spike rejection {spike}"),
+        Ok(()) => {
+            session::SPIKE_REJECTION.store(spike, core::sync::atomic::Ordering::Relaxed);
+            match spike < unheard {
+                true => {
+                    println!(
+                        "as:   spike rejection {spike} -- lowered from {unheard}, lightning with a distance has been heard at it"
+                    );
+                    println!("as:     `golden clear` keeps {unheard} from the next restart");
+                }
+                false => println!("as:   spike rejection {spike}"),
+            }
+        }
         Err(e) => println!("as:   could not set spike rejection -- {e}"),
     }
     // The watchdog is written by `session::apply` above, on every apply -- but

@@ -427,10 +427,30 @@ on every quiet spell. On 2026-08-14 that produced **503 "strikes" between 07:00
 and 10:36 from roofers next door with electric hammers**, with no lightning
 within range, statistically indistinguishable from a real storm.
 
-It is a setting now, defaulting to **1** — between the reference driver's 0 and
-the datasheet's 2 — stored in NVS and written at boot. Raise it if the log fills during obvious local work — construction, a
-failing appliance, anything impulsive — and remember that every notch also costs
-real detections, so raise it only as far as it needs to go.
+It is a setting now, defaulting since 0.22.0 to **2** — the chip's own power-on
+value — stored in NVS and written at boot. It was 1, "the least rejection that
+is not none", and at 1 the device let through 9,542 `overhead` "strikes" round
+the clock from 2026-09-16 to 09-24; at 2, in August, the hammer's 503 fell to
+five in eight hours, at the cost of 5–6 real strikes an hour missed at 10+ km.
+Which suits this room is still to be settled in the field. Raise it if the log
+fills during obvious local work — construction, a failing appliance, anything
+impulsive — and remember that every notch also costs real detections, so raise
+it only as far as it needs to go.
+
+**A saved value is left alone.** Only `srej <n>` writes one, so a board told
+`srej 1` before 0.22.0 keeps 1, and every boot says so —
+``as: ⚠ spike rejection 1 -- saved by `srej 1`, below the default of 2 since 0.22.0``
+— with `srej 2` as the way to the default. The device does not migrate a person's
+setting, and least of all one that is about to be compared in the field.
+
+**A trusted golden record can lower it at boot**, as it does the watchdog: boot
+takes the more permissive of the saved value and the record's, never below 1.
+Boot says when it did (`lowered from 2, lightning with a distance has been heard
+at it`), and `srej <n>` says at the time when the next restart would undo it —
+which, since every open of the console port is a restart, is the trap for a
+comparison of 1 against 2: `golden clear` is the way out of it. A record from
+before 0.22.0 is set aside (see the golden combination below) and lowers
+nothing.
 
 **A person may set 0; the device may not choose it.** That is the rule, and it
 is the same one that took `SREJ` out of the tuning space: what the machine
@@ -438,15 +458,15 @@ cannot write, it cannot spend. `srej 0` from the console is a legitimate
 experiment and says so when you use it. A default, a fallback or a reset
 arriving at 0 on its own is the device quietly re-entering the configuration
 that logged 503 false strikes in three and a half hours — so every automatic
-path clamps to 1, and a stored 0 is announced at every boot rather than
-forgotten between sessions.
+path clamps to 1, a golden record included, and a stored 0 is announced at
+every boot rather than forgotten between sessions.
 
 ```
 srej          report the current level
 srej 0        allowed, but only from here -- see below
-srej 1        the default: least rejection that is not none, and the lowest
-              the device will ever choose for itself
-srej 2        the datasheet's value
+srej 1        the least rejection that is not none, the lowest the device
+              will ever choose for itself, and the default until 0.22.0
+srej 2        the default since 0.22.0: the chip's own power-on value
 srej 8        measured here as enough to silence an electric hammer entirely
 ```
 
