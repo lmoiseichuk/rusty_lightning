@@ -347,18 +347,17 @@ fn main() {
     // nothing, and the loop then holds the pin, and its wake, until the batch
     // closes (`listen`'s `irq_held`).
     //
-    // **What it changes that nothing has measured: the noise count.** Under
-    // the edge, every INT that rose while the pin was disarmed -- for the rest
-    // of a pass, a 3.8 s redraw, the gap before the batch-end poll -- went
-    // uncounted, and doc/scanning.md §4-5 records the result as a count that
-    // saturated near 300/min. The tuner's thresholds (`climb`'s notches per
-    // 60/min, `golden::is_swamped` at five times that) were set against those
-    // counts. The level services every re-raise, so the same room can now read
-    // noisier, climb further in one window, and record a rung as drowned that
-    // 0.20 did not. How much is open -- the cap was never strict, and 595/min
-    // was logged under the edge -- so compare `noise/min` and the
-    // `tune: ... drowned` lines on 0.20 and 0.21 in one room before trusting
-    // where the tuner comes to rest. See doc/scanning.md §5.
+    // **What it changes in the noise count: only the count asleep.** Under
+    // the edge, an INT that rose while the pin was disarmed went uncounted
+    // until the batch-end poll. Awake that was rare -- the loop re-arms
+    // microseconds after a read and the chip re-raises no sooner than ~90 ms,
+    // so only a pass blocked longer than that (a redraw, a sweep's settle)
+    // lost the rest of its batch, and 0.20.1's event gaps match 0.21's. Asleep
+    // it was the rule: the isolated pad let the edge read about once a batch,
+    // which is the 60/min quiet threshold itself. The tuner's thresholds
+    // (`climb`'s notches per 60/min, `golden::is_swamped` at five times that)
+    // were fitted on awake counts, which the level reproduces awake and asleep,
+    // so they are left as they are. Worked out in doc/scanning.md §5.
     if let Err(e) = irq.set_interrupt_type(InterruptType::HighLevel) {
         println!("FATAL: GPIO21 interrupt type -- {e}");
         return;

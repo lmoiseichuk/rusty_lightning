@@ -323,6 +323,7 @@ impl Tuning {
         self.window_started_ms = now_ms;
         totals.noise_per_min = self.window.noise_per_min(window_s);
         totals.disturbers_per_min = self.window.disturbers_per_min(window_s);
+        totals.noisy_batches = (self.window.noisy_batches, self.window.batches);
         self.window.clear();
     }
 
@@ -357,6 +358,20 @@ impl Tuning {
         // correctly instead of collapsing to 1.
         totals.noise_per_min = self.window.noise_per_min(window_s);
         totals.disturbers_per_min = self.window.disturbers_per_min(window_s);
+        totals.noisy_batches = (self.window.noisy_batches, self.window.batches);
+
+        // **The raw count, and it means what the thresholds were fitted on.**
+        // 0.21 made the interrupt a level, and the worry was that this count
+        // had been capped by the edge and the thresholds with it. Awake, where
+        // the thresholds were measured, it had not: the edge was re-armed
+        // microseconds after each read and the chip re-raises no sooner than
+        // ~90 ms, so the edge lost only the rest of a batch after a pass that
+        // blocked longer than that -- a redraw, a sweep's settle -- at most two
+        // a minute, about 3 %. Asleep it had been capped, at about one read a
+        // batch, which is exactly the 60/min quiet threshold: an unattended
+        // 0.20 board could never call a window noisy. So nothing is rescaled;
+        // the batches with noise are published beside the rate for comparing
+        // with old logs. doc/scanning.md §5 has the arithmetic and the gaps.
 
         // **Remember a rung that drowned.** Measured here: a sweep graded nf 0
         // at 595 events/min against a 60/min threshold, settled at nf 1, and

@@ -1034,10 +1034,13 @@ sleeps. Keep WiFi off except for the brief NTP sync.
 > not a measurement of this build. Unmasked was already an experiment rather than a resting state; on
 > the cell this is part of its price.
 >
-> **Open: the level changed what the noise count measures.** Re-raises the edge used to lose are now
-> serviced, so the same room can count noisier than it did on 0.20 — and the tuner's thresholds were
-> set against 0.20's counts. Not measured, not compensated; doc/scanning.md §5 has the argument and
-> the comparison to make.
+> **Settled in 0.22.0: the level changed what the noise count measures only while the chip slept.**
+> Awake, 0.20's edge was re-armed microseconds after each read and the chip re-raises no sooner than
+> ~90 ms, so it counted at the chip's rate and lost only the rest of a batch after a pass that
+> blocked longer — a redraw, a sweep's settle; asleep, the isolated pad let it read about once a
+> batch, which is the 60/min quiet threshold exactly. The thresholds were fitted awake, so the
+> tuner's input is unchanged; `status` prints the batches that heard noise beside the rate, for
+> comparison with old logs. doc/scanning.md §5 has the arithmetic and the measured gaps.
 
 > #### ⚠⚠ AS BUILT, 2026-11-01: unplugging USB can reset the board, and the cause is the power path
 >

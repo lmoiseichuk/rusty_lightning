@@ -139,6 +139,47 @@ fn main() {
     }
     check("an hour of September's overhead never once reads as lightning", !september_heard);
 
+    println!("\n  the raw count is the verdict, the batches are for comparing with 0.20");
+    // A band drowning at the chip's re-raise rate, ~90 ms: 11 a batch for a
+    // minute. The level interrupt counts all of them, and so did 0.20 awake.
+    let mut drowning = Window::default();
+    for _ in 0..60 {
+        drowning.fold_batch(&Batch { noise: 11, ..Batch::default() });
+    }
+    check("eleven a second is 660/min", drowning.noise_per_min(60) == 660);
+    check("...noisy against 60/min", !drowning.quiet(60, 60));
+    check("...in every one of its 60 batches", drowning.noisy_batches == 60 && drowning.batches == 60);
+    // **What an unattended 0.20 board saw of the same band**: one read a
+    // batch, so 60/min -- exactly the quiet threshold, which `quiet` passes.
+    // The verdict must stay on the raw count, or it inherits that blindness.
+    check(
+        "one a batch for a minute is 60/min, which the threshold calls quiet",
+        Window::per_min(drowning.noisy_batches, 60) == 60 && Window::per_min(60, 60) <= 60,
+    );
+    let mut one_each = Window::default();
+    let mut two_each = Window::default();
+    for _ in 0..60 {
+        one_each.fold_batch(&Batch { noise: 1, ..Batch::default() });
+        two_each.fold_batch(&Batch { noise: 2, ..Batch::default() });
+    }
+    check("one noise in every batch is quiet at 60/min", one_each.quiet(60, 60));
+    check(
+        "two in every batch is not, though the same batches had noise",
+        !two_each.quiet(60, 60) && two_each.noisy_batches == one_each.noisy_batches,
+    );
+    // The other way round: a burst in one second is a noisy minute by rate,
+    // and one noisy batch out of sixty.
+    let mut burst = Window::default();
+    burst.fold_batch(&Batch { noise: 70, ..Batch::default() });
+    for _ in 1..60 {
+        burst.fold_batch(&Batch::default());
+    }
+    check("70 in one batch is noisy at 60/min", !burst.quiet(60, 60));
+    check("...from one noisy batch of sixty", burst.noisy_batches == 1 && burst.batches == 60);
+    let mut emptied = burst;
+    emptied.clear();
+    check("clear empties the batch counts too", emptied.batches == 0 && emptied.noisy_batches == 0);
+
     let (pass, fail) = (PASS.load(Ordering::Relaxed), FAIL.load(Ordering::Relaxed));
     println!("\n{pass} passed, {fail} failed");
     if fail > 0 {

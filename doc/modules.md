@@ -93,10 +93,10 @@ this table is generated from it.
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 678 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 495 |
 | `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1122 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1139 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1078 |
-| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 165 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1093 |
+| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 186 |
 
 ### Keeping it
 
@@ -123,7 +123,7 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 638 |
+| `commands` | What the console commands actually do (§5). | -- | 647 |
 | `console` | Commands in over USB, and the awake signal that comes with them. | -- | 578 |
 | `credentials` | The access point's name and password. | -- | 145 |
 | `effects` | Applying the console's hardware effects. | -- | 471 |

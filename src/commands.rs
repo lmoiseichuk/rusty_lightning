@@ -308,6 +308,15 @@ pub fn run(command: Command, ctx: &mut Ctx<'_>) -> Effects {
                 "status: {} strike(s), {} disturber(s) this session",
                 ctx.totals.strikes, ctx.totals.disturbers
             );
+            // **The raw noise count and the 0.20 one, side by side.** The rate
+            // is what the tuner judges; the batches are what an unattended
+            // 0.20 board could count, at about one read a batch while it slept
+            // -- so a log from either firmware can be read against this one.
+            let (noisy, batches) = ctx.totals.noisy_batches;
+            println!(
+                "status: noise {} this session -- last window {}/min, in {} of its {} batch(es)",
+                ctx.totals.noise, ctx.totals.noise_per_min, noisy, batches
+            );
             let hour = ctx.history.last_hour();
             // **Overhead wins**, the same way it does on the screen -- see the
             // matching branch in `ui.rs`. The flag exists so a reader can be

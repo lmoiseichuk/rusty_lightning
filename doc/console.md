@@ -180,7 +180,7 @@ which is why it no longer gives a number.)
 |---|---|
 | `help` (or `?`) | the command list |
 | `health` | vitals — clock, CPU MHz, die temperature, RAM, flash, battery — plus the firmware's version and commit, and the restarts behind this session, newest first. The screen's top line, and then some. |
-| `status` | sensor state — mode, defence level, session counts, last hour, antenna. The screen's second line. |
+| `status` | sensor state — mode, defence level, session counts, last hour, antenna. The screen's second line. Also the raw noise count since boot and the last window's rate beside how many of its batches heard any noise, which is what an unattended 0.20 board could count — see doc/scanning.md §5 |
 | `date` | the current time, in local time |
 | `dump` | the whole strike log as CSV, including records not yet synced to flash. About 264,000 bytes a second at 160 MHz — a 1.4 MB log is 5–6 s — and any length: since 0.21.2 it stops for a tick every half second, where 0.21.1 was reset by the task watchdog once a dump passed ~1.32 MB |
 | `events [rows\|off]` | also log disturbers and noise, for at most that many rows — capped to what the log can hold. Saved, so it counts down across restarts. Bare, it reports what is left and what would fit; `events off` stops |

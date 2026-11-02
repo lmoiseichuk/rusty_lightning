@@ -107,6 +107,17 @@ pub struct Window {
     /// Counted so the console can say the window had them; never a reason to
     /// hold, to stay open, or to reset the silence.
     pub unconfirmed: u32,
+    /// Batches folded in, and how many of them heard any noise at all.
+    ///
+    /// **For comparing with 0.20, and for nothing else.** Asleep, 0.20's edge
+    /// interrupt could read the reason register about once per batch -- the
+    /// pin was isolated while the chip slept, so only the batch-close poll saw
+    /// an event -- which makes "batches with noise" the quantity an unattended
+    /// 0.20 board actually counted. [`Window::quiet`] does not read it: the
+    /// thresholds were fitted on awake counts, which are the raw rate this
+    /// window carries in `noise`. See `doc/scanning.md` §5 for the arithmetic.
+    pub batches: u32,
+    pub noisy_batches: u32,
 }
 
 impl Window {
@@ -132,6 +143,10 @@ impl Window {
     pub fn fold_batch(&mut self, batch: &Batch) {
         self.fold(batch.noise, batch.disturbers, batch.confirmed());
         self.unconfirmed += batch.unconfirmed;
+        self.batches += 1;
+        if batch.noise > 0 {
+            self.noisy_batches += 1;
+        }
     }
 
     /// Whether this window heard lightning it may act on.
@@ -159,6 +174,12 @@ impl Window {
     ///
     /// A **rate**, not a count, so the verdict means the same thing whatever the
     /// window length.
+    ///
+    /// **Every `NoiseTooHigh` the interrupt delivered, not the batches that had
+    /// one.** That is the quantity the 60/min threshold and the drowned multiple
+    /// were fitted on -- console sessions, awake, where 0.20's edge interrupt
+    /// already counted at the chip's own re-raise rate -- and it is what the
+    /// level interrupt counts awake and asleep alike.
     pub fn quiet(&self, quiet_per_min: u32, window_s: u32) -> bool {
         self.noise_per_min(window_s) <= quiet_per_min
     }

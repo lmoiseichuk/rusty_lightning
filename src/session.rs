@@ -29,6 +29,10 @@ pub struct Totals {
     /// chip reported; what the device learns from is a separate question.
     pub strikes: u32,
     pub disturbers: u32,
+    /// `NoiseTooHigh` since boot, every one the interrupt delivered -- the raw
+    /// count the tuner's rate is made of, kept so `status` can show it beside
+    /// the rate for comparison with older logs.
+    pub noise: u32,
     pub last_strike: Option<(Distance, u32, Option<u64>)>,
     /// Folds return strokes into flashes.
     ///
@@ -56,6 +60,12 @@ pub struct Totals {
     /// Whether this device has stopped claiming a distance -- see
     /// [`OVERHEAD_ATTEMPTS_BEFORE_GIVING_UP`].
     pub overhead_gave_up: bool,
+    /// **`NoiseTooHigh` per minute over the window the tuner last judged** --
+    /// `verdict::Window::noise_per_min`, the raw count of every one the
+    /// interrupt delivered. The number the screen shows, and the one the quiet
+    /// threshold and the drowned test read. That is what it is now; the note
+    /// below is the history of what it was, kept for its measurements.
+    ///
     /// **Interference** per minute — noise *and* disturbers — from the last
     /// probe. The number the screen shows.
     ///
@@ -95,6 +105,12 @@ pub struct Totals {
     /// Disturbers in the same window. Same period as everything else on screen,
     /// so the two numbers can be read against each other.
     pub disturbers_per_min: u32,
+    /// Of the batches in that window, how many heard any noise: `(noisy, all)`.
+    ///
+    /// The quantity an unattended 0.20 board could count -- about one read a
+    /// batch while it slept -- printed by `status` beside the raw rate so a
+    /// field log can be laid against an old one. Nothing decides on it.
+    pub noisy_batches: (u32, u32),
     /// Events counted during the probe now running. Zeroed when one starts.
     pub probe_noise: u32,
 }
@@ -286,6 +302,7 @@ fn read_and_handle(
         }
         Interrupt::NoiseTooHigh => {
             batch.noise += 1;
+            totals.noise = totals.noise.saturating_add(1);
             // Into the probe accumulator too. Between probes this collects
             // events nobody asked for, which is harmless: it is zeroed at the
             // start of the next one.

@@ -107,7 +107,9 @@ Two things follow, and they are the heart of how this device should scan.
 noise floor is above the signal. At the bottom the chip is swamped and the
 servicing path saturates: booting fully open was measured at 7–9 noise events
 per batch continuously, and the rescue path caps the observable rate near
-300/min. So "when unsure, be more sensitive" is not a safe default either.
+300/min (an early figure; what bounds the count since the 200 ms rescue is the
+chip's own ~90 ms re-raise, §5). So "when unsure, be more sensitive" is not a
+safe default either.
 
 **Absence of noise is not proof of life.** A rung must be shown to hear
 *something* before the device rests at it. A disturber is proof of life — it is
@@ -130,26 +132,54 @@ precisely when the band is at its worst — the moment the estimate matters most
 Such an observation is *right-censored*, and the honest treatment is to record it
 as noisy, exclude it from every rate, and say so.
 
-**Since 0.21.0 the count measures something else, and nobody has measured how
-different.** The interrupt became a high level (§6), so an INT that rose while
-the pin was disarmed — the rest of a pass, a 3.8 s redraw, the second before
-the batch-end poll — is now serviced the moment the loop re-arms instead of
-waiting, uncounted, for the poll. The datasheet says `INT_NH` *"persists as long
-as the noise level is above the threshold"*, so in a noisy band that is a re-raise
-the old path lost and the new one counts. The same room can therefore read
-noisier on 0.21 than on 0.20.
+**Since 0.21.0 the interrupt is a high level (§6), and the worry was that the
+count had changed under the thresholds.** An INT that rose while the pin was
+disarmed — the rest of a pass, a 3.8 s redraw — is now serviced the moment the
+loop re-arms, where the edge left it waiting, uncounted, for the batch-end poll.
+The datasheet says `INT_NH` *"persists as long as the noise level is above the
+threshold"*, so in a noisy band that is a re-raise the old path lost.
 
-That matters because **the tuner's thresholds were set against the old counts.**
-`climb` takes one notch per multiple of the quiet threshold (60/min) at once, and
-`golden::is_swamped` records a rung as drowned at five times it (300/min) and
-then refuses to relax below it — a ceiling that sat almost exactly on the old
-path's saturation. A window 0.20 counted at ~300 might count 500 on 0.21: eight
-notches instead of five, and a floor recorded where 0.20 recorded none. The cap
-was never strict — 595/min was logged under the edge — so the size of the
-effect is open. Until it is measured, compare `noise/min` and the
-`tune: nf N drowned at …` lines on 0.20 and 0.21 in the same room before
-trusting where the tuner comes to rest. Nothing in the tuner was changed for
-it: thresholds move on measurements, and this one has not been made.
+**Worked out in 0.22.0, the edge capped the count only while the chip slept —
+and the thresholds were fitted awake.** What bounds the count is how soon the
+chip raises INT again after 0x03 is read, and the logs measure it: on 0.21.x,
+196 consecutive `NoiseTooHigh` gaps had p10 74 ms, median 90 ms, p90 94 ms, with
+a loop that services an event in 8–10 ms — so the chip, not the loop, sets
+~90 ms, about eleven a second, ~660/min.
+
+* **Awake, the edge counted at that rate.** After a read in an ordinary pass the
+  loop is back at the re-arm within microseconds, long before the next re-raise,
+  so its edge is caught. An edge was lost only when the read was followed by
+  more than ~90 ms of work before the re-arm — the batch-close pass with a
+  redraw, a sweep's 500 ms settle — and then nothing was counted until the next
+  batch-end poll, at most one batch (1 s, ~11 events) later. A window without
+  strikes redraws at most twice a minute (the 30 s floor on a changed gauge), so
+  0.20 awake read at least 58/60 ≈ 97 % of what 0.21 reads: one notch of `climb`
+  at most, at the ladder's saturating end. Measured, awake at 160 MHz with
+  disturbers unmasked (they share the INT path): 0.20.1's 5,072 gaps had median
+  110 ms, p90 190 ms and **three** of 1 s or more; 0.21.x's 5,699 had median
+  118 ms, p90 220 ms. The same distribution — the edge was not capping it.
+* **Asleep, the edge read about once a batch.** GPIO21 was isolated in light
+  sleep and not a wake source (`CONFIG_PM_SLP_DISABLE_GPIO`), and the chip went
+  back to sleep within 30 ms of each batch's work (3 idle ticks), so a re-raise
+  ~90 ms after a read always arrived asleep and was never seen; each 1 s timer
+  wake read 0x03 once, through the ISR or the batch-end poll. That is ≤ 60/min —
+  **exactly the quiet threshold, which `quiet` passes (`<=`)**. An unattended
+  0.20 board, on the frugal policy, could never call a window noisy, let alone
+  drowned (300/min).
+
+The thresholds were all measured at the console, awake: 60/min from rooms
+counted at 90–150/min with the air conditioning running and 121–132 in a
+storm's lulls, the drowned multiple from `nf 0` at 595/min in a sweep and
+300–480/min under `sensitive on`. 595/min is impossible under the asleep cap. So
+the level, which wakes the chip on every re-raise, counts the same quantity
+awake and asleep — the one the thresholds describe — and **nothing in the tuner
+was rescaled**. What changed is the unattended board, and it changed toward the
+meaning, not away from it.
+
+For laying a field log against an old one, `status` prints the raw count since
+boot and the last window's rate beside the number of batches in that window
+that heard any noise — the quantity an unattended 0.20 board could count. The
+`noise` rows `events` logs carry their own millisecond arrival times.
 
 ---
 
