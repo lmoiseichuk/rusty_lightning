@@ -323,7 +323,7 @@ console command". The board sits indoors on USB, a daily 08:00 cross-check
 against GOES-19 reads its log, and every console open restarts it. 0.22.1's
 no-light-sleep image was flashed for that; this is the default image's way to
 do the same. The feature is c615f2f0825a, released as 0.22.2; a review of it
-found L-H5 and L-H6, fixed in 0.22.3. **Not verified on the board.** These rows
+found L-H5 and L-H6, fixed in 5f0f11d4e93f and released as 0.22.3. **Not verified on the board.** These rows
 were L-K1..L-K4 at 0.22.2, which the survey table above already used; renamed
 so an ID names one finding.
 
