@@ -24,6 +24,10 @@ mod strike;
 mod uptime;
 #[path = "../src/merger.rs"]
 mod merger;
+// `merger` judges each stroke with `golden::is_evidence` as it folds it in,
+// and `golden` names `merger` back for the flash it records.
+#[path = "../src/golden.rs"]
+mod golden;
 
 // `merger` reaches for `crate::strike`; at the crate root of this test binary
 // that is exactly where `strike` is.

@@ -612,9 +612,11 @@ pub fn commit_merged(
         1 => String::new(),
         n => format!("  [{n} strokes]"),
     };
-    // Marked on the console, where the reader cannot see the rule; the log
-    // needs no mark, because its `distance_km` column already says `overhead`
-    // for exactly the rows that taught nothing.
+    // Marked on the console, where the reader cannot see the rule. The log
+    // needs no mark: its `distance_km` column says `overhead` for the rows
+    // that taught nothing, and the one exception -- a flash of `overhead` and
+    // `far` together, recorded as `overhead` and counted for its `far` stroke
+    // -- has not happened on this board, where no strike has read `far`.
     let marker = match (merged.simulated, learned) {
         (true, _) => "  [SIMULATED]",
         (false, false) => "  [unconfirmed -- not learned from]",

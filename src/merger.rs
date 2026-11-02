@@ -32,6 +32,16 @@ pub struct Merged {
     pub epoch: Option<u64>,
     pub minute: u32,
     pub simulated: bool,
+    /// How many of the strokes carried a distance that is evidence
+    /// (`golden::is_evidence`), counted one by one as they were folded in.
+    ///
+    /// **Kept because the merged distance cannot answer it.** A flash of an
+    /// `overhead` stroke and a `far` one is recorded as `overhead`, the nearest
+    /// reading, which is right for the screen and wrong for the record: the
+    /// `far` stroke would have taught the device alone, and the tuner took it as
+    /// lightning when it landed. `golden::may_record` reads this, so the record
+    /// and the walk agree about every flash whatever the merge window.
+    pub evidence: u32,
 }
 
 /// Folds return strokes into flashes (§4.3).
@@ -54,6 +64,8 @@ struct Accumulator {
     distance_samples: u32,
     overhead: bool,
     strokes: u32,
+    /// Strokes whose distance is evidence -- see [`Merged::evidence`].
+    evidence: u32,
     epoch: Option<u64>,
     minute: u32,
     simulated: bool,
@@ -71,6 +83,11 @@ impl Default for Merger {
 impl Accumulator {
     fn fold(&mut self, strike: &Strike) {
         self.strokes += 1;
+        // Judged per stroke, by the one rule, before the distances are
+        // folded into a single reading that can no longer say it.
+        if crate::golden::is_evidence(strike.distance) {
+            self.evidence += 1;
+        }
         self.energy_sum = self.energy_sum.saturating_add(strike.energy_raw);
         match strike.distance {
             Distance::Km(km) => {
@@ -103,6 +120,7 @@ impl Accumulator {
             epoch: self.epoch,
             minute: self.minute,
             simulated: self.simulated,
+            evidence: self.evidence,
         }
     }
 }
@@ -146,6 +164,7 @@ impl Merger {
                     distance_samples: 0,
                     overhead: false,
                     strokes: 0,
+                    evidence: 0,
                     epoch,
                     minute,
                     simulated,
@@ -175,6 +194,7 @@ impl Merger {
                     distance_samples: 0,
                     overhead: false,
                     strokes: 0,
+                    evidence: 0,
                     epoch,
                     minute,
                     simulated,

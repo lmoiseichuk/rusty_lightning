@@ -92,11 +92,11 @@ this table is generated from it.
 |---|---|---|---|
 | `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 746 |
 | `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 564 |
-| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/verdict.rs` | 213 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1169 |
+| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/verdict.rs` | 233 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1171 |
 | `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
 | `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1116 |
-| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/verdict.rs` | 328 |
+| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/golden.rs`, `tests/verdict.rs` | 328 |
 
 ### Keeping it
 
@@ -170,7 +170,7 @@ program' is not information.
 | `golden` | `merger` `strike` |
 | `history` | `strike` |
 | `log` | `as3935` `budget` `clock` `csv` `history` `pace` `settings` |
-| `merger` | `strike` `uptime` |
+| `merger` | `golden` `strike` `uptime` |
 | `pace` | `uptime` |
 | `policy` | `uptime` |
 | `portal` | `clock` `credentials` `history` `log` `pace` `session` `strike` `system` `tuning` `uptime` `webui` |

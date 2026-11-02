@@ -695,8 +695,8 @@ coming in (distance ↓), moving out (distance ↑), stronger (same distance, hi
 >   what the strike-hold rule reads, and it wants all of them; its confirmed part — strokes that
 >   carried a distance, `Batch::confirmed` — is what a dip and the rescue read; the totals figure is
 >   what a person reads. Since 0.22.0 an `overhead` stroke is in the totals and the hold and not in
->   the evidence, and a merged flash teaches the device what its recorded distance says
->   (`golden::may_record`).
+>   the evidence, and a merged flash teaches the device if any of its strokes would have alone
+>   (`golden::may_record`, reading `Merged::evidence`).
 > * **Overhead is not averaged into the distance.** With no measured kilometres in the window,
 >   overhead wins if any stroke reported it — folding it in as a number is the bug `history::Bucket`
 >   documents at length.

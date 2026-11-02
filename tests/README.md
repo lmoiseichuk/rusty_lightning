@@ -27,9 +27,9 @@ cd tests && rustc --edition 2024 -A dead_code -o /tmp/civil civil.rs && /tmp/civ
 | `civil.rs` | the calendar: leap years, the century rules, month lengths, and that the time of day never leaks into the date |
 | `csv.rs` | reading the log back: the header decides the columns, so a new column cannot silently shift the old ones |
 | `defence.rs` | §4.2's noise-rejection ladder: rung boundaries, monotonicity, saturation |
-| `golden.rs` | the known-good record: packing, the fall-back rule, the learned floor, and what a detection may teach — `overhead` never, a merged flash by its recorded distance — through `fold_flash`, the function the device calls |
+| `golden.rs` | the known-good record: packing, the fall-back rule, the learned floor, and what a detection may teach — `overhead` never, a merged flash if any of its strokes would have alone, so the record, the walk and `merge 0` agree — through `fold_flash`, the function the device calls |
 | `history.rs` | §4.3's strike rings: the score formula against the spec's observed figures, bucketing, gap clearing, and that "overhead"/"out of range" are counted but not averaged |
-| `merger.rs` | folding the strokes of one flash into a single strike, and what a merged flash reports |
+| `merger.rs` | folding the strokes of one flash into a single strike, and what a merged flash reports (the strokes that were evidence among them are checked in `golden.rs`) |
 | `pace.rs` | walks over the whole log: a one-tick block every tenth of the task watchdog's timeout, both read from `sdkconfig.defaults`, and the dump that reset the board walked again at its measured rate |
 | `press.rs` | the button gesture boundaries: too short, gain flip, portal, stuck |
 | `uptime.rs` | interval arithmetic across the 49.7-day millisecond wrap |

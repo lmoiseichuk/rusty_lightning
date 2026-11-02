@@ -16,9 +16,10 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-// `golden` names `crate::strike` for the distance a detection carried, and the
-// mixed-flash checks below run strokes through the real merger, which reaches
-// for `crate::uptime`. All three at the root, where those paths resolve.
+// `golden` names `crate::strike` for the distance a detection carried and
+// `crate::merger` for the flash it records; the merger reaches for
+// `crate::uptime`; and the check that the record and the walk agree runs the
+// tuner's own batch from `verdict`. All at the root, where those paths resolve.
 #[path = "../src/strike.rs"]
 mod strike;
 #[path = "../src/uptime.rs"]
@@ -27,8 +28,10 @@ mod uptime;
 mod merger;
 #[path = "../src/golden.rs"]
 mod golden;
+#[path = "../src/verdict.rs"]
+mod verdict;
 use golden::*;
-use merger::Merger;
+use merger::{Merger, MERGE_WINDOW_MS};
 use strike::{Distance, Strike};
 
 static PASS: AtomicU32 = AtomicU32::new(0);
@@ -248,40 +251,93 @@ fn main() {
     // at the sentinel, not at "close".
     check("so is the nearest kilometre bin", is_evidence(Distance::Km(5)));
     check("out of range is an answer about distance, so it is", is_evidence(Distance::OutOfRange));
-    check("a real kilometre flash may be recorded", may_record(false, Distance::Km(10)));
-    check("a real overhead flash may not", !may_record(false, Distance::Overhead));
-    check("a simulated flash never may", !may_record(true, Distance::Km(10)));
-    check("...overhead or not", !may_record(true, Distance::Overhead));
 
-    // Strokes through the real merger, at its default one-second window: the
-    // flash is judged on the distance it is recorded with.
+    // Strokes through the real merger, at its default one-second window, or
+    // with merging off: a flash is judged on its strokes, one by one.
     let stroke = |distance| Strike { distance, energy_raw: 100_000 };
-    let flash = |strokes: &[Distance]| {
+    let flash_in = |window_ms: u32, strokes: &[Distance]| {
         let mut merging = Merger::default();
+        let _ = merging.set_window_ms(window_ms);
+        let mut flashes = Vec::new();
         for (index, distance) in strokes.iter().enumerate() {
-            let _ = merging.observe(&stroke(*distance), Some(1), 1, false, index as u32 * 100);
+            if let Some(done) = merging.observe(&stroke(*distance), Some(1), 1, false, index as u32 * 100) {
+                flashes.push(done);
+            }
         }
-        merging.take_due(10_000).expect("the window closed")
+        if let Some(done) = merging.take_due(10_000) {
+            flashes.push(done);
+        }
+        flashes
     };
+    let flash = |strokes: &[Distance]| {
+        let mut flashes = flash_in(MERGE_WINDOW_MS, strokes);
+        assert_eq!(flashes.len(), 1, "one window, one flash");
+        flashes.remove(0)
+    };
+    check("a real kilometre flash may be recorded", may_record(&flash(&[Distance::Km(10)])));
+    check("a real overhead flash may not", !may_record(&flash(&[Distance::Overhead])));
+    check("a far flash may", may_record(&flash(&[Distance::OutOfRange])));
+    let mut simulated = flash(&[Distance::Km(10)]);
+    simulated.simulated = true;
+    check("a simulated flash never may", !may_record(&simulated));
+    let mut simulated_overhead = flash(&[Distance::Overhead]);
+    simulated_overhead.simulated = true;
+    check("...overhead or not", !may_record(&simulated_overhead));
+
     let mixed = flash(&[Distance::Overhead, Distance::Km(8)]);
     check(
         "overhead then kilometres in one flash is recorded at kilometres",
         mixed.strike.distance == Distance::Km(8) && mixed.strokes == 2,
     );
-    check("...and counts, as its kilometre stroke would alone", may_record(mixed.simulated, mixed.strike.distance));
+    check("...and counts, as its kilometre stroke would alone", may_record(&mixed));
     let reversed = flash(&[Distance::Km(8), Distance::Overhead]);
-    check("in either order", may_record(reversed.simulated, reversed.strike.distance));
+    check("in either order", may_record(&reversed));
     let contradictory = flash(&[Distance::Overhead, Distance::OutOfRange]);
     check(
-        "overhead with far is recorded as overhead",
+        "overhead with far is recorded as overhead, the nearest reading",
         contradictory.strike.distance == Distance::Overhead,
     );
-    check(
-        "...and does not count, so the log's distance column says what taught the device",
-        !may_record(contradictory.simulated, contradictory.strike.distance),
-    );
+    // **The regression for this pair.** Judged on the merged distance it did
+    // not count, while the walk had taken its far stroke as lightning and
+    // `merge 0` would have recorded it.
+    check("...and counts all the same, for its far stroke", may_record(&contradictory));
     let only = flash(&[Distance::Overhead, Distance::Overhead, Distance::Overhead]);
-    check("three overhead strokes are one flash that teaches nothing", !may_record(only.simulated, only.strike.distance));
+    check("three overhead strokes are one flash that teaches nothing", !may_record(&only));
+    check("...with no stroke counted as evidence", only.evidence == 0 && only.strokes == 3);
+
+    // **The record and the walk agree about every flash, and the merge window
+    // changes neither.** Every sequence of up to three strokes drawn from a
+    // kilometre reading, `overhead` and `far`: the batch the tuner fills as
+    // the strokes land, the flash the record sees at the default window, and
+    // the flashes it sees with merging off must all give one answer.
+    let kinds = [Distance::Km(9), Distance::Overhead, Distance::OutOfRange];
+    let mut sequences: Vec<Vec<Distance>> = Vec::new();
+    for first in kinds {
+        sequences.push(vec![first]);
+        for second in kinds {
+            sequences.push(vec![first, second]);
+            for third in kinds {
+                sequences.push(vec![first, second, third]);
+            }
+        }
+    }
+    let mut agreed = 0;
+    for strokes in &sequences {
+        let mut batch = verdict::Batch::default();
+        for distance in strokes {
+            batch.lightning(&Ok::<Strike, ()>(stroke(*distance)));
+        }
+        let walk_says = batch.confirmed() > 0;
+        let merged_says = may_record(&flash(strokes));
+        let unmerged_says = flash_in(0, strokes).iter().any(|each| may_record(each));
+        if walk_says == merged_says && merged_says == unmerged_says {
+            agreed += 1;
+        }
+    }
+    check(
+        "the walk, the merged record and merge 0 agree on all 39 sequences",
+        agreed == sequences.len() && sequences.len() == 39,
+    );
 
     // The record as `session::remember_working_point` builds it: each strike a
     // flash out of the real merger, through the real `fold_flash`, and the

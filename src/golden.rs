@@ -99,24 +99,28 @@ pub fn is_evidence(distance: Distance) -> bool {
 
 /// Whether a committed flash may be folded into the record.
 ///
-/// **Judged on the distance the flash is recorded with**, which is the merged
-/// one (`merger`), and that settles the mixed flash:
+/// **If any of its strokes would have counted alone** -- `Merged::evidence`,
+/// counted stroke by stroke with [`is_evidence`] as the merger folds them in.
+/// Those are the same strokes the tuner confirmed as they landed
+/// (`verdict::Batch::lightning`), so the record and the walk agree about every
+/// flash, and the merge window -- a way of reading the strokes, set by
+/// `merge <ms>` -- cannot change what the device learns:
 ///
-/// * **An `overhead` stroke merged with a kilometre stroke counts.** The merger
-///   reports the kilometre mean whenever any stroke carried kilometres, so the
-///   row reads as a distance -- and the kilometre stroke would have counted on
-///   its own with merging off (`merge 0`). A merge window is a way of reading
-///   the strokes, and it must not throw evidence away.
-/// * **A flash whose only readings are `overhead` does not**, nor one that
-///   paired `overhead` with `far`, which the merger also records as `overhead`.
-///   Nearer than 5 km and beyond range inside one window contradict each
-///   other, so that flash is the weakest evidence there is -- and leaving it
-///   out keeps the log's `distance_km` column an exact record of what taught
-///   the device, which a reader can reconstruct from the CSV alone.
+/// * **An `overhead` stroke merged with a kilometre stroke counts**, as the
+///   kilometre stroke would have alone under `merge 0`. The merger records it
+///   at kilometres.
+/// * **An `overhead` stroke merged with a `far` stroke counts too**, for the
+///   `far` stroke. Until 0.22.1 this was judged on the merged distance, which
+///   the merger records as `overhead` -- the nearest reading, for the screen
+///   -- so the walk took the `far` stroke as lightning while the record threw
+///   it away, and `merge 0` would have kept it. No strike on the board has
+///   read `far` yet, so it never happened; it is the one row whose
+///   `distance_km` alone does not say whether it taught the device.
+/// * **A flash whose only readings are `overhead` does not.**
 ///
 /// A simulated strike never counts: it did not go through the front end.
-pub fn may_record(simulated: bool, distance: Distance) -> bool {
-    !simulated && is_evidence(distance)
+pub fn may_record(merged: &Merged) -> bool {
+    !merged.simulated && merged.evidence > 0
 }
 
 /// What a committed flash makes of the record: `Some` with the record as it
@@ -129,7 +133,7 @@ pub fn may_record(simulated: bool, distance: Distance) -> bool {
 /// putting it back to `!merged.simulated` let September write "840 strikes
 /// heard here" again with every check green.
 pub fn fold_flash(record: Option<Golden>, merged: &Merged, at: Combo) -> Option<Golden> {
-    match may_record(merged.simulated, merged.strike.distance) {
+    match may_record(merged) {
         true => Some(observe(record, at)),
         false => None,
     }

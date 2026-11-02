@@ -508,12 +508,17 @@ what §4.2 sees: the auto-tune still counts every stroke, because the strike-hol
 rule wants all of them, and the strokes that carried a distance separately,
 because those are what a dip and the rescue read.
 
-**A merged flash teaches the device what its recorded distance says.** One that
-mixed an `overhead` stroke with a kilometre stroke is recorded at kilometres and
-counts, as its kilometre stroke would have alone under `merge 0`. One whose only
-readings were `overhead` — with or without `far` — is recorded as `overhead`
-and does not. So the log's `distance_km` column is an exact record of which
-rows taught the device: `overhead` did not, everything else did.
+**A merged flash teaches the device if any of its strokes would have alone** —
+the strokes the tuner already counted as they landed, so the golden record and
+the walk agree about every flash, and `merge` changes neither. One that mixed an
+`overhead` stroke with a kilometre stroke is recorded at kilometres and counts;
+one whose only readings were `overhead` is recorded as `overhead` and does not.
+So `overhead` in the log's `distance_km` column marks a row that taught the
+device nothing, with one exception it cannot show by itself: a flash of
+`overhead` and `far` together is recorded as `overhead`, the nearest reading,
+and counts for its `far` stroke. No strike on the board has read `far` yet, and
+the console marks every flash that taught nothing
+`[unconfirmed -- not learned from]`.
 
 **`defence <raw>` skips the sweep** when you already know the answer for a room.
 `0` is fully receptive; higher is deafer. A device that has never calibrated
