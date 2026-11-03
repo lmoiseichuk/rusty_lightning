@@ -592,7 +592,7 @@ def power():
     core_cell = rows[1][1]
     figure.line([core_cell["bottom"], (core_cell["bottom"][0], core_bus_y), (445, core_bus_y)], POWER[1], width=2.4)
     figure.line([rows[0][1]["right"], (955, 95), (955, 330)], POWER[1], width=2.4, arrow_end=True)
-    regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, behind", "a switch that stays on"], POWER)
+    regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, behind", "a switch: off at reset"], POWER)
     boost = figure.box(580, 330, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
     switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on for storms"], POWER)
     for x in (445, 690):

@@ -92,9 +92,9 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 | --- | --- |
 | I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68) |
 | I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
-| 4 GPIOs | one IRQ per SEN0290 |
+| 4 LP GPIOs | one IRQ per SEN0290; they wake the P4 from deep sleep |
 | 1 GPIO | the switched rail: the eight lanes |
-| 1 GPIO | the octagon's supply: normally on, cut only to reset it |
+| 1 LP GPIO, held | the octagon's supply: off at reset, first on at boot, held on through deep sleep |
 | 1 GPIO | the GNSS's switch, on the FireBeetle's 3.3 V |
 | 1 GPIO | the PCA9548A's RESET |
 | 1 GPIO | the DS3231's 1 Hz output, between GNSS fixes |
@@ -157,18 +157,32 @@ can never drain the core:
   - One switch feeds the eight lanes.
   - The rail stays off below the same floor on its own cell.
   - Its MAX17043 sits on bus B, since both gauges are fixed at 0x36.
-- **The octagon's switch is a reset, not a saving.**
-  - **It stays on.** The SEN0290s detect the storm and wake the FireBeetle,
-    which switches the rail on. All four together draw about 0.3 mA.
-  - **On by default.** The switch is the rail's circuit with the AO3400's gate
-    pulled up, not down. The octagon comes up with the station and stays up
-    through a P4 reset.
-  - **Its one use.** The firmware cuts it for a few seconds to recover a
-    SEN0290 that stops answering, after the chip's own reset command over I2C
-    (PRESET_DEFAULT) has failed. Then it re-tunes all four.
+- **The octagon's switch is for resets, not for saving power.**
+  - **It stays on once up.** The SEN0290s detect the storm and wake the
+    FireBeetle, which switches the rail on. All four together draw about
+    0.3 mA.
+  - **Off at reset, like the others.** It is the rail's circuit, gate pulled
+    down. So every P4 reset (a watchdog, a brownout, an update, safe mode)
+    power-cycles the octagon too: one reset resets the whole station.
+  - **Held on through deep sleep.** Its gate pin is one of the P4's low-power
+    GPIOs, with hold enabled, so the octagon stays up while the FireBeetle
+    sleeps between storms. On the P4 those are GPIO0–15 (check the
+    datasheet). The four IRQs must be low-power GPIOs too, to wake it.
+  - **A SEN0290 that stops answering.** The firmware sends the chip's own reset
+    command over I2C (PRESET_DEFAULT). If that fails, it cuts the octagon for a
+    few seconds, then re-tunes all four.
   - **Never leave it off.** While it is off, the octagon's unpowered chips hold
     buses A and B down, so the DS3231 and the gauges cannot be read.
   - **The PCA9548A stays in this domain.** Its RESET line already recovers it.
+- **Every switch is off at reset, and every supply really reaches 0 V.**
+  - **The GNSS's AO3401A,** on 3.3 V, has a pull-up on its gate, so it too is
+    off while the P4 resets.
+  - **Each switched supply has a bleed resistor** to ground at the octagon end,
+    about 10 kΩ, costing about 0.4 mA while on. A cut supply then falls to 0 V
+    within about a second, and every chip on it gets a real power-on reset
+    instead of hovering half-powered on its capacitors.
+  - **Nothing feeds a dead chip:** the PCA9548A's channels are off and the
+    GNSS's UART pins are inputs whenever their power is.
 - **The GNSS runs on the FireBeetle's 3.3 V**, from cell 1, through its own
   switch in the core box, with power and signals in one 5-core cable.
   - **A switch, not a GPIO.** The switch is an AO3401A with its gate on a GPIO.
@@ -354,6 +368,7 @@ the card, the way the moisture project's `backlog` crate tests its ring.
 | Eight low-capacitance analog switches (74LVC1G66 or TS5A3166 class) | check stock | each amplifier's day and night gain |
 | Eight PTC fuses, about 200 mA hold | check stock | one per lane, in the octagon |
 | A low-quiescent 3.3 V LDO (HT7333 or ME6211 class) | check stock | the octagon's supply |
+| Three bleed resistors, about 10 kΩ | on hand | each switched supply falls to 0 V when cut |
 | A ferrite bead and about 10 µF | check stock | the GNSS's 3.3 V, filtered at the octagon |
 | A 50 cm fiberglass or plastic tube, an octagonal box, eight arms, eight small sensor boxes with windows | to make | the mast, the octagon and the arms |
 | Sheathed 24 AWG copper cable: 3, 4 and 5 cores | on hand | up the mast, and along each arm |
@@ -666,6 +681,16 @@ over Wi-Fi in seconds; updates still wait for a storm-free day.
     is kept in NVS, and the rail is switched on for the check.
   - the panel acknowledges a report.
   - the loop has run 5 minutes under the watchdog.
+- **One reset resets everything.** Every boot starts with all three supplies
+  off and brings them up in order:
+  1. the octagon: the PCA9548A comes out of reset with every channel off, the
+     SEN0290s calibrate and tune one at a time, then the SHT45;
+  2. the GNSS, if a fix is due;
+  3. the rail, if a storm is armed or `rail on` is set, with its lanes enabled
+     one at a time and each sensor checked.
+
+  A stage that fails is logged and retried, and the station runs without it.
+  The cost is a second or two of the SEN0290s' hearing at each boot.
 - **Safe mode** after three failed boots in a row: sensors off, radio and
   console on, waiting for an image.
 - **The console over Wi-Fi.** The station runs the panel's command table; its
@@ -676,7 +701,9 @@ over Wi-Fi in seconds; updates still wait for a storm-free day.
   then its own watchdog, then a cycle of the whole rail. A rail that drags
   cell 2 down is switched off and reported.
 - **The octagon.** A SEN0290 that stops answering gets its reset command over
-  I2C, then a few seconds with the octagon's supply cut, then a re-tune.
+  I2C, then a few seconds with the octagon's supply cut, then a re-tune. A
+  station that keeps misbehaving is simply rebooted: every boot is a cold start
+  for everything upstairs.
 - **Its own transmits.** Mark any AS3935 interrupt within about 10 ms of a Wi-Fi
   transmit as `own`. Measure first: one report a second for 10 minutes against a
   quiet baseline.
