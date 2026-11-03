@@ -318,7 +318,7 @@ def layout():
     figure.line([(30, 664), (970, 664)], MUTED, width=2)
     figure.text(40, 690, "the roof: keep the octagon's top below the ridge line", 12, colour=MUTED)
     figure.box(300, 528, 400, "Core box",
-               ["FireBeetle 2 and the DS3231", "cell 1 (the core), cell 2 (the rail)",
+               ["FireBeetle 2, DS3231, SEN0253", "cell 1 (the core), cell 2 (the rail)",
                 "two CN3065s, MAX17043s, NTCs", "switches: octagon, GNSS, rail"], STATION, height=130)
     figure.rect(270, 506, 460, 16, POWER, radius=2)
     figure.text(260, 518, "solar panel", 12, bold=True, anchor="end", colour=POWER[1])
@@ -327,12 +327,13 @@ def layout():
     figure.rect(mast_x - 8, mast_top, 16, mast_bottom - mast_top, PLAIN, radius=2)
     figure.line([(530, mast_bottom), (530, mast_top)], MUTED, width=1.2, arrow_end=True, arrow_start=True)
     figure.text(540, 360, "50 cm", 12, bold=True)
-    figure.text(540, 440, "a fiberglass or plastic tube;", 12)
-    figure.text(540, 457, "four sheathed cables inside", 12)
+    figure.text(540, 440, "a tube, 16 mm bore or more;", 12)
+    figure.text(540, 457, "three sheathed cables inside", 12)
     for index, y in enumerate((300, 310, 320)):
         figure.line([(mast_x - 66 + index * 4, y), (mast_x - 14 - index * 4, y)], INK, width=2.4)
-    figure.text(424, 306, "SHT45 in a", 12, anchor="end")
-    figure.text(424, 322, "radiation shield", 12, anchor="end")
+    figure.text(424, 306, "SHT45 in a radiation shield,", 12, anchor="end")
+    figure.text(424, 322, "the QMI8658C beside it,", 12, anchor="end")
+    figure.text(424, 338, "on a pigtail outside the tube", 12, anchor="end")
 
     # The octagon, with the GNSS on top and two of its eight arms.
     figure.box(390, 174, 220, "The octagon",
@@ -597,8 +598,8 @@ def power():
     switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on for storms"], POWER)
     for x in (445, 690):
         figure.line([(x, core_bus_y), (x, 330)], POWER[1], arrow_end=True)
-    loads = figure.box(340, 440, 210, "The octagon", ["SEN0290s, SHT45, PCA9548A"], STATION)
-    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["its 3.3 V feeds the GNSS"], STATION)
+    loads = figure.box(340, 440, 210, "The octagon", ["SEN0290s, SHT45, QMI8658C,", "PCA9548A, the pull-ups"], STATION)
+    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["3.3 V: GNSS, DS3231, SEN0253"], STATION)
     nodes = figure.box(870, 440, 170, "8 flash sensors", ["a PTC on each lane"], LIGHT)
     figure.line([(445, 330 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)
     figure.line([(690, 330 + boost["h"]), (690, beetle["y"])], POWER[1], arrow_end=True)

@@ -6,7 +6,7 @@
 <text x="40.0" y="690.0" font-size="12" text-anchor="start" fill="#52606d">the roof: keep the octagon's top below the ridge line</text>
 <rect x="300.0" y="528.0" width="400.0" height="130.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
 <text x="312.0" y="550.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">Core box</text>
-<text x="312.0" y="568.0" font-size="12" text-anchor="start" fill="#1f2933">FireBeetle 2 and the DS3231</text>
+<text x="312.0" y="568.0" font-size="12" text-anchor="start" fill="#1f2933">FireBeetle 2, DS3231, SEN0253</text>
 <text x="312.0" y="586.0" font-size="12" text-anchor="start" fill="#1f2933">cell 1 (the core), cell 2 (the rail)</text>
 <text x="312.0" y="604.0" font-size="12" text-anchor="start" fill="#1f2933">two CN3065s, MAX17043s, NTCs</text>
 <text x="312.0" y="622.0" font-size="12" text-anchor="start" fill="#1f2933">switches: octagon, GNSS, rail</text>
@@ -17,13 +17,14 @@
 <polygon points="530.0,262.0 525.5,272.0 534.5,272.0" fill="#52606d"/>
 <polygon points="530.0,504.0 534.5,494.0 525.5,494.0" fill="#52606d"/>
 <text x="540.0" y="360.0" font-size="12" font-weight="bold" text-anchor="start" fill="#1f2933">50 cm</text>
-<text x="540.0" y="440.0" font-size="12" text-anchor="start" fill="#1f2933">a fiberglass or plastic tube;</text>
-<text x="540.0" y="457.0" font-size="12" text-anchor="start" fill="#1f2933">four sheathed cables inside</text>
+<text x="540.0" y="440.0" font-size="12" text-anchor="start" fill="#1f2933">a tube, 16 mm bore or more;</text>
+<text x="540.0" y="457.0" font-size="12" text-anchor="start" fill="#1f2933">three sheathed cables inside</text>
 <polyline points="434.0,300.0 486.0,300.0" fill="none" stroke="#1f2933" stroke-width="2.4" stroke-linejoin="round"/>
 <polyline points="438.0,310.0 482.0,310.0" fill="none" stroke="#1f2933" stroke-width="2.4" stroke-linejoin="round"/>
 <polyline points="442.0,320.0 478.0,320.0" fill="none" stroke="#1f2933" stroke-width="2.4" stroke-linejoin="round"/>
-<text x="424.0" y="306.0" font-size="12" text-anchor="end" fill="#1f2933">SHT45 in a</text>
-<text x="424.0" y="322.0" font-size="12" text-anchor="end" fill="#1f2933">radiation shield</text>
+<text x="424.0" y="306.0" font-size="12" text-anchor="end" fill="#1f2933">SHT45 in a radiation shield,</text>
+<text x="424.0" y="322.0" font-size="12" text-anchor="end" fill="#1f2933">the QMI8658C beside it,</text>
+<text x="424.0" y="338.0" font-size="12" text-anchor="end" fill="#1f2933">on a pigtail outside the tube</text>
 <rect x="390.0" y="174.0" width="220.0" height="88.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
 <text x="402.0" y="196.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">The octagon</text>
 <text x="402.0" y="214.0" font-size="12" text-anchor="start" fill="#1f2933">4 × SEN0290 on one plate</text>
