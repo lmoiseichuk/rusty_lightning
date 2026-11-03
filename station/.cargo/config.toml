@@ -1,0 +1,20 @@
+# The station's core: a FireBeetle 2 ESP32-P4 (DFR1237), RISC-V with hard float.
+# This directory is its own Cargo project: the repo root builds the panel, an
+# ESP32-C3, and must not see these settings.
+[build]
+target = "riscv32imafc-esp-espidf"
+
+[target.riscv32imafc-esp-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32p4"
+# Pinned: the esp-idf crates track 5.5, and 6.0.0-6.0.2 broke esp_hosted (seen
+# on the coludo project's P4). One ESP-IDF install under ~/.espressif, shared.
+ESP_IDF_VERSION = "tag:v5.5.5"
+ESP_IDF_TOOLS_INSTALL_DIR = "global"
+ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }

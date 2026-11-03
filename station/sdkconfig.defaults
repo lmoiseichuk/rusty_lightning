@@ -1,0 +1,25 @@
+# FireBeetle 2 ESP32-P4 (DFR1237): ESP-IDF v5.5.5 settings.
+
+# The chip is revision v1.3 (read with esptool on 2026-11-02). From v5.5.3 ESP-IDF
+# targets v3.x by default, so v1.x has to be selected.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Rust's std main runs on the main task; Wi-Fi and the logger want room.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# The console on the USB serial/JTAG port, the USB-C the board is flashed through.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Wi-Fi through the ESP32-C6 over SDIO. The FireBeetle wires the C6 exactly as
+# Espressif's P4 Function EV board does (SDIO D0-D3 on GPIO14-17, CLK GPIO18, CMD
+# GPIO19, the C6's EN on GPIO54: DFRobot's schematic V1.0), so that preset fits.
+CONFIG_ESP_HOSTED_ENABLED=y
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
+CONFIG_ESP_WIFI_REMOTE_ENABLED=y
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
+# esp_hosted's own debug command line is not wanted here
+CONFIG_ESP_HOSTED_CLI_ENABLED=n

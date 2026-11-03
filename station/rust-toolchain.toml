@@ -1,0 +1,7 @@
+[toolchain]
+# riscv32imafc-esp-espidf (the ESP32-P4) is a tier-3 target, so std is built
+# from source with -Zbuild-std, which needs nightly and rust-src. Pinned: the
+# 2026-10-12 nightly crashes the compiler on esp-idf-svc 0.53, and 2026-10-05
+# builds it.
+channel = "nightly-2026-10-05"
+components = ["rust-src"]

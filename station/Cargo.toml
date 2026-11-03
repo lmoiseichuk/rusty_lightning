@@ -1,0 +1,42 @@
+[package]
+name = "station"
+version = "0.1.0"
+edition = "2021"
+description = "The lightning station's core firmware, on a FireBeetle 2 ESP32-P4 -- for now, bench checks"
+license = "MIT"
+
+# Its own workspace root: the repository's root manifest is the panel's package.
+[workspace]
+
+[[bin]]
+name = "wifi_check"
+path = "src/bin/wifi_check.rs"
+harness = false # no libtest on the board
+
+[[bin]]
+name = "idle"
+path = "src/bin/idle.rs"
+harness = false
+
+[dependencies]
+esp-idf-svc = "0.53"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
+
+[profile.release]
+opt-level = "s"
+debug = true # symbols for the panic backtraces; they never reach the flash
+
+[profile.dev]
+opt-level = "z" # an unoptimised std build does not fit comfortably
+
+# Wi-Fi rides the on-board ESP32-C6 over SDIO: esp_hosted on the P4, the
+# esp_wifi API on top of it through esp_wifi_remote. The pair the coludo
+# project's P4 runs (and MicroPython v1.29.0 ships).
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_wifi_remote", version = "0.15.2" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_hosted", version = "2.7.0" }
