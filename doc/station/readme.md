@@ -69,7 +69,8 @@ the screen and the log, and talks to the station over Wi-Fi.
 
 Each arm carries a 4-core cable: the switched rail, a ground, SDA and SCL. A
 short 4-core pigtail runs down from the octagon to the SHT45's shield: 3.3 V, a
-ground, and bus A's SDA and SCL.
+ground, and bus A's SDA and SCL. The mast's QMI8658C hangs on it too (see How
+hard it hit).
 - **SCL stays out of the interrupt cable.** During a storm SCL clocks without
   pause. Its edges, coupled into an IRQ line in the same jacket, would be
   interrupts no SEN0290 sent.
@@ -90,7 +91,8 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 
 | FireBeetle 2 resource | Used for |
 | --- | --- |
-| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68), QMI8658C (0x6A), later a SEN0253: its BMP280 (0x76) and its BNO055 (0x28, asleep) |
+| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68), the mast's QMI8658C (0x6A) |
+| I2C bus C, the P4's low-power I2C or a software bus | the SEN0253 alone: its BNO055 (0x28) and BMP280 (0x76). Alone because the BNO055 stretches the clock |
 | I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
 | 4 GPIOs | one IRQ per SEN0290 |
 | 1 GPIO | the switched rail: the eight lanes |
@@ -685,66 +687,80 @@ Sound).
 past a threshold set by its trimmer, with no amplitude. It also trips on wind,
 rain and doors, and on a roof the wind alone would keep it firing.
 
-### The structure: a QMI8658C
+**Where each sensor goes.**
 
-| Candidate, on hand | Noise (approx.) | Step at its finest range | Verdict |
+| Where | Board | Measures | Bus |
 | --- | --- | --- | --- |
-| QMI8658C, 5 | ~150 µg/√Hz, about 1.5 mg rms at 100 Hz | 0.06 mg at ±2 g | **the choice:** five on hand, quiet enough by a wide margin |
-| LSM6DSO32, 3 | ~80 µg/√Hz, about 1 mg rms | 0.12 mg at ±4 g, its smallest range | the quietest, but the three are kept for coludo |
-| MPU-6050, 1 | ~400 µg/√Hz, about 4 mg rms | 0.06 mg | older and noisier |
-| ADXL345, 5+ | about 3 mg rms | 3.9 mg | too coarse |
+| The core box, on its base | SEN0253: a BNO055 and a BMP280 | the house's shake, the thunder's pressure, the box's orientation | its own bus C |
+| The mast, beside the SHT45 | QMI8658C | the mast's sway in wind, its natural frequency, its own shake in thunder | bus A, on the SHT45's pigtail |
 
-A felt shake starts at roughly 5–10 mg (approx.), so the QMI8658C's 1.5 mg of
-noise still sees shakes below what anyone would feel.
-- **The bus:** I2C on bus A, at 0x6A or 0x6B by its SA0 pin. At 250 samples a
-  second of three axes it moves about 1.5 KB/s, against the bus's roughly
-  20 KB/s.
-- **Its settings:** ±2 g, at 250 samples a second, its nearest rate to 200. A
-  house's response to thunder sits well below 100 Hz.
-- **What is kept:** the peak of each 100 ms. A minute of that is 600 numbers,
-  enough to hold the window around every strike.
-- **Where it goes:** on the core box's base, where the box is fixed to the
-  roof's structure.
-  - **Not on the mast,** which sways in wind.
-  - **Not on the lid,** where the solar panel catches the wind.
-  - **The wind and rain floor:** measure it before trusting a small peak.
+### The house and the thunder: a SEN0253 in the core box
 
-**It can start indoors, long before the station.** The current panel's I2C bus
-(SDA on GPIO6, SCL on GPIO7) has the AS3935 at 0x03 and the MAX17048 at 0x36,
-so 0x6A and 0x6B are both free.
+**The shake: the BNO055's accelerometer.**
+- **How it is read:** in its raw mode, with no fusion, at ±2 g. Its steps are
+  14-bit, about 0.24 mg, with about 150 µg/√Hz of noise (approx.), as good as
+  a QMI8658C. A felt shake starts at roughly 5–10 mg (approx.).
+- **Why its own bus:** it has no FIFO, so it is polled about 250 times a
+  second, all day, and it stretches the I2C clock on every read. That is known
+  trouble on the ESP32's I2C, and on bus A it would keep the SEN0290s waiting.
+  - **Bus C** is the P4's low-power I2C controller, or a software bus: at this
+    rate either does.
+  - **Alone there,** whatever the BNO055 does touches nothing else.
+- **Where:** on the core box's base, where the box is fixed to the roof's
+  structure. Not on the lid, where the solar panel catches the wind.
+- **The wind and rain floor:** measure it before trusting a small peak.
+
+**The pressure: the BMP280.** The thunder's energy is mostly low-frequency and
+infrasound, which an electret microphone loses and a pressure sensor catches.
+Close thunder brings tens of pascals (approx.).
+- **Its settings:** normal mode, pressure oversampling x1, the IIR filter off,
+  0.5 ms standby: about 150 samples a second, free-running, with a few pascals
+  of noise. That is plenty, since nothing here needs laboratory precision.
+- **It needs a wind shield,** porous foam over a vented port in the core box,
+  or gusts swamp it.
+- **The alternative:** a SEN0516 (ICP-10111, about 1.6 Pa, approx.), if
+  distant thunder ever matters.
+
+**The box's orientation, once a minute,** from the same BNO055: an alarm if a
+storm shifts the core box.
+
+**What is kept from both:** the peak of each 100 ms. A minute of that is 600
+numbers per channel, enough to hold the window around every strike.
+
+### The mast: a QMI8658C beside the SHT45
+
+The octagon on its 50 cm mast is a sail. An accelerometer up there turns the
+worry about wind into measurements.
+- **Sway:** how far the top moves in wind, with an alarm to take the station
+  down before a big storm.
+- **The mast's natural frequency,** from the FIFO's bursts: one that drifts
+  down over the months means a loosening base.
+- **Its own shake in thunder,** set beside the base's, so a peak at the base
+  can be told from the mast swinging.
+
+How it is set up:
+- **The bus:** it goes on the SHT45's pigtail, the bus A wiring already on the
+  mast, at 0x6A or 0x6B. So it needs no new wire. Its FIFO is read in bursts,
+  so it takes little bus time.
+- **Mid-mast, not at the top:** it sways less there than the octagon does, but
+  the natural frequency and its drift read the same anywhere on the mast.
+- **Its settings:** ±4 g, for headroom in strong wind, at 250 samples a second.
+  Its noise is about 1.5 mg rms (approx.).
+- **Why it:** five are on hand.
+  - **The LSM6DSO32** is quieter, but the three are kept for coludo.
+  - **The MPU-6050** is noisier, and there is only one.
+  - **The ADXL345's** 3.9 mg steps are too coarse.
+
+### Indoors first
+
+The question that started this, whether a strike shook the house, can be asked
+long before the station exists. A spare QMI8658C goes on the current panel's I2C
+bus (SDA on GPIO6, SCL on GPIO7). The AS3935 is at 0x03 and the MAX17048 at
+0x36 there, so 0x6A and 0x6B are both free.
 - **Fix it** to a wall or the floor, not the desk: a desk's own wobble
   amplifies footsteps, not thunder.
 - **One storm** says what peak a strike you felt gives, against the ones you
   did not.
-
-### The thunder: a fast barometer
-
-The thunder's energy is mostly low-frequency and infrasound, which an electret
-microphone loses and a pressure sensor catches. Close thunder brings tens of
-pascals (approx.).
-
-| Candidate, on hand | Sensor | Noise at about 150 a second (approx.) | Verdict |
-| --- | --- | --- | --- |
-| SEN0253, many unused | Bosch BMP280, beside a BNO055 | a few pascals at its fastest | **the choice:** plenty on hand, quiet enough for close thunder |
-| SEN0516, spares | TDK ICP-10111 | about 1.6 Pa | the quieter alternative, if distant thunder matters |
-
-- **Only the BMP280 is used.** It answers at 0x76 or 0x77.
-  - **Its settings:** normal mode, pressure oversampling x1, the IIR filter
-    off, 0.5 ms standby: about 150 samples a second, free-running. The
-    FireBeetle reads the latest result at its own pace, with nothing to start.
-- **The BNO055 is put to sleep once at boot and never read again.**
-  - **Why:** it stretches the I2C clock, which is known trouble on the ESP32's
-    I2C, beside SEN0290s that must not be kept waiting. A slave stretches the
-    clock only when it is the one addressed, so a BNO055 left alone holds
-    nothing up.
-  - **The power:** its suspend mode also takes its draw from about 12 mA to
-    about 40 µA (approx.).
-  - **Its address,** 0x28 or 0x29, is free on bus A.
-- **On the roof it needs a wind shield,** porous foam over a static port, or
-  gusts swamp it. It sits in the core box with a vented port, or beside the
-  SHT45's shield.
-- **After the accelerometer:** that answers the question that started this,
-  whether the house shook. The barometer adds the thunder's own strength.
 
 ## Link and remote care
 
