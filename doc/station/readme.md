@@ -562,7 +562,7 @@ results, never raw signals.
   | Event | 80 MHz | whoever is raised for a strike, a flash or a bang |
   | Heavy | 160 MHz | only if a sensor's processing cannot keep up |
 
-  20 MHz stays available between 10 and 40.
+  20 MHz is the sentries' fallback, if 10 falls short.
 - **Climbing.** A detection raises the sentries from 10 to 80 MHz. If the event
   grows, more detections or a storm, the listeners follow from 40 to 80. An
   hour quiet steps each back down.
@@ -570,8 +570,9 @@ results, never raw signals.
   spread and every arm takes its turn at full listening.
 - **Why 80 in an event:** headroom for the onset detectors and the recordings
   while events crowd in.
-- **What each level can run is measured, not assumed:** which channels keep
-  their sample rates at 10 and 20 MHz. A sentry must at least see a flash.
+- **A sentry runs every channel at 10 MHz:** light, sound and its lane, which
+  is plenty for detecting and talking. If the measurement shows a channel cannot
+  keep its sample rate there, the sentries run at 20 MHz instead.
 - **The clock change must not move the sampling.** Clock the ADC and I2S from
   the crystal where the C3 allows, so their rates stay put when the CPU's
   changes: the moisture project learned that with its RMT capture. Where it does
