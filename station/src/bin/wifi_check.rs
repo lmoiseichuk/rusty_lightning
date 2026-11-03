@@ -10,8 +10,9 @@
 //!
 //! **It remembers each run in NVS**, because the interesting run is the one with
 //! no cable: unplug USB, power the board from a cell, come back later. Plugging
-//! USB back in restarts the board, and that boot prints what the previous run
-//! saw before starting a new one:
+//! USB back in restarts the board, and every boot prints the last eight runs,
+//! each labelled with how it started, so the cell run survives the USB boot and
+//! the console attach that follow it. For each run:
 //! - how long it ran;
 //! - how many scans worked;
 //! - the strongest signal;
@@ -31,6 +32,7 @@ use std::thread;
 use std::time::Duration;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::hal::gpio::{Output, PinDriver};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use esp_idf_svc::sys;
@@ -40,8 +42,18 @@ use esp_idf_svc::wifi::{AccessPointInfo, BlockingWifi, ClientConfiguration, Conf
 /// Seconds between scans. A scan through the C6 takes a few seconds of its own.
 const SCAN_PERIOD: Duration = Duration::from_secs(20);
 
+/// The board's user LED, on GPIO3 (DFRobot's schematic V1.0, page 1): a short
+/// blink every two seconds shows the board is running when no cable is in.
+const BLINK_EVERY: Duration = Duration::from_secs(2);
+const BLINK_ON: Duration = Duration::from_millis(80);
+
 /// How many of the strongest networks each scan logs.
 const STRONGEST_SHOWN: usize = 6;
+
+/// How many past runs the history keeps. A cell test is followed by a USB boot
+/// and then a console attach (each a restart), so the run that matters is two
+/// or three back by the time anyone reads it.
+const RUNS_KEPT: u32 = 8;
 
 /// The NVS namespace this check keeps its record in (at most 15 characters, as
 /// every NVS name is).
@@ -153,17 +165,42 @@ fn count(nvs: &mut EspNvs<NvsDefault>, key: &str) -> Result<(), EspError> {
     nvs.set_u32(key, before + 1)
 }
 
-/// Prints what the previous run saw, and every reset since the first boot.
-fn report_previous_run(nvs: &EspNvs<NvsDefault>) -> Result<(), EspError> {
+/// Files the previous run into the history, then prints the history oldest
+/// first, and every reset since the first boot.
+///
+/// Each history entry is one line of text in NVS, under `run_0` to `run_7`:
+/// a ring, where `next_run` says which slot the next entry overwrites.
+fn report_previous_runs(nvs: &mut EspNvs<NvsDefault>) -> Result<(), EspError> {
     let previous = Run::load(nvs)?;
-    log::info!(
-        "previous run: up {} s, scans {} good / {} failed, last scan {} networks, strongest {} dBm",
-        previous.up_seconds,
-        previous.scans_ok,
-        previous.scans_failed,
-        previous.networks,
-        previous.strongest
-    );
+    // The boot number and cause the previous run started with, saved at its boot.
+    let boot = nvs.get_u32("boots")?.unwrap_or(0);
+    let mut cause_buffer = [0u8; 16];
+    let started = match nvs.get_str("cause", &mut cause_buffer)? {
+        Some(text) => text.to_string(),
+        None => String::from("?"),
+    };
+    if boot > 0 {
+        let entry = format!(
+            "boot {boot} ({started}): up {} s, scans {} good / {} failed, last scan {} networks, strongest {} dBm",
+            previous.up_seconds, previous.scans_ok, previous.scans_failed, previous.networks, previous.strongest
+        );
+        let next = nvs.get_u32("next_run")?.unwrap_or(0);
+        nvs.set_str(&format!("run_{}", next % RUNS_KEPT), &entry)?;
+        nvs.set_u32("next_run", next + 1)?;
+    }
+
+    let next = nvs.get_u32("next_run")?.unwrap_or(0);
+    log::info!("the last runs, oldest first:");
+    let mut entry_buffer = [0u8; 160];
+    // Walk the ring from the oldest slot to the newest; empty slots (fewer than
+    // eight runs so far) are skipped.
+    for offset in 0..RUNS_KEPT {
+        let slot = (next + offset) % RUNS_KEPT;
+        match nvs.get_str(&format!("run_{slot}"), &mut entry_buffer)? {
+            Some(entry) => log::info!("  {entry}"),
+            None => {}
+        }
+    }
     let mut line = String::from("since the first boot:");
     for key in COUNTERS {
         let value = nvs.get_u32(key)?.unwrap_or(0);
@@ -171,6 +208,29 @@ fn report_previous_run(nvs: &EspNvs<NvsDefault>) -> Result<(), EspError> {
     }
     log::info!("{line}");
     Ok(())
+}
+
+/// Waits out the scan period, blinking the user LED so the board can be seen
+/// running on a cell: one short blink every two seconds, or three quick ones
+/// first when the scan failed. A failed LED write is ignored: the LED is only
+/// a sign of life, and the scans must not stop over it.
+fn wait_blinking(led: &mut PinDriver<'_, Output>, scan_failed: bool) {
+    if scan_failed {
+        for _ in 0..3 {
+            let _ = led.set_high();
+            thread::sleep(BLINK_ON);
+            let _ = led.set_low();
+            thread::sleep(BLINK_ON);
+        }
+    }
+    // Whole blink periods that fit in the scan period: ten at 20 s and 2 s.
+    let periods = SCAN_PERIOD.as_millis() / BLINK_EVERY.as_millis();
+    for _ in 0..periods {
+        let _ = led.set_high();
+        thread::sleep(BLINK_ON);
+        let _ = led.set_low();
+        thread::sleep(BLINK_EVERY - BLINK_ON);
+    }
 }
 
 /// Logs the strongest networks of one scan, and returns the strongest signal.
@@ -203,12 +263,18 @@ fn main() -> Result<(), EspError> {
     let mut nvs = EspNvs::new(nvs_partition.clone(), NAMESPACE, true)?;
 
     let cause = Cause::of_this_boot();
-    report_previous_run(&nvs)?;
+    report_previous_runs(&mut nvs)?;
     count(&mut nvs, "boots")?;
     count(&mut nvs, cause.counter_key())?;
+    // Saved now, so the next boot can label this run with how it started.
+    nvs.set_str("cause", cause.counter_key())?;
     let mut run = Run::new();
     run.save(&mut nvs)?;
     log::info!("this boot: {}", cause.counter_key());
+
+    // The LED pin is taken out of `peripherals` before the modem is: Rust lets
+    // the fields of a struct be moved out one at a time.
+    let mut led = PinDriver::output(peripherals.pins.gpio3)?;
 
     // Wi-Fi through the C6. `EspWifi::new` brings esp_hosted's SDIO link up and
     // asks the C6 for its radio; a C6 without esp_hosted's firmware fails here,
@@ -223,6 +289,7 @@ fn main() -> Result<(), EspError> {
     log::info!("wifi: started through the C6");
 
     loop {
+        let mut scan_failed = false;
         match wifi.scan() {
             Ok(mut found) => {
                 let strongest = log_scan(&mut found);
@@ -235,6 +302,7 @@ fn main() -> Result<(), EspError> {
                 }
             }
             Err(error) => {
+                scan_failed = true;
                 run.scans_failed += 1;
                 log::warn!("scan failed: {error}");
             }
@@ -244,6 +312,6 @@ fn main() -> Result<(), EspError> {
         if let Err(error) = run.save(&mut nvs) {
             log::warn!("record not saved: {error}");
         }
-        thread::sleep(SCAN_PERIOD);
+        wait_blinking(&mut led, scan_failed);
     }
 }
