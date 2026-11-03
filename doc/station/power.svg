@@ -53,13 +53,13 @@
 <text x="352.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">in the octagon, behind</text>
 <text x="352.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">a switch: off at reset</text>
 <rect x="580.0" y="330.0" width="220.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
-<text x="592.0" y="352.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">5 V boost 1</text>
+<text x="592.0" y="352.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">5 V boost</text>
 <text x="592.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">one of two on hand</text>
 <text x="592.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">the quieter at light load</text>
 <rect x="870.0" y="330.0" width="170.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="882.0" y="352.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">Switched rail</text>
-<text x="882.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">switch, then boost 2</text>
-<text x="882.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">5 V, on for storms</text>
+<text x="882.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">AO3401A + AO3400</text>
+<text x="882.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">on for storms</text>
 <polyline points="445.0,300.0 445.0,330.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="445.0,330.0 449.5,320.0 440.5,320.0" fill="#c05621"/>
 <polyline points="690.0,300.0 690.0,330.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
@@ -72,7 +72,7 @@
 <text x="592.0" y="480.0" font-size="12" text-anchor="start" fill="#1f2933">5 V only; its 3.3 V: the GNSS</text>
 <rect x="870.0" y="440.0" width="170.0" height="52.0" rx="8" fill="#fff6d6" stroke="#b7791f" stroke-width="1.6"/>
 <text x="882.0" y="462.0" font-size="14" font-weight="bold" text-anchor="start" fill="#b7791f">8 flash sensors</text>
-<text x="882.0" y="480.0" font-size="12" text-anchor="start" fill="#1f2933">5 V; a PTC per lane</text>
+<text x="882.0" y="480.0" font-size="12" text-anchor="start" fill="#1f2933">a PTC on each lane</text>
 <polyline points="445.0,400.0 445.0,440.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="445.0,440.0 449.5,430.0 440.5,430.0" fill="#c05621"/>
 <polyline points="690.0,400.0 690.0,440.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
