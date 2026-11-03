@@ -90,7 +90,7 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 
 | FireBeetle 2 resource | Used for |
 | --- | --- |
-| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68), QMI8658C (0x6A), later an ICP-10111 (0x63) |
+| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68), QMI8658C (0x6A), later a SEN0253: its BMP280 (0x76) and its BNO055 (0x28, asleep) |
 | I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
 | 4 GPIOs | one IRQ per SEN0290 |
 | 1 GPIO | the switched rail: the eight lanes |
@@ -725,18 +725,21 @@ pascals (approx.).
 
 | Candidate, on hand | Sensor | Noise at about 150 a second (approx.) | Verdict |
 | --- | --- | --- | --- |
-| SEN0516, spares | TDK ICP-10111 | about 1.6 Pa | **the choice** |
-| SEN0253, many unused | Bosch BMP280, beside a BNO055 | a few pascals at its fastest | the fallback; keep it off the SEN0290s' bus |
+| SEN0253, many unused | Bosch BMP280, beside a BNO055 | a few pascals at its fastest | **the choice:** plenty on hand, quiet enough for close thunder |
+| SEN0516, spares | TDK ICP-10111 | about 1.6 Pa | the quieter alternative, if distant thunder matters |
 
-- **The ICP-10111:** its normal mode converts in about 6 ms, at about 1.6 Pa of
-  noise (approx.).
-  - **No FIFO or free-running mode:** the FireBeetle starts every conversion
-    and reads it. At 100–150 a second that is a few per cent of bus A.
-  - **Its address,** 0x63, is free there.
-- **The SEN0253's catch is its BNO055,** which stretches the I2C clock: known
-  trouble on the ESP32's I2C, beside SEN0290s that must not be kept waiting.
-  If it is ever used, its BMP280 answers at 0x76 or 0x77 and the BNO055 at
-  0x28 or 0x29.
+- **Only the BMP280 is used.** It answers at 0x76 or 0x77.
+  - **Its settings:** normal mode, pressure oversampling x1, the IIR filter
+    off, 0.5 ms standby: about 150 samples a second, free-running. The
+    FireBeetle reads the latest result at its own pace, with nothing to start.
+- **The BNO055 is put to sleep once at boot and never read again.**
+  - **Why:** it stretches the I2C clock, which is known trouble on the ESP32's
+    I2C, beside SEN0290s that must not be kept waiting. A slave stretches the
+    clock only when it is the one addressed, so a BNO055 left alone holds
+    nothing up.
+  - **The power:** its suspend mode also takes its draw from about 12 mA to
+    about 40 µA (approx.).
+  - **Its address,** 0x28 or 0x29, is free on bus A.
 - **On the roof it needs a wind shield,** porous foam over a static port, or
   gusts swamp it. It sits in the core box with a vented port, or beside the
   SHT45's shield.
