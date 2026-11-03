@@ -92,9 +92,9 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 | --- | --- |
 | I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68) |
 | I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
-| 4 LP GPIOs | one IRQ per SEN0290; they wake the P4 from deep sleep |
+| 4 GPIOs | one IRQ per SEN0290 |
 | 1 GPIO | the switched rail: the eight lanes |
-| 1 LP GPIO, held | the octagon's supply: off at reset, first on at boot, held on through deep sleep |
+| 1 GPIO | the octagon's supply: off at reset, first on at boot |
 | 1 GPIO | the GNSS's switch, on the FireBeetle's 3.3 V |
 | 1 GPIO | the PCA9548A's RESET |
 | 1 GPIO | the DS3231's 1 Hz output, between GNSS fixes |
@@ -158,16 +158,12 @@ can never drain the core:
   - The rail stays off below the same floor on its own cell.
   - Its MAX17043 sits on bus B, since both gauges are fixed at 0x36.
 - **The octagon's switch is for resets, not for saving power.**
-  - **It stays on once up.** The SEN0290s detect the storm and wake the
+  - **It stays on once up.** The SEN0290s detect the storm and tell the
     FireBeetle, which switches the rail on. All four together draw about
     0.3 mA.
   - **Off at reset, like the others.** It is the rail's circuit, gate pulled
     down. So every P4 reset (a watchdog, a brownout, an update, safe mode)
     power-cycles the octagon too: one reset resets the whole station.
-  - **Held on through deep sleep.** Its gate pin is one of the P4's low-power
-    GPIOs, with hold enabled, so the octagon stays up while the FireBeetle
-    sleeps between storms. On the P4 those are GPIO0–15 (check the
-    datasheet). The four IRQs must be low-power GPIOs too, to wake it.
   - **A SEN0290 that stops answering.** The firmware sends the chip's own reset
     command over I2C (PRESET_DEFAULT). If that fails, it cuts the octagon for a
     few seconds, then re-tunes all four.
@@ -212,8 +208,9 @@ around each:
   SS24 diode, the other on one marked A17v5u with an SS12. DFRobot gives the
   FireBeetle's Wi-Fi peaks as 1050 mA at 5 V, which they handle; keep bulk
   capacitance at the FireBeetle's input.
-- **Light load is the risk.** Between storms the FireBeetle sleeps at about
-  31.5 mA at 5 V, a light load on which most small boosts stop switching
+- **Light load is the risk.** Between storms the FireBeetle idles at tens of
+  milliamps at 5 V (DFRobot: 80 mA; less once its clock is lowered), a light
+  load for a 2 A module. On a light load most small boosts stop switching
   steadily and switch in bursts, and bursts can land in the AS3935's band.
   - The MT3608, marked B628, is known to do this.
   - A forced-PWM part at 1 MHz or more avoids it.
@@ -238,8 +235,7 @@ around each:
 
 | Load | From the cell (mA) | Duty | Energy (Wh/day) |
 | --- | --- | --- | --- |
-| FireBeetle 2 in deep sleep (DFRobot: 31.5 mA at 5 V) | ~50 | between storms | 4.4 |
-| FireBeetle 2 awake, Wi-Fi off (DFRobot: 80 mA at 5 V) | ~125 | storm hours | 0.47 per hour |
+| FireBeetle 2 awake, Wi-Fi off (DFRobot: 80 mA at 5 V) | ~125 | 100 % | 11.3 |
 | Wi-Fi reports (DFRobot: 80 mA average, 1050 mA peak, at 5 V) | | seconds per report | measure |
 | 4 × SEN0290, power LEDs removed | 0.28 | 100 % | 0.02 |
 | GNSS, from the FireBeetle's 3.3 V: storms, and a few minutes a day | ~30 | storm hours | 0.11 per hour |
@@ -261,21 +257,35 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
   so phase 2 measures this station's panel.
 
 **The station's budget:**
-- **Between storms** cell 1 carries about 4.5–5 Wh a day, almost all of it the
-  FireBeetle's deep sleep. Each dull day costs it about 4 Wh, so it rides out
-  about 4 of them, fewer counting the floor.
-- **Cell 2 rests between storms.**
-- **A storm hour** costs cell 1 about 0.6 Wh (the FireBeetle awake and the
-  GNSS) and cell 2 about 0.5–0.65 Wh (the ring). Cell 2's 18 Wh is about 30
-  storm hours.
-- **The FireBeetle cannot idle awake.** DFRobot's own figures rule it out: 80 mA
-  at 5 V is about 11 Wh a day from the cell. It has to deep-sleep between storms
-  and wake on an AS3935 interrupt.
-- **Option B, the fallback core,** takes over if even deep sleep proves too
-  much: an ESP32-C6-N16 board (nanoESP32-C6, ESP32-C6-WROOM-1, 30 pins, WROOM
-  antenna). It is its own radio and idles far lower, but has no FPU and runs at
-  160 MHz. That is enough for consolidating results, since the flash sensors do
-  their own processing.
+- **The rule: no trips to the roof.** Anything whose failure would need a visit
+  stays off the roof. Deep sleep is out for that reason: waking from it has not
+  proved reliable on these boards. So the core stays awake, and the budget
+  carries real margin.
+- **Cell 1 carries the core awake.** At DFRobot's figure that is about
+  11.5–12 Wh a day, nearly all of it the FireBeetle. A sunny day covers it with
+  little to spare, and each dull day costs about 11 Wh. So the 18 Wh cell rides
+  out about a day and a half: too thin.
+- **Cell 2 rests between storms.** A storm hour costs cell 2 about 0.5–0.65 Wh
+  (the ring), so its 18 Wh is about 30 storm hours. A storm hour costs cell 1
+  about 0.1 Wh more, for the GNSS.
+
+**So the core needs one of three things, decided on the bench:**
+1. **A lower idle current.** DFRobot's 80 mA probably includes the C6 idling and
+   the P4 at full clock. Lower the P4's clock (light sleep off). Hold the C6 in
+   reset between reports, if ESP-Hosted re-initialises it cleanly each time.
+   Then measure.
+2. **A bigger cell 1 and panel.** Two 5000 mAh cells in parallel for cell 1,
+   about 37 Wh, ride out about 3 dull days. A panel of about 10 W refills that
+   in a sunny day.
+3. **Option B, the other core:** an ESP32-C6-N16 board (nanoESP32-C6,
+   ESP32-C6-WROOM-1, 30 pins, WROOM antenna).
+   - **Its cost:** awake it idles at 14–25 mA (datasheet, 80 MHz, chip only),
+     about 2 Wh a day. The 5 W panel and the 18 Wh cell then ride out about
+     7 dull days.
+   - **Its own radio,** with no ESP-Hosted between the core and Wi-Fi.
+   - **What it lacks:** the P4's FPU and speed; it runs at 160 MHz. That is
+     enough for consolidating results, since the flash sensors do their own
+     processing.
 
 **The rail on all day** would take 13–16 Wh, more than cell 2 and its share of
 the panel can carry. So it is switched on for storms only.
@@ -398,7 +408,7 @@ marked confirmed when two or more agree within a few milliseconds. A USB plug-in
 or a neighbour's hammer reaches all four at once, so votes catch only local
 faults; they do not replace the satellite check.
 
-**They arm the rail.** Any board's strike wakes the FireBeetle, which switches
+**They arm the rail.** Any board's strike tells the FireBeetle, which switches
 the flash sensors (below) and the GNSS on. The boards hear storms out to about 40 km: they miss
 single flashes, not whole storms.
 
@@ -750,7 +760,7 @@ ground network such as Blitzortung, or ears with times noted.
 | --- | --- | --- |
 | 0. Roof survey | a C3 with one SEN0290 on a cell at the roof spot for 30 minutes; Wi-Fi from the roof spot to the panel | under 0.1 disturbers a second, 30 times under the 3.1 measured indoors on the cell; the link delivers every frame |
 | 1. Does it hear outside | the FireBeetle 2 with one SEN0290, the DS3231, the card and the cell; reports over Wi-Fi; the FireBeetle alone beside one SEN0290, idling | one storm with at least 50 GLM flashes within 20 km: at least 50 % detected (indoors: a tenth at best), unmatched strikes at most 20 % of detections |
-| 2. Self-powered on the roof | solar panel, two CN3065s, two cells and MAX17043s, 5 V boost, SHT45, the rail switch, the ATGM336H on its own switch; deep sleep between storms; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the boost running; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero on each cell over 7 days with 2 dull ones; each cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption |
+| 2. Self-powered on the roof | solar panel, two CN3065s, two cells and MAX17043s, 5 V boost, SHT45, the rail switch, the ATGM336H on its own switch; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the boost running; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero on each cell over 7 days with 2 dull ones; each cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption |
 | 3. Four receivers | three more SEN0290s, rods at 45° steps | misses spread evenly across bearings; the energy-ratio bearing's error against GLM reported |
 | 4. One flash sensor | a C3 with a BPW34 and its op-amp, a TEMT6000, a MAX4466 and an MS3625 on one lane of the switched rail; time marks; OTA over I2C; storm arming | time-mark error measured; at night at least 50 % of GLM flashes within 20 km seen by light, under 1 false trigger an hour; thunder onsets for at least 50 % of strikes under 10 km; the rail up within a second of a strike; the disturber rate with the ring polling against idle, and at 100 against 200 kHz; a lane's rise time on a scope |
 | 5. Full ring | the other seven sensors, calibrated with a strobe | night bearings within ±20° of GLM |
@@ -759,8 +769,9 @@ ground network such as Blitzortung, or ears with times noted.
 storm checks wait for the next one. What needs no storm fits the dry months
 before it:
 - the roof survey (phase 0 measures disturbers and the link, not strikes);
-- the FireBeetle's deep-sleep and idle current against DFRobot's 31.5 and 80 mA,
-  and the SD card's;
+- the FireBeetle's idle current awake against DFRobot's 80 mA: at full clock, at
+  a lowered clock, and with the C6 held in reset between reports; the SD
+  card's;
 - a C3's current at 40, 80 and 160 MHz with four ADC channels and I2S running;
 - ESP-NOW through ESP-Hosted;
 - the two boost modules' noise against one SEN0290, at the FireBeetle's sleep and idle loads;
@@ -772,9 +783,8 @@ before it:
 
 ## Open questions
 
-- [ ] **The FireBeetle's sleep.** Can it deep-sleep between storms at about
-  DFRobot's 31.5 mA (at 5 V), and wake on an AS3935 interrupt quickly enough to
-  read the strike? If not, option B.
+- [ ] **The core.** How low does the FireBeetle idle awake? Is the answer a
+  lower idle current, a bigger cell 1 and panel, or option B?
 - [ ] **No boost?** Could the cell feed the FireBeetle's 5 V input directly,
   with its own buck running flat out from 3.0–4.2 V? Then the boost would go.
 - [ ] **A C3 awake.** The datasheet gives only 160 and 80 MHz, chip only:
