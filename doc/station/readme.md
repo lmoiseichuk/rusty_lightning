@@ -240,7 +240,7 @@ around each:
 
 | Load | From the cell (mA) | Duty | Energy (Wh/day) |
 | --- | --- | --- | --- |
-| FireBeetle 2 awake, Wi-Fi off (DFRobot: 80 mA at 5 V) | ~110 | 100 % | ~10 |
+| FireBeetle 2 awake, Wi-Fi up and scanning every 20 s, with the IO shield (measured 2026-11-02: 0.26–0.45 W at 5 V, 0.28 W on average) | ~75 | 100 % | ~6.7 |
 | Wi-Fi reports (DFRobot: 80 mA average, 1050 mA peak, at 5 V) | | seconds per report | measure |
 | 4 × SEN0290, power LEDs removed | 0.28 | 100 % | 0.02 |
 | GNSS, from the FireBeetle's 3.3 V: storms, and a few minutes a day | ~30 | storm hours | 0.11 per hour |
@@ -266,10 +266,13 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
   stays off the roof. Deep sleep is out for that reason: waking from it has not
   proved reliable on these boards. So the core stays awake, and the budget
   carries real margin.
-- **Cell 1 carries the core awake.** At DFRobot's figure that is about
-  10 Wh a day, nearly all of it the FireBeetle. A sunny day covers it with
-  little to spare, and each dull day costs about 9 Wh. So the 18 Wh cell rides
-  out about two days: too thin.
+- **Cell 1 carries the core awake.** Measured on the bench, the FireBeetle
+  with the IO shield draws 0.26 W between Wi-Fi scans and up to 0.45 W during
+  them. That is about 6.7 Wh a day, nearly all of cell 1's load, and better
+  than DFRobot's idle figure (80 mA at 5 V, about 10 Wh). A sunny day covers it
+  with about 10 Wh to spare. Each dull day costs about 5.7 Wh, so the 18 Wh cell
+  rides out about three of them. The P4 was at 360 MHz and the C6 always on;
+  the savings below have not been tried yet.
 - **Cell 2 rests between storms.** A storm hour costs cell 2 about 0.5–0.65 Wh
   (the ring), so its 18 Wh is about 30 storm hours. A storm hour costs cell 1
   about 0.1 Wh more, for the GNSS.
@@ -774,7 +777,7 @@ ground network such as Blitzortung, or ears with times noted.
 storm checks wait for the next one. What needs no storm fits the dry months
 before it:
 - the roof survey (phase 0 measures disturbers and the link, not strikes);
-- the FireBeetle's idle current awake against DFRobot's 80 mA: at full clock, at
+- the FireBeetle's power awake: 0.26–0.45 W measured with Wi-Fi up at full clock; still to measure at
   a lowered clock, and with the C6 held in reset between reports; the SD
   card's;
 - a C3's current at 40, 80 and 160 MHz with four ADC channels and I2S running;
