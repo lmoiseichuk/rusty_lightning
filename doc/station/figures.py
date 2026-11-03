@@ -271,7 +271,7 @@ def overview():
             "cell 1, its own MAX17043: the core",
             "cell 2, its own MAX17043: the ring",
             "3.3 V regulator in the octagon",
-            "5 V boost, chosen by its noise: the FireBeetle",
+            "cell 1 straight into the FireBeetle's VCC",
         ],
         POWER,
     )
@@ -299,7 +299,7 @@ def overview():
     figure.line([(530, time["y"]), (530, core_bottom)], TIME[1], arrow_end=True)
     figure.text(538, 375, "UART + PPS, I2C A", 12, colour=TIME[1])
     figure.line([(720, power["y"]), (720, core_bottom)], POWER[1], arrow_end=True)
-    figure.text(728, 375, "5 V", 12, colour=POWER[1])
+    figure.text(728, 375, "cell 1", 12, colour=POWER[1])
     figure.line([(910, power["y"]), (910, ring["y"] + ring["h"])], POWER[1], arrow_end=True)
     figure.text(918, 385, "switched", 12, colour=POWER[1])
     return figure.save()
@@ -318,7 +318,7 @@ def layout():
     figure.line([(30, 664), (970, 664)], MUTED, width=2)
     figure.text(40, 690, "the roof: keep the octagon's top below the ridge line", 12, colour=MUTED)
     figure.box(300, 528, 400, "Core box",
-               ["FireBeetle 2, DS3231, the 5 V boost", "cell 1 (the core), cell 2 (the rail)",
+               ["FireBeetle 2 and the DS3231", "cell 1 (the core), cell 2 (the rail)",
                 "two CN3065s, MAX17043s, NTCs", "switches: octagon, GNSS, rail"], STATION, height=130)
     figure.rect(270, 506, 460, 16, POWER, radius=2)
     figure.text(260, 518, "solar panel", 12, bold=True, anchor="end", colour=POWER[1])
@@ -356,7 +356,7 @@ def layout():
     figure.text(40, 168, "window ~20° up", 12, colour=LIGHT[1])
 
     figure.box(715, 330, 270, "Why this way",
-               ["boost, FireBeetle: 50 cm from the plate",
+               ["the FireBeetle: 50 cm from the plate",
                 f"near field ∝ 1/r³: {quieter_db:.0f} dB under 10 cm",
                 "the panel shades the cells",
                 "no wire leaves the station"],
@@ -564,7 +564,7 @@ def flash_sensor():
 
 def power():
     figure = Figure("power", 1060, 540)
-    figure.text(20, 30, "Power: one panel, two cells -- one for the core, one for the switched rail", 16, bold=True)
+    figure.text(20, 30, "Power: one panel, two cells, and no switching converter of its own", 16, bold=True)
 
     solar = figure.box(20, 115, 150, "Solar panel", ["5–6 V, about 5 W", "on the core box"], POWER, height=70)
     rows = []
@@ -593,12 +593,12 @@ def power():
     figure.line([core_cell["bottom"], (core_cell["bottom"][0], core_bus_y), (445, core_bus_y)], POWER[1], width=2.4)
     figure.line([rows[0][1]["right"], (955, 95), (955, 330)], POWER[1], width=2.4, arrow_end=True)
     regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, behind", "a switch: off at reset"], POWER)
-    boost = figure.box(580, 330, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
+    boost = figure.box(580, 330, 220, "Straight from cell 1", ["into the FireBeetle's VCC", "a 5 V boost in reserve"], POWER)
     switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on for storms"], POWER)
     for x in (445, 690):
         figure.line([(x, core_bus_y), (x, 330)], POWER[1], arrow_end=True)
     loads = figure.box(340, 440, 210, "The octagon", ["SEN0290s, SHT45, PCA9548A"], STATION)
-    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["5 V only; its 3.3 V: the GNSS"], STATION)
+    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["its 3.3 V feeds the GNSS"], STATION)
     nodes = figure.box(870, 440, 170, "8 flash sensors", ["a PTC on each lane"], LIGHT)
     figure.line([(445, 330 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)
     figure.line([(690, 330 + boost["h"]), (690, beetle["y"])], POWER[1], arrow_end=True)

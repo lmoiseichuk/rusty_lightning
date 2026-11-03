@@ -42,7 +42,7 @@
 <text x="602.0" y="463.0" font-size="12" text-anchor="start" fill="#1f2933">cell 1, its own MAX17043: the core</text>
 <text x="602.0" y="481.0" font-size="12" text-anchor="start" fill="#1f2933">cell 2, its own MAX17043: the ring</text>
 <text x="602.0" y="499.0" font-size="12" text-anchor="start" fill="#1f2933">3.3 V regulator in the octagon</text>
-<text x="602.0" y="517.0" font-size="12" text-anchor="start" fill="#1f2933">5 V boost, chosen by its noise: the FireBeetle</text>
+<text x="602.0" y="517.0" font-size="12" text-anchor="start" fill="#1f2933">cell 1 straight into the FireBeetle's VCC</text>
 <polyline points="630.0,178.0 630.0,245.0" fill="none" stroke="#2f6fae" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="630.0,245.0 634.5,235.0 625.5,235.0" fill="#2f6fae"/>
 <text x="640.0" y="214.0" font-size="12" text-anchor="start" fill="#2f6fae">up the mast: I2C A and B, 4 IRQs</text>
@@ -62,7 +62,7 @@
 <text x="538.0" y="375.0" font-size="12" text-anchor="start" fill="#2c7a7b">UART + PPS, I2C A</text>
 <polyline points="720.0,405.0 720.0,333.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="720.0,333.0 715.5,343.0 724.5,343.0" fill="#c05621"/>
-<text x="728.0" y="375.0" font-size="12" text-anchor="start" fill="#c05621">5 V</text>
+<text x="728.0" y="375.0" font-size="12" text-anchor="start" fill="#c05621">cell 1</text>
 <polyline points="910.0,405.0 910.0,328.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="910.0,328.0 905.5,338.0 914.5,338.0" fill="#c05621"/>
 <text x="918.0" y="385.0" font-size="12" text-anchor="start" fill="#c05621">switched</text>

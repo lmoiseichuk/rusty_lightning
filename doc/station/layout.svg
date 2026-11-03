@@ -6,7 +6,7 @@
 <text x="40.0" y="690.0" font-size="12" text-anchor="start" fill="#52606d">the roof: keep the octagon's top below the ridge line</text>
 <rect x="300.0" y="528.0" width="400.0" height="130.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
 <text x="312.0" y="550.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">Core box</text>
-<text x="312.0" y="568.0" font-size="12" text-anchor="start" fill="#1f2933">FireBeetle 2, DS3231, the 5 V boost</text>
+<text x="312.0" y="568.0" font-size="12" text-anchor="start" fill="#1f2933">FireBeetle 2 and the DS3231</text>
 <text x="312.0" y="586.0" font-size="12" text-anchor="start" fill="#1f2933">cell 1 (the core), cell 2 (the rail)</text>
 <text x="312.0" y="604.0" font-size="12" text-anchor="start" fill="#1f2933">two CN3065s, MAX17043s, NTCs</text>
 <text x="312.0" y="622.0" font-size="12" text-anchor="start" fill="#1f2933">switches: octagon, GNSS, rail</text>
@@ -46,7 +46,7 @@
 <text x="40.0" y="168.0" font-size="12" text-anchor="start" fill="#b7791f">window ~20° up</text>
 <rect x="715.0" y="330.0" width="270.0" height="106.0" rx="8" fill="#ffffff" stroke="#7b8794" stroke-width="1.6"/>
 <text x="727.0" y="352.0" font-size="14" font-weight="bold" text-anchor="start" fill="#7b8794">Why this way</text>
-<text x="727.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">boost, FireBeetle: 50 cm from the plate</text>
+<text x="727.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">the FireBeetle: 50 cm from the plate</text>
 <text x="727.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">near field ∝ 1/r³: 42 dB under 10 cm</text>
 <text x="727.0" y="406.0" font-size="12" text-anchor="start" fill="#1f2933">the panel shades the cells</text>
 <text x="727.0" y="424.0" font-size="12" text-anchor="start" fill="#1f2933">no wire leaves the station</text>

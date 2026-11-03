@@ -38,9 +38,9 @@ the screen and the log, and talks to the station over Wi-Fi.
 ![The station from the side](layout.svg)
 
 **The layout.**
-- **The core box** sits on the roof. It holds the FireBeetle, the DS3231, the
-  boost, both cells with their chargers, gauges and NTCs, and three switches:
-  the octagon's, the GNSS's and the rail's. The solar panel on its lid shades the cells.
+- **The core box** sits on the roof. It holds the FireBeetle, the DS3231, both
+  cells with their chargers, gauges and NTCs, and three switches: the octagon's,
+  the GNSS's and the rail's. The solar panel on its lid shades the cells.
 - **A 50 cm mast**, a fiberglass or plastic tube, rises from the core box. Four
   sheathed cables run inside it, in about 12 mm of bore. The SHT45 sits on its side in a radiation
   shield, out of any box, where it reads the air and not a sun-baked lid.
@@ -49,7 +49,7 @@ the screen and the log, and talks to the station over Wi-Fi.
   each side, carry the flash sensors at their ends, each with its lane cable
   along the arm. Each sensor's window looks out and about 20° up: a flash 7 km
   up in a cloud sits 10° above the horizon at 40 km and 35° at 10 km.
-- **Why this way.** The boost and the FireBeetle's own regulators end up 50 cm
+- **Why this way.** The FireBeetle's own regulators end up 50 cm
   from the SEN0290s instead of beside them. A magnetic near field falls as the
   cube of the distance, so they are about 42 dB quieter than at 10 cm (approx.).
   Phase 0 or 1 still measures it.
@@ -142,14 +142,15 @@ One 5–6 V panel, on the core box's lid, feeds two CN3065s. Each charges its ow
 anything converts its voltage. Two cells rather than one bigger one, so the ring
 can never drain the core:
 - **Cell 1, the core.**
-  - It feeds the FireBeetle through the 5 V boost; the FireBeetle takes 5 V
-    only.
+  - It feeds the FireBeetle straight into its VCC. DFRobot rates that input at
+    5 V, but the board ran on a cell wired straight in, tried on the bench. A
+    5 V boost is held in reserve in case it misbehaves on a low cell.
   - It feeds the octagon and the SHT45 below it, through a switch in the core
     box and a 3.3 V linear regulator up there: the SEN0290s, the SHT45 and the
     PCA9548A. The regulator must idle in microamps (HT7333 or ME6211 class); an
     AMS1117-class part idles near 5 mA, about 0.44 Wh a day.
   - Below about 3.4 V the octagon's 3.3 V follows cell 1 down (approx.: the
-    regulator's dropout), and the boost draws its most current from a low cell.
+    regulator's dropout), and the FireBeetle's own regulator runs out of room.
     So cell 1 has a floor, about 3.5 V (approx.), read from its gauge: below it
     nothing is written to the card.
   - Its MAX17043 sits on bus A.
@@ -202,7 +203,12 @@ around each:
   of about 6.5 V (approx.; check the datasheet). Pick a panel whose cold
   open-circuit voltage stays under it, or clamp it.
 
-**The boost is the switcher the design adds.**
+**The boosts: on hand, held in reserve.**
+- **First without.** Both cells feed the boards straight: the FireBeetle's VCC
+  and the sensors' 5 V pins. The station then adds no switching converter of
+  its own; only the FireBeetle's on-board regulators switch. A 5 V boost goes in
+  only if a board misbehaves on the raw cell, and the rest of this section is
+  for that case.
 - **The modules on hand.** Two boost modules already carry a P4, its sensors and
   a second board on another project. One is built on a chip marked 8628 with an
   SS24 diode, the other on one marked A17v5u with an SS12. DFRobot gives the
@@ -224,8 +230,7 @@ around each:
   2. filter its output;
   3. hold it out of bursting with a minimum load (20 mA at 5 V costs about
      2.4 Wh a day);
-  4. drop the boost altogether, if the cell can feed the FireBeetle's 5 V input
-     directly.
+  4. go back to the raw cell.
 - **Not a 150 kHz module:** its third harmonic sits at 450 kHz, a cheap
   oscillator drifts, and it skips pulses at light load.
 - **The FireBeetle's own regulators.** It carries buck converters of its own (to
@@ -235,15 +240,15 @@ around each:
 
 | Load | From the cell (mA) | Duty | Energy (Wh/day) |
 | --- | --- | --- | --- |
-| FireBeetle 2 awake, Wi-Fi off (DFRobot: 80 mA at 5 V) | ~125 | 100 % | 11.3 |
+| FireBeetle 2 awake, Wi-Fi off (DFRobot: 80 mA at 5 V) | ~110 | 100 % | ~10 |
 | Wi-Fi reports (DFRobot: 80 mA average, 1050 mA peak, at 5 V) | | seconds per report | measure |
 | 4 × SEN0290, power LEDs removed | 0.28 | 100 % | 0.02 |
 | GNSS, from the FireBeetle's 3.3 V: storms, and a few minutes a day | ~30 | storm hours | 0.11 per hour |
 | The SD card, idle, behind the FireBeetle's regulators | measure | 100 % | about 0.1 per mA |
 | Flash-sensor ring, on the switched rail | 8 × 18–22 (datasheet, 80 MHz, chip only) | storm hours | 0.5–0.65 per hour |
 
-The FireBeetle's rows price DFRobot's figures at 5 V through a boost of about
-85 %.
+The FireBeetle's rows take DFRobot's 5 V figures as the same power, drawn
+straight from the cell (approx.).
 
 A 5 W panel puts an estimated 17 Wh into the two cells together on a sunny day,
 and about 1 Wh on a dull one (approx.). Each charger takes up to its set
@@ -262,9 +267,9 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
   proved reliable on these boards. So the core stays awake, and the budget
   carries real margin.
 - **Cell 1 carries the core awake.** At DFRobot's figure that is about
-  11.5–12 Wh a day, nearly all of it the FireBeetle. A sunny day covers it with
-  little to spare, and each dull day costs about 11 Wh. So the 18 Wh cell rides
-  out about a day and a half: too thin.
+  10 Wh a day, nearly all of it the FireBeetle. A sunny day covers it with
+  little to spare, and each dull day costs about 9 Wh. So the 18 Wh cell rides
+  out about two days: too thin.
 - **Cell 2 rests between storms.** A storm hour costs cell 2 about 0.5–0.65 Wh
   (the ring), so its 18 Wh is about 30 storm hours. A storm hour costs cell 1
   about 0.1 Wh more, for the GNSS.
@@ -275,7 +280,7 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
    reset between reports, if ESP-Hosted re-initialises it cleanly each time.
    Then measure.
 2. **A bigger cell 1 and panel.** Two 5000 mAh cells in parallel for cell 1,
-   about 37 Wh, ride out about 3 dull days. A panel of about 10 W refills that
+   about 37 Wh, ride out about 4 dull days. A panel of about 10 W refills that
    in a sunny day.
 3. **Option B, the other core:** an ESP32-C6-N16 board (nanoESP32-C6,
    ESP32-C6-WROOM-1, 30 pins, WROOM antenna).
@@ -371,7 +376,7 @@ the card, the way the moisture project's `backlog` crate tests its ring.
 | Acoustic membranes and fur windscreens | on hand | the microphones in rain and wind |
 | PCA9548A, AO3401A and AO3400 | on hand | a channel for each lane; the octagon's, the GNSS's and the rail's switches |
 | MAX4466 modules and 6050 electret capsules (−52 dB) | ordered | compare a 6050 against the module's own capsule with a slow low sweep; turn the gain up for distant thunder |
-| 5 V boost: two modules (8628 + SS24, A17v5u + SS12) | on hand | the FireBeetle takes 5 V only; the bench test above picks the quieter |
+| 5 V boosts: two modules (8628 + SS24, A17v5u + SS12) | on hand | held in reserve, wired in only if a board misbehaves on the raw cell |
 | 64 GB high-endurance microSD | check stock | the log ring and the FAT32 partition |
 | Eight BPW34 photodiodes (Vishay's BPW34 and BPW34S differ only in packing) | check stock | the fast light channel |
 | Eight dual rail-to-rail op-amps (MCP6002 or TLV9002 class) | check stock | each photodiode's amplifier and peak detector |
@@ -760,7 +765,7 @@ ground network such as Blitzortung, or ears with times noted.
 | --- | --- | --- |
 | 0. Roof survey | a C3 with one SEN0290 on a cell at the roof spot for 30 minutes; Wi-Fi from the roof spot to the panel | under 0.1 disturbers a second, 30 times under the 3.1 measured indoors on the cell; the link delivers every frame |
 | 1. Does it hear outside | the FireBeetle 2 with one SEN0290, the DS3231, the card and the cell; reports over Wi-Fi; the FireBeetle alone beside one SEN0290, idling | one storm with at least 50 GLM flashes within 20 km: at least 50 % detected (indoors: a tenth at best), unmatched strikes at most 20 % of detections |
-| 2. Self-powered on the roof | solar panel, two CN3065s, two cells and MAX17043s, 5 V boost, SHT45, the rail switch, the ATGM336H on its own switch; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the boost running; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero on each cell over 7 days with 2 dull ones; each cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption |
+| 2. Self-powered on the roof | solar panel, two CN3065s, two cells and MAX17043s, SHT45, the rail switch, the ATGM336H on its own switch; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the FireBeetle running in the core box; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero on each cell over 7 days with 2 dull ones; each cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption |
 | 3. Four receivers | three more SEN0290s, rods at 45° steps | misses spread evenly across bearings; the energy-ratio bearing's error against GLM reported |
 | 4. One flash sensor | a C3 with a BPW34 and its op-amp, a TEMT6000, a MAX4466 and an MS3625 on one lane of the switched rail; time marks; OTA over I2C; storm arming | time-mark error measured; at night at least 50 % of GLM flashes within 20 km seen by light, under 1 false trigger an hour; thunder onsets for at least 50 % of strikes under 10 km; the rail up within a second of a strike; the disturber rate with the ring polling against idle, and at 100 against 200 kHz; a lane's rise time on a scope |
 | 5. Full ring | the other seven sensors, calibrated with a strobe | night bearings within ±20° of GLM |
@@ -774,7 +779,7 @@ before it:
   card's;
 - a C3's current at 40, 80 and 160 MHz with four ADC channels and I2S running;
 - ESP-NOW through ESP-Hosted;
-- the two boost modules' noise against one SEN0290, at the FireBeetle's sleep and idle loads;
+- the FireBeetle on a cell run down to the floor; the boosts' noise against one SEN0290 only if one is needed;
 - the MAX4466 against the 6050 capsules;
 - the log ring, on a PC and then on a card with the power pulled mid-write;
 - one flash sensor on the bench: its peak detector against a camera flash, its
@@ -785,8 +790,6 @@ before it:
 
 - [ ] **The core.** How low does the FireBeetle idle awake? Is the answer a
   lower idle current, a bigger cell 1 and panel, or option B?
-- [ ] **No boost?** Could the cell feed the FireBeetle's 5 V input directly,
-  with its own buck running flat out from 3.0–4.2 V? Then the boost would go.
 - [ ] **A C3 awake.** The datasheet gives only 160 and 80 MHz, chip only:
   18–22 mA at 80 MHz with the peripherals clocked. What does a SuperMini draw at
   40 and 80 MHz with the ADC and I2S running?
