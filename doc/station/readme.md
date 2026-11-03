@@ -668,10 +668,18 @@ carries roughly 20 KB/s in all.
 
 ## Link and remote care
 
-The FireBeetle's own C6 is tried first, from Rust on ESP-IDF through ESP-Hosted
-and the wifi-remote component. Earlier attempts at it were under MicroPython,
-and failed; Rust has not been tried. Check early whether ESP-NOW passes through
-ESP-Hosted, or only Wi-Fi. The fallback is an ESP32-C3 Pro, with its antenna
+The FireBeetle's own C6 is the radio, from Rust on ESP-IDF through ESP-Hosted
+and the wifi-remote component. It works: `station/`'s `wifi_check` scans
+through it, on USB and on a bare cell.
+
+**The C6 shipped unbootable.**
+- **The cause:** DFRobot's image on the C6 could not boot, as on other DFRobot
+  P4 boards. That, not MicroPython, is why the earlier attempts failed.
+- **The fix:** it was rewritten from the P4 over SDIO with esp-hosted 2.7.0's
+  slave, holding the C6's IO9 pad to GND. The steps are in
+  `station/c6_reflash/`.
+
+Still to check: whether ESP-NOW passes through ESP-Hosted, or only Wi-Fi. The fallback is an ESP32-C3 Pro, with its antenna
 socket, as the radio and nothing more, on a UART to the FireBeetle. Either radio
 carries ESP-NOW through the moisture project's `link` crate, which already runs
 on that project's relays, or Wi-Fi.
@@ -682,7 +690,7 @@ from the roof to this panel is unmeasured until phase 0.
 
 | Link | Roof to panel | Verdict |
 | --- | --- | --- |
-| The FireBeetle's own C6, from Rust through ESP-Hosted | unmeasured: phase 0 | tried first |
+| The FireBeetle's own C6, from Rust through ESP-Hosted | unmeasured: phase 0 | works on the bench: Wi-Fi scans |
 | ESP32-C3 Pro on UART, ESP-NOW or Wi-Fi, its antenna socket; with option B, the C6-N16's own radio | unmeasured: phase 0 | the fallback, if the on-board C6 falls short |
 | SX1262 LoRa at 915 MHz, HC-12 | easy | not needed |
 
