@@ -328,7 +328,7 @@ def layout():
     figure.line([(530, mast_bottom), (530, mast_top)], MUTED, width=1.2, arrow_end=True, arrow_start=True)
     figure.text(540, 360, "50 cm", 12, bold=True)
     figure.text(540, 440, "a fiberglass or plastic tube;", 12)
-    figure.text(540, 457, "four sheathed cables and a spare", 12)
+    figure.text(540, 457, "four sheathed cables inside", 12)
     for index, y in enumerate((300, 310, 320)):
         figure.line([(mast_x - 66 + index * 4, y), (mast_x - 14 - index * 4, y)], INK, width=2.4)
     figure.text(424, 306, "SHT45 in a", 12, anchor="end")
@@ -571,7 +571,7 @@ def power():
     for number, top, role, bus in ((2, 60, "the rail", "B"), (1, 170, "the core", "A")):
         thermostat = figure.box(215, top, 190, f"Thermostat {number}", ["KSD9700, 45 °C, NC", f"taped to cell {number}"],
                                 POWER, height=70)
-        charger = figure.box(440, top, 170, f"CN3065 {number}", ["linear charger", "CHRG, DONE → GPIO"], POWER,
+        charger = figure.box(440, top, 170, f"CN3065 {number}", ["linear charger", "IN and BAT only"], POWER,
                              height=70)
         cell = figure.box(645, top, 190, f"Cell {number}, 5000 mAh", [f"{role}: about 18 Wh", f"NTC; MAX17043, bus {bus}"],
                           POWER, height=70)

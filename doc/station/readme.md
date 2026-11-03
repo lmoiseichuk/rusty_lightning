@@ -42,7 +42,7 @@ the screen and the log, and talks to the station over Wi-Fi.
   boost, both cells with their chargers, gauges and NTCs, and two switches: the
   rail's and the GNSS's. The solar panel on its lid shades the cells.
 - **A 50 cm mast**, a fiberglass or plastic tube, rises from the core box. Four
-  sheathed cables and a spare run inside it, in about 15 mm of bore. The SHT45 sits on its side in a radiation
+  sheathed cables run inside it, in about 12 mm of bore. The SHT45 sits on its side in a radiation
   shield, out of any box, where it reads the air and not a sun-baked lid.
 - **The octagon** on top holds the four SEN0290s on one plate, the GNSS, the
   PCA9548A, the 3.3 V regulator and a PTC fuse per lane. Eight arms, one from
@@ -58,15 +58,14 @@ the screen and the log, and talks to the station over Wi-Fi.
   big storm.
 - **Height.** The octagon's top stays below the roof's ridge line.
 
-**Up the mast, four sheathed 24 AWG cables, 19 wires, and a spare:**
+**Up the mast, four sheathed 24 AWG cables, 18 wires:**
 
 | Cable | Cores | What |
 | --- | --- | --- |
-| Power | 4 | cell 1's positive for the octagon's regulator, the switched rail, two grounds |
+| Power | 3 | cell 1's positive for the octagon's regulator, the switched rail, a ground |
 | Buses | 5 | SDA and SCL of bus A and of bus B, a ground |
 | Interrupts | 5 | the four IRQs, the PCA9548A's RESET |
 | GNSS | 5 | TX, RX, PPS, 3.3 V from the FireBeetle, a ground |
-| Spare | 5 | pulled now while the tube is open: SCK, MOSI, MISO, CS and IRQ for the SPI receiver, if it is ever fitted |
 
 Each arm carries a 4-core cable: the switched rail, a ground, SDA and SCL. A
 short 4-core pigtail runs down from the octagon to the SHT45's shield: 3.3 V, a
@@ -75,7 +74,8 @@ ground, and bus A's SDA and SCL.
   pause. Its edges, coupled into an IRQ line in the same jacket, would be
   interrupts no SEN0290 sent.
 - **24 AWG is about 84 mΩ/m.** Over about 0.8 m with slack, the rail's 200 mA or
-  so in a storm drops about 13 mV.
+  so in a storm drops about 13 mV on its conductor and as much on the ground:
+  one ground is enough.
 
 ## Station core
 
@@ -94,9 +94,7 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 | 1 GPIO | the GNSS's switch, on the FireBeetle's 3.3 V |
 | 1 GPIO | the PCA9548A's RESET |
 | 1 GPIO | the DS3231's 1 Hz output, between GNSS fixes |
-| SPI + CS + 1 GPIO | optionally a fifth receiver, with its IRQ: an AS3935 board with an MA5532-AE antenna |
 | UART + 1 GPIO | the ATGM336H-5N-31: sentences and PPS |
-| 4 GPIOs | each CN3065's CHRG and DONE: charging, full or no sun |
 | 2 ADC inputs | one NTC per cell |
 | TF card | 64 GB: a FAT32 partition and the log ring |
 | UART | only if the on-board C6 falls short: an ESP32-C3 Pro with its antenna socket as the radio, nothing more |
@@ -169,7 +167,8 @@ can never drain the core:
     suits it, and its UART matches the P4's.
 
 The CN3065 is linear, as on the moisture project's relays, so it adds no
-switching noise. Three cautions around each:
+switching noise. The modules bring out only IN and BAT, with no CHRG or DONE,
+so each cell's gauge shows its charging, from the voltage rising. Two cautions around each:
 - **The thermostat.** The module brings out no TEMP pin, so a 45 °C
   normally-closed bimetal thermostat (KSD9700 class), taped to its cell and in
   series with that charger's input, stops charging when the cell is hot.
@@ -177,9 +176,6 @@ switching noise. Three cautions around each:
   cold, bright morning with the cell full, above the CN3065's absolute maximum
   of about 6.5 V (approx.; check the datasheet). Pick a panel whose cold
   open-circuit voltage stays under it, or clamp it.
-- **CHRG and DONE** drive the module's LEDs from the panel's voltage. Lift the
-  LEDs and pull the pins up to 3.3 V before they meet a P4 GPIO, which is not
-  5 V tolerant.
 
 **The boost is the switcher the design adds.**
 - **The modules on hand.** Two boost modules already carry a P4, its sensors and
@@ -395,8 +391,7 @@ octagon, at least 10 cm apart. The self-test sets one antenna oscillating at 500
 neighbours hear, so tune one board at a time, then clear every board's
 statistics. Each board has its own IRQ line.
 
-**Spares.** The AS3935 board with the MA5532-AE antenna can be a fifth receiver
-on SPI if four prove short. The panel's own SEN0290 stays for indoor testing.
+**Spares.** The panel's own SEN0290 stays for indoor testing.
 
 **Carries over from the panel:** the driver, the antenna self-test, the
 noise-floor tuner, the golden record (the settings that last heard lightning,

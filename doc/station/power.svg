@@ -13,7 +13,7 @@
 <rect x="440.0" y="60.0" width="170.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="452.0" y="82.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">CN3065 2</text>
 <text x="452.0" y="100.0" font-size="12" text-anchor="start" fill="#1f2933">linear charger</text>
-<text x="452.0" y="118.0" font-size="12" text-anchor="start" fill="#1f2933">CHRG, DONE → GPIO</text>
+<text x="452.0" y="118.0" font-size="12" text-anchor="start" fill="#1f2933">IN and BAT only</text>
 <rect x="645.0" y="60.0" width="190.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="657.0" y="82.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">Cell 2, 5000 mAh</text>
 <text x="657.0" y="100.0" font-size="12" text-anchor="start" fill="#1f2933">the rail: about 18 Wh</text>
@@ -29,7 +29,7 @@
 <rect x="440.0" y="170.0" width="170.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="452.0" y="192.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">CN3065 1</text>
 <text x="452.0" y="210.0" font-size="12" text-anchor="start" fill="#1f2933">linear charger</text>
-<text x="452.0" y="228.0" font-size="12" text-anchor="start" fill="#1f2933">CHRG, DONE → GPIO</text>
+<text x="452.0" y="228.0" font-size="12" text-anchor="start" fill="#1f2933">IN and BAT only</text>
 <rect x="645.0" y="170.0" width="190.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="657.0" y="192.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">Cell 1, 5000 mAh</text>
 <text x="657.0" y="210.0" font-size="12" text-anchor="start" fill="#1f2933">the core: about 18 Wh</text>
