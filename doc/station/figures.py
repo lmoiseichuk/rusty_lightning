@@ -319,7 +319,7 @@ def layout():
     figure.text(40, 690, "the roof: keep the octagon's top below the ridge line", 12, colour=MUTED)
     figure.box(300, 528, 400, "Core box",
                ["FireBeetle 2, DS3231, the 5 V boost", "cell 1 (the core), cell 2 (the rail)",
-                "two CN3065s, MAX17043s, NTCs", "the rail's and the GNSS's switches"], STATION, height=130)
+                "two CN3065s, MAX17043s, NTCs", "switches: octagon, GNSS, rail"], STATION, height=130)
     figure.rect(270, 506, 460, 16, POWER, radius=2)
     figure.text(260, 518, "solar panel", 12, bold=True, anchor="end", colour=POWER[1])
 
@@ -336,7 +336,7 @@ def layout():
 
     # The octagon, with the GNSS on top and two of its eight arms.
     figure.box(390, 174, 220, "The octagon",
-               ["4 × SEN0290 on one plate", "PCA9548A, a PTC per lane", "3.3 V regulator, always on"], STATION,
+               ["4 × SEN0290 on one plate", "PCA9548A, a PTC per lane", "3.3 V regulator"], STATION,
                height=88)
     figure.rect(470, 150, 60, 24, TIME, radius=3)
     figure.text(500, 167, "GNSS", 12, bold=True, anchor="middle", colour=TIME[1], check=False)
@@ -587,17 +587,17 @@ def power():
                 12, colour=POWER[1])
 
     # Cell 2, on top, feeds the switched rail down the right; cell 1 feeds the core
-    # and the always-on octagon from below. The two lines never cross.
+    # and the octagon from below. The two lines never cross.
     core_bus_y = 300
     core_cell = rows[1][1]
     figure.line([core_cell["bottom"], (core_cell["bottom"][0], core_bus_y), (445, core_bus_y)], POWER[1], width=2.4)
     figure.line([rows[0][1]["right"], (955, 95), (955, 330)], POWER[1], width=2.4, arrow_end=True)
-    regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, always on", "follows cell 1 below ~3.4 V"], POWER)
+    regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, behind", "a switch that stays on"], POWER)
     boost = figure.box(580, 330, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
     switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on for storms"], POWER)
     for x in (445, 690):
         figure.line([(x, core_bus_y), (x, 330)], POWER[1], arrow_end=True)
-    loads = figure.box(340, 440, 210, "Always on", ["SEN0290s, SHT45, PCA9548A"], STATION)
+    loads = figure.box(340, 440, 210, "The octagon", ["SEN0290s, SHT45, PCA9548A"], STATION)
     beetle = figure.box(580, 440, 220, "FireBeetle 2", ["5 V only; its 3.3 V: the GNSS"], STATION)
     nodes = figure.box(870, 440, 170, "8 flash sensors", ["a PTC on each lane"], LIGHT)
     figure.line([(445, 330 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)

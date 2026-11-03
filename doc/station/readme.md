@@ -39,8 +39,8 @@ the screen and the log, and talks to the station over Wi-Fi.
 
 **The layout.**
 - **The core box** sits on the roof. It holds the FireBeetle, the DS3231, the
-  boost, both cells with their chargers, gauges and NTCs, and two switches: the
-  rail's and the GNSS's. The solar panel on its lid shades the cells.
+  boost, both cells with their chargers, gauges and NTCs, and three switches:
+  the octagon's, the GNSS's and the rail's. The solar panel on its lid shades the cells.
 - **A 50 cm mast**, a fiberglass or plastic tube, rises from the core box. Four
   sheathed cables run inside it, in about 12 mm of bore. The SHT45 sits on its side in a radiation
   shield, out of any box, where it reads the air and not a sun-baked lid.
@@ -58,11 +58,11 @@ the screen and the log, and talks to the station over Wi-Fi.
   big storm.
 - **Height.** The octagon's top stays below the roof's ridge line.
 
-**Up the mast, four sheathed 24 AWG cables, 18 wires:**
+**Up the mast, four sheathed 24 AWG cables, 19 wires:**
 
 | Cable | Cores | What |
 | --- | --- | --- |
-| Power | 3 | cell 1's positive for the octagon's regulator, the switched rail, a ground |
+| Power | 4 | the octagon's supply from cell 1, the switched rail from cell 2, a ground for each |
 | Buses | 5 | SDA and SCL of bus A and of bus B, a ground |
 | Interrupts | 5 | the four IRQs, the PCA9548A's RESET |
 | GNSS | 5 | TX, RX, PPS, 3.3 V from the FireBeetle, a ground |
@@ -74,8 +74,11 @@ ground, and bus A's SDA and SCL.
   pause. Its edges, coupled into an IRQ line in the same jacket, would be
   interrupts no SEN0290 sent.
 - **24 AWG is about 84 mΩ/m.** Over about 0.8 m with slack, the rail's 200 mA or
-  so in a storm drops about 13 mV on its conductor and as much on the ground:
-  one ground is enough.
+  so in a storm drops about 13 mV on its conductor and as much on its ground.
+- **A ground per supply.** The grounds meet at one point only, in the core box,
+  where the two cells' negatives join. The ring's current then never flows in
+  the SEN0290s' ground. They must meet there, since I2C crosses between the
+  supplies.
 
 ## Station core
 
@@ -91,6 +94,7 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 | I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
 | 4 GPIOs | one IRQ per SEN0290 |
 | 1 GPIO | the switched rail: the eight lanes |
+| 1 GPIO | the octagon's supply: normally on, cut only to reset it |
 | 1 GPIO | the GNSS's switch, on the FireBeetle's 3.3 V |
 | 1 GPIO | the PCA9548A's RESET |
 | 1 GPIO | the DS3231's 1 Hz output, between GNSS fixes |
@@ -140,9 +144,9 @@ can never drain the core:
 - **Cell 1, the core.**
   - It feeds the FireBeetle through the 5 V boost; the FireBeetle takes 5 V
     only.
-  - It feeds the octagon and the SHT45 below it through a 3.3 V linear
-    regulator up there: the SEN0290s, the SHT45 and the PCA9548A, always on.
-    The regulator must idle in microamps (HT7333 or ME6211 class); an
+  - It feeds the octagon and the SHT45 below it, through a switch in the core
+    box and a 3.3 V linear regulator up there: the SEN0290s, the SHT45 and the
+    PCA9548A. The regulator must idle in microamps (HT7333 or ME6211 class); an
     AMS1117-class part idles near 5 mA, about 0.44 Wh a day.
   - Below about 3.4 V the octagon's 3.3 V follows cell 1 down (approx.: the
     regulator's dropout), and the boost draws its most current from a low cell.
@@ -153,8 +157,18 @@ can never drain the core:
   - One switch feeds the eight lanes.
   - The rail stays off below the same floor on its own cell.
   - Its MAX17043 sits on bus B, since both gauges are fixed at 0x36.
-- **The SEN0290s stay on.** They detect the storm and wake the FireBeetle,
-  which switches the rail on. All four together draw about 0.3 mA.
+- **The octagon's switch is a reset, not a saving.**
+  - **It stays on.** The SEN0290s detect the storm and wake the FireBeetle,
+    which switches the rail on. All four together draw about 0.3 mA.
+  - **On by default.** The switch is the rail's circuit with the AO3400's gate
+    pulled up, not down. The octagon comes up with the station and stays up
+    through a P4 reset.
+  - **Its one use.** The firmware cuts it for a few seconds to recover a
+    SEN0290 that stops answering, after the chip's own reset command over I2C
+    (PRESET_DEFAULT) has failed. Then it re-tunes all four.
+  - **Never leave it off.** While it is off, the octagon's unpowered chips hold
+    buses A and B down, so the DS3231 and the gauges cannot be read.
+  - **The PCA9548A stays in this domain.** Its RESET line already recovers it.
 - **The GNSS runs on the FireBeetle's 3.3 V**, from cell 1, through its own
   switch in the core box, with power and signals in one 5-core cable.
   - **A switch, not a GPIO.** The switch is an AO3401A with its gate on a GPIO.
@@ -168,7 +182,8 @@ can never drain the core:
 
 The CN3065 is linear, as on the moisture project's relays, so it adds no
 switching noise. The modules bring out only IN and BAT, with no CHRG or DONE,
-so each cell's gauge shows its charging, from the voltage rising. Two cautions around each:
+so each cell's gauge shows its charging, from the voltage rising. Two cautions
+around each:
 - **The thermostat.** The module brings out no TEMP pin, so a 45 °C
   normally-closed bimetal thermostat (KSD9700 class), taped to its cell and in
   series with that charger's input, stops charging when the cell is hot.
@@ -330,7 +345,7 @@ the card, the way the moisture project's `backlog` crate tests its ring.
 | A radiation shield for the SHT45 | on hand | air temperature for the speed of sound, humidity, weather in the log |
 | Cable glands, breathing vents, desiccant, 1 mm stainless mesh | on hand | the core box and the octagon against rain, condensation and animals |
 | Acoustic membranes and fur windscreens | on hand | the microphones in rain and wind |
-| PCA9548A, AO3401A and AO3400 | on hand | a channel for each lane; the rail's switch and the GNSS's |
+| PCA9548A, AO3401A and AO3400 | on hand | a channel for each lane; the octagon's, the GNSS's and the rail's switches |
 | MAX4466 modules and 6050 electret capsules (−52 dB) | ordered | compare a 6050 against the module's own capsule with a slow low sweep; turn the gain up for distant thunder |
 | 5 V boost: two modules (8628 + SS24, A17v5u + SS12) | on hand | the FireBeetle takes 5 V only; the bench test above picks the quieter |
 | 64 GB high-endurance microSD | check stock | the log ring and the FAT32 partition |
@@ -338,7 +353,7 @@ the card, the way the moisture project's `backlog` crate tests its ring.
 | Eight dual rail-to-rail op-amps (MCP6002 or TLV9002 class) | check stock | each photodiode's amplifier and peak detector |
 | Eight low-capacitance analog switches (74LVC1G66 or TS5A3166 class) | check stock | each amplifier's day and night gain |
 | Eight PTC fuses, about 200 mA hold | check stock | one per lane, in the octagon |
-| A low-quiescent 3.3 V LDO (HT7333 or ME6211 class) | check stock | the octagon's always-on rail |
+| A low-quiescent 3.3 V LDO (HT7333 or ME6211 class) | check stock | the octagon's supply |
 | A ferrite bead and about 10 µF | check stock | the GNSS's 3.3 V, filtered at the octagon |
 | A 50 cm fiberglass or plastic tube, an octagonal box, eight arms, eight small sensor boxes with windows | to make | the mast, the octagon and the arms |
 | Sheathed 24 AWG copper cable: 3, 4 and 5 cores | on hand | up the mast, and along each arm |
@@ -660,6 +675,8 @@ over Wi-Fi in seconds; updates still wait for a storm-free day.
 - **The rail.** A sensor that stops answering gets a reboot command over I2C,
   then its own watchdog, then a cycle of the whole rail. A rail that drags
   cell 2 down is switched off and reported.
+- **The octagon.** A SEN0290 that stops answering gets its reset command over
+  I2C, then a few seconds with the octagon's supply cut, then a re-tune.
 - **Its own transmits.** Mark any AS3935 interrupt within about 10 ms of a Wi-Fi
   transmit as `own`. Measure first: one report a second for 10 minutes against a
   quiet baseline.

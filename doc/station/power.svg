@@ -50,8 +50,8 @@
 <polygon points="955.0,330.0 959.5,320.0 950.5,320.0" fill="#c05621"/>
 <rect x="340.0" y="330.0" width="210.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="352.0" y="352.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">3.3 V regulator</text>
-<text x="352.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">in the octagon, always on</text>
-<text x="352.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">follows cell 1 below ~3.4 V</text>
+<text x="352.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">in the octagon, behind</text>
+<text x="352.0" y="388.0" font-size="12" text-anchor="start" fill="#1f2933">a switch that stays on</text>
 <rect x="580.0" y="330.0" width="220.0" height="70.0" rx="8" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="592.0" y="352.0" font-size="14" font-weight="bold" text-anchor="start" fill="#c05621">5 V boost</text>
 <text x="592.0" y="370.0" font-size="12" text-anchor="start" fill="#1f2933">one of two on hand</text>
@@ -65,7 +65,7 @@
 <polyline points="690.0,300.0 690.0,330.0" fill="none" stroke="#c05621" stroke-width="1.6" stroke-linejoin="round"/>
 <polygon points="690.0,330.0 694.5,320.0 685.5,320.0" fill="#c05621"/>
 <rect x="340.0" y="440.0" width="210.0" height="52.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
-<text x="352.0" y="462.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">Always on</text>
+<text x="352.0" y="462.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">The octagon</text>
 <text x="352.0" y="480.0" font-size="12" text-anchor="start" fill="#1f2933">SEN0290s, SHT45, PCA9548A</text>
 <rect x="580.0" y="440.0" width="220.0" height="52.0" rx="8" fill="#e3f0fb" stroke="#2f6fae" stroke-width="1.6"/>
 <text x="592.0" y="462.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2f6fae">FireBeetle 2</text>
