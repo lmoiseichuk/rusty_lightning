@@ -18,6 +18,11 @@
 //! - every reset since the first boot, by cause. A brownout counted here means
 //!   the cell could not carry the radio.
 //!
+//! **If the C6 answers nothing** (`sdmmc_card_init failed`, error 0x107), its
+//! image is the likely culprit: this board's C6 shipped with one it could not
+//! boot, as other DFRobot P4 boards have. `c6_reflash/` rewrites it from the P4,
+//! over the same SDIO lines.
+//!
 //! **Never connect the cell and USB at the same time.** The FireBeetle wires VIN
 //! straight to the USB-C's VBUS, with no diode (DFRobot's schematic V1.0), so a
 //! cell on VIN while USB is plugged in has the PC pushing 5 V into the cell.
