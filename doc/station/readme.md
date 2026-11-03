@@ -280,8 +280,9 @@ around each:
 | SEN0253: the BNO055 polled all day, the BMP280 free-running | 5–12 (approx.) | 100 % | 0.4–1.1 |
 | GNSS, from the FireBeetle's 3.3 V: storms, and a few minutes a day | ~30 | storm hours | 0.11 per hour |
 | The SD card, idle, behind the FireBeetle's regulators | measure | 100 % | about 0.1 per mA |
-| Flash-sensor ring, on the switched rail, all of it | 8 × 18–22 (datasheet, 80 MHz, chip only) | 100 % | 13–16 |
-| The half ring, at a low cell: four awake, four in standby | 4 × 18–22, plus 4 × a few (approx.) | while cell 2 is low | 7–9 |
+| Flash-sensor ring, on the switched rail, all of it, at 40 MHz | 8 × 13–17 (approx.; measure) | 100 % | 9–12 |
+| The ring raised to 80 MHz for a storm or an event | 8 × 18–22 (datasheet, chip only) | storm and event hours | 0.15–0.2 more per hour |
+| The half ring, at a low cell: four awake at 40 MHz, four in standby | 4 × 13–17, plus 4 × a few (approx.) | while cell 2 is low | 5–7 |
 
 The FireBeetle's rows take DFRobot's 5 V figures as the same power, drawn
 straight from the cell (approx.).
@@ -310,20 +311,21 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
   day covers it with about 9 Wh to spare. Each dull day costs about 6.2–6.9 Wh,
   so the 18 Wh cell rides out about 2.6–2.9 of them. The P4 was at 360 MHz and the C6 always on;
   the savings below have not been tried yet.
-- **Cell 2 carries the ring all day,** 13–16 Wh, against its 18 Wh: under a
-  day and a half without sun. So cell 2 and the panel grow:
-  - **The station's day:** the core's 7.2–7.9 Wh and the ring's 13–16, about
-    21–24 Wh in all (approx.).
+- **Cell 2 carries the ring all day,** 9–12 Wh at 40 MHz, against its 18 Wh:
+  under two days without sun. So cell 2 and the panel grow:
+  - **The station's day:** the core's 7.2–7.9 Wh and the ring's 9–12, about
+    16–20 Wh in all, plus about 0.2 Wh for each hour the ring runs at 80 MHz
+    (approx.).
   - **The panel:** at the 5 W panel's estimated 3.4 Wh a watt on a sunny day,
-    that breaks even at about 7 W. Refilling the cells after dull days takes
-    about 15–20 W (approx.).
+    that breaks even at about 5–6 W. Refilling the cells after dull days takes
+    about 12–15 W (approx.).
   - **Cell 2's bank:** three or four 5000 mAh cells in parallel, about
-    55–74 Wh. That is 3.5–5 dull days with the full ring, longer once it
-    halves (approx.).
+    55–74 Wh. That is 4.5–8 dull days with the full ring at 40 MHz, longer once
+    it halves (approx.).
   - **Its charging:** a CN3065 charges at up to about 1 A (approx.; set by its
-    resistor), about 20 Wh on a sunny day at the cell's voltage. That only just
-    carries the full ring, with nothing over to refill. So cell 2's bank takes
-    two CN3065s in parallel.
+    resistor), about 20 Wh on a sunny day at the cell's voltage. One carries the
+    ring; a second in parallel refills the bank after dull days twice as
+    fast.
   - **A storm hour costs cell 1 about 0.1 Wh more,** for the GNSS.
 
 **So the core needs one of three things, decided on the bench:**
@@ -364,8 +366,8 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
      - **And two jobs on the bench:** an antenna mod for an IPEX antenna, and a
        card soldered on.
 
-**The rail on all day** takes 13–16 Wh, more than one cell and the 5 W panel can
-carry. The ring stays on anyway (see Flash sensors), so the supply grows to it:
+**The rail on all day** takes 9–12 Wh at 40 MHz, 13–16 at 80, more than one cell
+and the 5 W panel can carry. The ring stays on anyway (see Flash sensors), so the supply grows to it:
 the bigger bank and panel above.
 
 **Power LEDs.** Each SEN0290 carries a red power LED drawing 1–2 mA (approx.),
@@ -545,9 +547,18 @@ results, never raw signals.
   AS3935 strike and no GLM flash. A power-line or transformer arc gives a flash,
   a bang and an RF burst. So every event is logged, and which sensors heard it
   says what it was.
-- **How.** The sensors stay awake, sampling, at 80 MHz; anything from 40 to
-  160 MHz will do. They come up in well under a second (approx.) after any
-  power cut.
+- **How.** The sensors stay awake and sampling, at 40 MHz between events. They
+  come up in well under a second (approx.) after any power cut.
+- **The FireBeetle sets their clock.** When a storm or a sensitive event starts,
+  with a strike, a flash or a bang, it raises the ring to 80 MHz, and lowers it
+  again after an hour quiet. A sensor only obeys; the main controller decides.
+  - **Why 80 in a storm:** headroom for the onset detectors and the recordings
+    while events crowd in.
+  - **The clock change must not move the sampling.** Clock the ADC and I2S from
+    the crystal where the C3 allows, so their rates stay put when the CPU's
+    changes: the moisture project learned that with its RMT capture. Where it
+    does not allow it, the change restarts them, a few milliseconds' gap
+    (approx.).
 - **The rail goes off only for:**
   - **a reboot,** for a fix or an update;
   - **a stuck sensor:** its own lane first, then the whole rail only if that
