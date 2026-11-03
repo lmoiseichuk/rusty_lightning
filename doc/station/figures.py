@@ -269,7 +269,7 @@ def overview():
         [
             "solar panel on the core box → two chargers",
             "cell 1, its own MAX17043: the core",
-            "cell 2, its own MAX17043: ring and GNSS",
+            "cell 2, its own MAX17043: the ring",
             "3.3 V regulator in the octagon",
             "5 V boost, chosen by its noise: the FireBeetle",
         ],
@@ -319,7 +319,7 @@ def layout():
     figure.text(40, 690, "the roof: keep the octagon's top below the ridge line", 12, colour=MUTED)
     figure.box(300, 528, 400, "Core box",
                ["FireBeetle 2, DS3231, the 5 V boost", "cell 1 (the core), cell 2 (the rail)",
-                "two CN3065s, MAX17043s, NTCs", "the switched rail's switch"], STATION, height=130)
+                "two CN3065s, MAX17043s, NTCs", "the rail's and the GNSS's switches"], STATION, height=130)
     figure.rect(270, 506, 460, 16, POWER, radius=2)
     figure.text(260, 518, "solar panel", 12, bold=True, anchor="end", colour=POWER[1])
 
@@ -594,12 +594,12 @@ def power():
     figure.line([rows[0][1]["right"], (955, 95), (955, 330)], POWER[1], width=2.4, arrow_end=True)
     regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, always on", "follows cell 1 below ~3.4 V"], POWER)
     boost = figure.box(580, 330, 220, "5 V boost", ["one of two on hand", "the quieter at light load"], POWER)
-    switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "storms, daily clock"], POWER)
+    switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on for storms"], POWER)
     for x in (445, 690):
         figure.line([(x, core_bus_y), (x, 330)], POWER[1], arrow_end=True)
     loads = figure.box(340, 440, 210, "Always on", ["SEN0290s, SHT45, PCA9548A"], STATION)
-    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["takes 5 V only"], STATION)
-    nodes = figure.box(870, 440, 170, "8 flash sensors", ["a PTC each; GNSS LDO"], LIGHT)
+    beetle = figure.box(580, 440, 220, "FireBeetle 2", ["5 V only; its 3.3 V: the GNSS"], STATION)
+    nodes = figure.box(870, 440, 170, "8 flash sensors", ["a PTC on each lane"], LIGHT)
     figure.line([(445, 330 + regulator["h"]), (445, loads["y"])], POWER[1], arrow_end=True)
     figure.line([(690, 330 + boost["h"]), (690, beetle["y"])], POWER[1], arrow_end=True)
     figure.line([(955, 330 + switch["h"]), (955, nodes["y"])], POWER[1], arrow_end=True)
@@ -613,13 +613,13 @@ def power():
 
 def lane():
     figure = Figure("lane", 960, 450)
-    figure.text(20, 30, "The switched rail: the ring and the GNSS, off by default, on for storms", 16, bold=True)
+    figure.text(20, 30, "The switched rail: the eight lanes, off by default, on for storms", 16, bold=True)
     pull_up, series, miller = 100e3, 10e3, 220e-9
     # Assumptions for the switch-on estimate, marked approx. in the text: the
     # AO3401A's gate sits about 1.2 V below its source while the lane rises (its
-    # Miller plateau at a small load), and the eight sensors and the GNSS put about
-    # 90 µF on the rail.
-    plateau, lane_capacitance, cell_high = 1.2, 90e-6, 4.2
+    # Miller plateau at a small load), and each of the eight sensors puts about 10 µF
+    # on the rail.
+    plateau, lane_capacitance, cell_high = 1.2, 8 * 10e-6, 4.2
 
     def resistor(x, top, bottom, label, label_side):
         figure.rect(x - 13, top, 26, bottom - top, PLAIN, radius=3)
@@ -641,7 +641,7 @@ def lane():
     figure.text(498, 124, "G", 11, bold=True)
     figure.line([(560, 80), (920, 80)], INK, width=2, arrow_end=True)
     figure.text(800, 70, "switched rail, up the mast", 12, anchor="middle")
-    figure.text(800, 100, "8 lanes (a PTC each), the GNSS", 11, anchor="middle", colour=MUTED)
+    figure.text(800, 100, "to 8 lanes, a PTC on each", 11, anchor="middle", colour=MUTED)
 
     # The gate: 100 kΩ to the cell holds it off; 10 kΩ in series from the driver
     # pulls it on; 220 nF from gate to drain slows the rail's rise (a Miller soft start).
@@ -686,7 +686,7 @@ def lane():
                    "at boot: 100 kΩ holds the AO3400 off",
                    f"gate when on: −{3.0 * on_fraction:.1f} to −{4.2 * on_fraction:.1f} V",
                    "AO3401A: specified down to −2.5 V",
-                   f"rail rises ~{slew / 1000:.1f} V/ms: ~{inrush * 1000:.0f} mA into 90 µF",
+                   f"rail rises ~{slew / 1000:.1f} V/ms: ~{inrush * 1000:.0f} mA into 80 µF",
                    "power the rail, then the channels",
                    "cut: the channels first, then power",
                    "never a sensor's USB on a lane",

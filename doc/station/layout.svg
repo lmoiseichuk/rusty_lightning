@@ -9,7 +9,7 @@
 <text x="312.0" y="568.0" font-size="12" text-anchor="start" fill="#1f2933">FireBeetle 2, DS3231, the 5 V boost</text>
 <text x="312.0" y="586.0" font-size="12" text-anchor="start" fill="#1f2933">cell 1 (the core), cell 2 (the rail)</text>
 <text x="312.0" y="604.0" font-size="12" text-anchor="start" fill="#1f2933">two CN3065s, MAX17043s, NTCs</text>
-<text x="312.0" y="622.0" font-size="12" text-anchor="start" fill="#1f2933">the switched rail's switch</text>
+<text x="312.0" y="622.0" font-size="12" text-anchor="start" fill="#1f2933">the rail's and the GNSS's switches</text>
 <rect x="270.0" y="506.0" width="460.0" height="16.0" rx="2" fill="#fde8e1" stroke="#c05621" stroke-width="1.6"/>
 <text x="260.0" y="518.0" font-size="12" font-weight="bold" text-anchor="end" fill="#c05621">solar panel</text>
 <rect x="492.0" y="262.0" width="16.0" height="242.0" rx="2" fill="#ffffff" stroke="#7b8794" stroke-width="1.6"/>
