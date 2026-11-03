@@ -186,8 +186,8 @@ can never drain the core:
   - Its MAX17043 sits on bus A.
 - **Cell 2, the switched rail.**
   - One switch feeds the eight lanes, on all the time.
-  - Below a low level the ring halves; below the floor it goes off (see Flash
-    sensors).
+  - Below a low level the ring's clocks step down; below the floor it goes off
+    (see Flash sensors).
   - Its MAX17043 sits on bus B, since both gauges are fixed at 0x36.
 - **The octagon's switch is for resets, not for saving power.**
   - **It stays on once up.** All four SEN0290s together draw about 0.3 mA.
@@ -280,9 +280,9 @@ around each:
 | SEN0253: the BNO055 polled all day, the BMP280 free-running | 5–12 (approx.) | 100 % | 0.4–1.1 |
 | GNSS, from the FireBeetle's 3.3 V: storms, and a few minutes a day | ~30 | storm hours | 0.11 per hour |
 | The SD card, idle, behind the FireBeetle's regulators | measure | 100 % | about 0.1 per mA |
-| Flash-sensor ring, on the switched rail, all of it, at 40 MHz | 8 × 13–17 (approx.; measure) | 100 % | 9–12 |
-| The ring raised to 80 MHz for a storm or an event | 8 × 18–22 (datasheet, chip only) | storm and event hours | 0.15–0.2 more per hour |
-| The half ring, at a low cell: four awake at 40 MHz, four in standby | 4 × 13–17, plus 4 × a few (approx.) | while cell 2 is low | 5–7 |
+| Flash-sensor ring, on the switched rail: four sentries at 10 MHz, four listeners at 40 | 4 × 7–10 plus 4 × 13–17 (approx.; measure) | 100 % | 7–10 |
+| The ring raised to 80 MHz for a storm or an event | up to 8 × 18–22 (datasheet, chip only) | storm and event hours | up to 0.3 more per hour |
+| The ring at a low cell: all eight at 10 MHz | 8 × 7–10 (approx.) | while cell 2 is low | 5–7 |
 
 The FireBeetle's rows take DFRobot's 5 V figures as the same power, drawn
 straight from the cell (approx.).
@@ -311,17 +311,17 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
   day covers it with about 9 Wh to spare. Each dull day costs about 6.2–6.9 Wh,
   so the 18 Wh cell rides out about 2.6–2.9 of them. The P4 was at 360 MHz and the C6 always on;
   the savings below have not been tried yet.
-- **Cell 2 carries the ring all day,** 9–12 Wh at 40 MHz, against its 18 Wh:
-  under two days without sun. So cell 2 and the panel grow:
-  - **The station's day:** the core's 7.2–7.9 Wh and the ring's 9–12, about
-    16–20 Wh in all, plus about 0.2 Wh for each hour the ring runs at 80 MHz
-    (approx.).
+- **Cell 2 carries the ring all day,** 7–10 Wh in its usual tiers, against its
+  18 Wh: about two days without sun. So cell 2 and the panel grow:
+  - **The station's day:** the core's 7.2–7.9 Wh and the ring's 7–10, about
+    14–18 Wh in all, plus up to about 0.3 Wh for each hour the ring runs at
+    80 MHz (approx.).
   - **The panel:** at the 5 W panel's estimated 3.4 Wh a watt on a sunny day,
-    that breaks even at about 5–6 W. Refilling the cells after dull days takes
-    about 12–15 W (approx.).
+    that breaks even at about 4–5 W. Refilling the cells after dull days takes
+    about 10–14 W (approx.).
   - **Cell 2's bank:** three or four 5000 mAh cells in parallel, about
-    55–74 Wh. That is 4.5–8 dull days with the full ring at 40 MHz, longer once
-    it halves (approx.).
+    55–74 Wh. That is about 5.5–10 dull days for the ring in its usual tiers,
+    longer once its clocks step down (approx.).
   - **Its charging:** a CN3065 charges at up to about 1 A (approx.; set by its
     resistor), about 20 Wh on a sunny day at the cell's voltage. One carries the
     ring; a second in parallel refills the bank after dull days twice as
@@ -366,7 +366,7 @@ a dull day cell 1 gets the whole 1 Wh only while cell 2 is full.
      - **And two jobs on the bench:** an antenna mod for an IPEX antenna, and a
        card soldered on.
 
-**The rail on all day** takes 9–12 Wh at 40 MHz, 13–16 at 80, more than one cell
+**The rail on all day** takes 7–10 Wh in its usual tiers, 13–16 all at 80 MHz, more than one cell
 and the 5 W panel can carry. The ring stays on anyway (see Flash sensors), so the supply grows to it:
 the bigger bank and panel above.
 
@@ -496,7 +496,7 @@ faults; they do not replace the satellite check.
 
 **They mark the storm.** The ring runs all the time (see Flash sensors), so a
 strike no longer switches it on. It switches the GNSS on for timing through the
-storm, and in the half ring it wakes the standby sensors. The boards hear storms
+storm, and it raises the ring's clocks (see Flash sensors). The boards hear storms
 out to about 40 km: they miss single flashes, not whole storms.
 
 **Different tuning, one way.** Three boards run the panel's noise-floor tuner;
@@ -549,43 +549,52 @@ results, never raw signals.
   says what it was.
 - **How.** The sensors stay awake and sampling, at 40 MHz between events. They
   come up in well under a second (approx.) after any power cut.
-- **The FireBeetle sets their clock.** When a storm or a sensitive event starts,
-  with a strike, a flash or a bang, it raises the ring to 80 MHz, and lowers it
-  again after an hour quiet. A sensor only obeys; the main controller decides.
-  - **Why 80 in a storm:** headroom for the onset detectors and the recordings
-    while events crowd in.
-  - **The clock change must not move the sampling.** Clock the ADC and I2S from
-    the crystal where the C3 allows, so their rates stay put when the CPU's
-    changes: the moisture project learned that with its RMT capture. Where it
-    does not allow it, the change restarts them, a few milliseconds' gap
-    (approx.).
+- **Every sensor stays awake, in time and ready to process.** No sleep and no
+  light sleep: what saves power is a lower clock, never a sensor that has to be
+  woken. Each keeps its time marks at every clock.
+- **The FireBeetle sets each sensor's clock.** A sensor only obeys; the main
+  controller decides.
+
+  | Level | Clock | Who, normally |
+  | --- | --- | --- |
+  | Sentry | 10 MHz | four sensors, every other arm, so the gaps are 90° |
+  | Listener | 40 MHz | the other four |
+  | Event | 80 MHz | whoever is raised for a strike, a flash or a bang |
+  | Heavy | 160 MHz | only if a sensor's processing cannot keep up |
+
+  20 MHz stays available between 10 and 40.
+- **Climbing.** A detection raises the sentries from 10 to 80 MHz. If the event
+  grows, more detections or a storm, the listeners follow from 40 to 80. An
+  hour quiet steps each back down.
+- **The rotation:** sentries and listeners swap every few hours, so the work is
+  spread and every arm takes its turn at full listening.
+- **Why 80 in an event:** headroom for the onset detectors and the recordings
+  while events crowd in.
+- **What each level can run is measured, not assumed:** which channels keep
+  their sample rates at 10 and 20 MHz. A sentry must at least see a flash.
+- **The clock change must not move the sampling.** Clock the ADC and I2S from
+  the crystal where the C3 allows, so their rates stay put when the CPU's
+  changes: the moisture project learned that with its RMT capture. Where it does
+  not allow it, the change restarts them, a few milliseconds' gap (approx.).
 - **The rail goes off only for:**
   - **a reboot,** for a fix or an update;
   - **a stuck sensor:** its own lane first, then the whole rail only if that
     fails (see Remote care);
   - **a cell 2 too low to carry it,** below the floor.
-- **The half ring, at a low cell.**
-  - **Who stays up:** four sensors, every other arm, so the gaps are 90°.
-  - **The other four go to standby,** in light sleep, ready to wake.
-  - **Waking them:** a sleeping C3 wakes on a digital edge, so an I2C knock on
-    its lane is the wake-up. The first transaction fails, and the next one
-    works.
-  - **What wakes them:** a strike, or a flash seen by one of the four awake.
-  - **The rotation:** the two halves swap every few hours, so no bearing stays
-    blind for long, and the work is spread.
 - **The levels, as the moisture project's relays use them:**
 
-  | Cell 2 | Mode |
-  | --- | --- |
-  | 3.6 V and up (back at 3.7 V) | the full ring |
-  | 3.4–3.6 V (back at 3.5 V) | the half ring |
-  | below 3.4 V | the rail off: the floor |
+  | Cell 2 | Normally | On a detection |
+  | --- | --- | --- |
+  | 3.6 V and up (back at 3.7 V) | four sentries at 10 MHz, four listeners at 40 | sentries to 80; the listeners too if the event grows |
+  | 3.4–3.6 V (back at 3.5 V) | all eight at 10 MHz, awake and in time | all to 40 |
+  | below 3.4 V | the rail off: the floor | — |
 
-- **The log shows what it costs:** each change of mode, the ring's hours in
-  each mode, and cell 2's charge.
+- **The log shows what it costs:** each change of level, each sensor's hours at
+  each clock, and cell 2's charge.
 - **The console setting.** `rail on`, the full ring governed by the levels
-  above, is the default. `rail half` forces the half ring, and `rail off` stops
-  it, both for tests. The GNSS keeps its daily clock fix either way.
+  above, is the default. `ring <level>` holds every sensor at one clock, and
+  `rail off` stops the ring, both for tests. The GNSS keeps its daily clock fix
+  either way.
 
 **Why awake, and why a C3.**
 - **Why awake.** A sleeping C3 wakes only on a digital edge. A sensor that slept
@@ -994,7 +1003,7 @@ ground network such as Blitzortung, or ears with times noted.
 | 1. Does it hear outside | the FireBeetle 2 with one SEN0290, the DS3231, the card and the cell; reports over Wi-Fi; the FireBeetle alone beside one SEN0290, idling | one storm with at least 50 GLM flashes within 20 km: at least 50 % detected (indoors: a tenth at best), unmatched strikes at most 20 % of detections |
 | 2. Self-powered on the roof | solar panel, two CN3065s, two cells and MAX17043s, SHT45, the rail switch, the ATGM336H on its own switch; two OTA slots with rollback, safe mode, the console over Wi-Fi; the log ring | no rise in disturbers with the FireBeetle running in the core box; a Wi-Fi connect at a 3.3 V cell without a brownout; net charge at least zero on each cell over 7 days with 2 dull ones; each cell under 45 °C while charging; 14 days without an unplanned reset; an image that never confirms rolls back; 20 power cuts while writing: no undetected corruption; bus A's rise time on a scope |
 | 3. Four receivers | three more SEN0290s, rods at 45° steps | misses spread evenly across bearings; the energy-ratio bearing's error against GLM reported |
-| 4. One flash sensor | a C3 with a BPW34 and its op-amp, a TEMT6000, a MAX4466 and an MS3625 on one lane of the switched rail; time marks; OTA over I2C; the half ring and its rotation | time-mark error measured; at night at least 50 % of GLM flashes within 20 km seen by light, under 1 false trigger an hour; thunder onsets for at least 50 % of strikes under 10 km; in the half ring, the standby sensors up within a second of a strike; the disturber rate with the ring polling against idle, and at 100 against 200 kHz, and with the QMI8658C's reads on and off; a lane's rise time on a scope |
+| 4. One flash sensor | a C3 with a BPW34 and its op-amp, a TEMT6000, a MAX4466 and an MS3625 on one lane of the switched rail; time marks; OTA over I2C; the clock levels and their rotation | time-mark error measured; at night at least 50 % of GLM flashes within 20 km seen by light, under 1 false trigger an hour; thunder onsets for at least 50 % of strikes under 10 km; a sentry at 80 MHz within a second of a strike; the disturber rate with the ring polling against idle, and at 100 against 200 kHz, and with the QMI8658C's reads on and off; a lane's rise time on a scope |
 | 5. Full ring | the other seven sensors, calibrated with a strobe | night bearings within ±20° of GLM |
 
 **The season.** The proposal was written as the lightning season ended, so the
@@ -1020,11 +1029,12 @@ before it:
   the S3, or option C, the C6?
 - [ ] **A C3 awake.** The datasheet gives only 160 and 80 MHz, chip only:
   18–22 mA at 80 MHz with the peripherals clocked. What does a SuperMini draw at
-  40 and 80 MHz with the ADC and I2S running? With the ring on all the time this
+  10, 20, 40 and 80 MHz with the ADC and I2S running, and which channels keep
+  their sample rates at each? With the ring on all the time this
   is the station's largest load: every milliamp per sensor is about 0.7 Wh a
   day across the eight, and it sizes cell 2's bank and the panel.
-- [ ] **The half ring's wake.** Do the standby sensors come up within a second
-  of a strike, and does an I2C knock wake every one of them, every time?
+- [ ] **A sentry's climb.** Does a sentry go from 10 to 80 MHz, its sampling
+  restarted if need be, within a second of a strike?
 - [ ] **Events that are not lightning.** What do a transformer arc, fireworks or
   a blast look like on light, sound, pressure, the accelerometers and the
   AS3935? Each gets its signature in the log.
