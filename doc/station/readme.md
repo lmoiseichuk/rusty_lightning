@@ -90,7 +90,7 @@ the radio, with an ESP32-C3 Pro on UART as the fallback. It sits in the core box
 
 | FireBeetle 2 resource | Used for |
 | --- | --- |
-| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68) |
+| I2C bus A at 200 kHz | 3 SEN0290s (0x01–0x03), SHT45 (0x44), cell 1's MAX17043 (0x36), DS3231 (0x68), LSM6DSO32 (0x6A) |
 | I2C bus B at 200 kHz | the 4th SEN0290 (0x01); a PCA9548A switch (0x70), one channel per flash-sensor lane; cell 2's MAX17043 (0x36) |
 | 4 GPIOs | one IRQ per SEN0290 |
 | 1 GPIO | the switched rail: the eight lanes |
@@ -666,6 +666,71 @@ carries roughly 20 KB/s in all.
   noise floor in rain at night before trusting distances.
 - A MAX4466 module draws well under 1 mA.
 
+## How hard it hit
+
+Some strikes shake the house. The log should say how hard, not only that a
+strike happened, and two sensors measure two different things:
+- **an accelerometer:** how much the structure moved;
+- **a fast barometer:** how strong the thunder's pressure wave was.
+
+**The window makes an amplitude belong to a strike.** Thunder arrives about
+2.9 s per km after the flash, at the speed the SHT45's temperature gives (see
+Sound).
+- **Read the peak only inside that window,** a few seconds either side. The
+  peak then belongs to that strike, not to a door, a truck or a gust.
+- **The arrival time is itself a distance:** flash-to-bang, independent of the
+  AS3935's estimate.
+
+**Why not an SW-420.** It is a spring contact behind a comparator: on or off
+past a threshold set by its trimmer, with no amplitude. It also trips on wind,
+rain and doors, and on a roof the wind alone would keep it firing.
+
+### The structure: an LSM6DSO32
+
+| Candidate, on hand | Noise (approx.) | Step at its finest range | Verdict |
+| --- | --- | --- | --- |
+| LSM6DSO32, spares from coludo | ~80 µg/√Hz, about 1 mg rms at 100 Hz | 0.12 mg at ±4 g, its smallest range | **the choice:** lowest noise, and a 3 KB FIFO to read in bursts |
+| QMI8658, 5 | ~150 µg/√Hz, about 1.5 mg rms | 0.06 mg at ±2 g | the fallback |
+| MPU-6050, 1 | ~400 µg/√Hz, about 4 mg rms | 0.06 mg | older and noisier |
+| ADXL345, 5+ | about 3 mg rms | 3.9 mg | too coarse: a felt shake starts at roughly 5–10 mg (approx.) |
+
+- **The bus:** I2C on bus A at 0x6A. Coludo runs it on SPI, but I2C is
+  plenty: 200 samples a second of three axes is about 1.2 KB/s, against the
+  bus's roughly 20 KB/s. The QMI8658 answers at the same 0x6A or 0x6B, so fit
+  one or the other.
+- **Its settings:** ±4 g, about 200 samples a second. A house's response to
+  thunder sits well below 100 Hz.
+- **What is kept:** the peak of each 100 ms. A minute of that is 600 numbers,
+  enough to hold the window around every strike.
+- **Where it goes:** on the core box's base, where the box is fixed to the
+  roof's structure.
+  - **Not on the mast,** which sways in wind.
+  - **Not on the lid,** where the solar panel catches the wind.
+  - **The wind and rain floor:** measure it before trusting a small peak.
+
+**It can start indoors, long before the station.** The current panel's I2C bus
+(SDA on GPIO6, SCL on GPIO7) has the AS3935 at 0x03 and the MAX17048 at 0x36,
+so 0x6A is free.
+- **Fix it** to a wall or the floor, not the desk: a desk's own wobble
+  amplifies footsteps, not thunder.
+- **One storm** says what peak a strike you felt gives, against the ones you
+  did not.
+
+### The thunder: a fast barometer
+
+The thunder's energy is mostly low-frequency and infrasound, which an electret
+microphone loses and a pressure sensor catches.
+- **The part:** an LPS22HH, DPS310 or BMP390, at 100–200 samples a second.
+  There is about a pascal of noise against tens of pascals from close thunder
+  (approx.).
+- **The addresses:** the LPS22HH answers at 0x5C or 0x5D, the DPS310 at 0x76
+  or 0x77; none clashes on bus A.
+- **On the roof it needs a wind shield,** porous foam over a static port, or
+  gusts swamp it. It sits in the core box with a vented port, or beside the
+  SHT45's shield.
+- **Later, not at first:** none is on hand, and the accelerometer answers the
+  question that started this, whether the house shook.
+
 ## Link and remote care
 
 The FireBeetle's own C6 is the radio, from Rust on ESP-IDF through ESP-Hosted
@@ -818,6 +883,9 @@ before it:
   turntable or across the yard?
 - [ ] **Daytime direction.** Is the gain switch enough, or is a 780 nm filter
   worth adding?
+- [ ] **A felt strike.** What peak does the LSM6DSO32, indoors on a wall, give
+  for a strike that shook the house, against one that did not? One storm
+  answers it.
 
 ## Sources
 
