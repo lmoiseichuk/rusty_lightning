@@ -30,7 +30,7 @@
 <text x="832.0" y="262.0" font-size="12" text-anchor="start" fill="#1f2933">ESP32-C3 each</text>
 <text x="832.0" y="280.0" font-size="12" text-anchor="start" fill="#1f2933">BPW34, TEMT6000</text>
 <text x="832.0" y="298.0" font-size="12" text-anchor="start" fill="#1f2933">MAX4466, MS3625</text>
-<text x="832.0" y="316.0" font-size="12" text-anchor="start" fill="#1f2933">on for storms</text>
+<text x="832.0" y="316.0" font-size="12" text-anchor="start" fill="#1f2933">on all the time</text>
 <rect x="320.0" y="405.0" width="230.0" height="88.0" rx="8" fill="#e0f4f4" stroke="#2c7a7b" stroke-width="1.6"/>
 <text x="332.0" y="427.0" font-size="14" font-weight="bold" text-anchor="start" fill="#2c7a7b">Time and weather</text>
 <text x="332.0" y="445.0" font-size="12" text-anchor="start" fill="#1f2933">GNSS with PPS: the octagon</text>

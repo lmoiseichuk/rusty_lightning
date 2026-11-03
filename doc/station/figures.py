@@ -256,7 +256,7 @@ def overview():
     )
     ring = figure.box(
         820, 222, 180, "8 flash sensors",
-        ["ESP32-C3 each", "BPW34, TEMT6000", "MAX4466, MS3625", "on for storms"],
+        ["ESP32-C3 each", "BPW34, TEMT6000", "MAX4466, MS3625", "on all the time"],
         LIGHT,
     )
     time = figure.box(
@@ -595,7 +595,7 @@ def power():
     figure.line([rows[0][1]["right"], (955, 95), (955, 330)], POWER[1], width=2.4, arrow_end=True)
     regulator = figure.box(340, 330, 210, "3.3 V regulator", ["in the octagon, behind", "a switch: off at reset"], POWER)
     boost = figure.box(580, 330, 220, "Straight from cell 1", ["into the FireBeetle's VCC", "a 5 V boost in reserve"], POWER)
-    switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on for storms"], POWER)
+    switch = figure.box(870, 330, 170, "Switched rail", ["AO3401A + AO3400", "on all the time"], POWER)
     for x in (445, 690):
         figure.line([(x, core_bus_y), (x, 330)], POWER[1], arrow_end=True)
     loads = figure.box(340, 440, 210, "The octagon", ["SEN0290s, SHT45, QMI8658C,", "PCA9548A, the pull-ups"], STATION)
@@ -614,7 +614,7 @@ def power():
 
 def lane():
     figure = Figure("lane", 960, 450)
-    figure.text(20, 30, "The switched rail: the eight lanes, off by default, on for storms", 16, bold=True)
+    figure.text(20, 30, "The switched rail: the eight lanes, off at reset, then on all the time", 16, bold=True)
     pull_up, series, miller = 100e3, 10e3, 220e-9
     # Assumptions for the switch-on estimate, marked approx. in the text: the
     # AO3401A's gate sits about 1.2 V below its source while the lane rises (its
