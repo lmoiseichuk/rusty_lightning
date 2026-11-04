@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-#
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Run the host checks in tests/, check the generated docs, then the release build.
 #
 #     ./tools/check.sh

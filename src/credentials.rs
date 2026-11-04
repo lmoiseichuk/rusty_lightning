@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The access point's name and password.
 //!
 //! Both live in NVS so they survive a reflash and a filesystem format, and both

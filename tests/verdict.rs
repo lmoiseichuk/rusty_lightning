@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the tuning window's verdict.
 //!
 //! **This compiles the real `src/verdict.rs`**, included by path — not a copy.

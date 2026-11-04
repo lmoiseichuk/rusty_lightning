@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The strike log: a CSV file on LittleFS, surviving power cuts (§5).
 //!
 //! Lines are appended as strikes happen, buffered in RAM, and `fsync`ed once a

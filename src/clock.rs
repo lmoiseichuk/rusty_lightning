@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Wall-clock time without a network (§5).
 //!
 //! ## "Fake NTP": a persisted epoch plus uptime

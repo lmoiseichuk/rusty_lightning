@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! When a walk over the whole strike log stops for a tick, so the task
 //! watchdog cannot fire.
 //!

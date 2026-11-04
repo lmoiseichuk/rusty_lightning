@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Which clock-and-sleep policy to run, as pure arithmetic.
 //!
 //! **Free of ESP-IDF so it can be host-tested.** `power` owns the registers —

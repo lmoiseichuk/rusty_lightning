@@ -1,3 +1,9 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//! Reworked from DFRobot's MicroPython driver for the SEN0290, `MicroPython/DFRobot_AS3935_Lib.py`
+//! and its example `MicroPython/example/DFRobot_AS3935_detailed.py`
+//! (https://github.com/DFRobot/DFRobot_AS3935), Copyright (c) 2020 DFRobot (MIT License; the
+//! example's own header says Copyright DFRobot 2018, GNU Lesser General Public License).
+//!
 //! AS3935 franklin lightning sensor — register driver (§3).
 //!
 //! Ported from DFRobot's MicroPython library (`DFRobot_AS3935_Lib.py` +

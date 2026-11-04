@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Bring-up: everything that happens once, before the loop.
 //!
 //! **Split from `main` because it is a different kind of code.** Bring-up runs
@@ -320,7 +322,7 @@ pub fn configure(
     // **A stored value below the default is left alone, and said every boot.**
     // The default became the chip's own 2 in 0.22.0; a board told `srej 1`
     // before that keeps 1, because only a person writes this setting and the
-    // device does not overrule one -- LM is to judge 1 against 2 in the field,
+    // device does not overrule one -- 1 against 2 is mine to judge in the field,
     // and a firmware that moved it quietly would be a second variable in every
     // comparison across the flash. See `defence::SPIKE_REJECTION_DEFAULT`.
     //

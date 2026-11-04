@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the event-logging budget.
 //!
 //! **This compiles the real `src/budget.rs`**, included by path.

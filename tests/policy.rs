@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the clock-and-sleep policy.
 //!
 //! **This compiles the real `src/policy.rs`**, included by path.

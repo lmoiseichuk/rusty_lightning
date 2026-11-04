@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 """Read the console, touching DTR/RTS as little as pyserial allows.
 
     ./tools/watch.py [port] [seconds]

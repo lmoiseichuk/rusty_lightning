@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for §4.2's packed defence point.
 //!
 //! Worth testing because the bit layout *is* the design — and because the

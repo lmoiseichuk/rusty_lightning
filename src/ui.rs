@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Screen layout (§6).
 //!
 //! Draws into a plain framebuffer and never touches SPI — `display` owns the

@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The station's first bench check: does the FireBeetle's ESP32-C6 work as its
 //! radio, and does the board keep running on a bare Li-ion cell?
 //!

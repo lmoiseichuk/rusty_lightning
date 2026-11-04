@@ -1,3 +1,8 @@
+// lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+// Reworked from esp-serial-flasher's `examples/esp32_sdio_example/main/main.c`
+// (https://github.com/espressif/esp-serial-flasher, commit ddf3cdd8fa87), Copyright 2026
+// Espressif Systems (Shanghai) CO LTD (Unlicense OR CC0-1.0).
+
 /* Reflash the FireBeetle 2 ESP32-P4's on-board ESP32-C6 over SDIO, from the P4.
  *
  * Based on esp-serial-flasher's esp32_sdio_example (Unlicense / CC0). The C6's

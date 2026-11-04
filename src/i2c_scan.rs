@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Who is on the bus, and is it the right who.
 //!
 //! This is bring-up code and it stays in the tree, because "the sensor stopped

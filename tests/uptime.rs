@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for interval arithmetic across the 49.7-day wrap.
 //!
 //! **This compiles the real `src/uptime.rs`**, included by path. The bug it

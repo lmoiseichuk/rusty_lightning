@@ -345,7 +345,7 @@ On lightning read **distance** (reg 0x07 & 0x3F, km) and **energy** (`(0x06 & 0x
 > 2 ms goes the same way. The banner still reads `0x3A`/`0x3B` straight after, and the antenna
 > self-test still runs after that.
 >
-> Changed without a storm, against the paragraph above, because LM asked for the datasheet's
+> Changed without a storm, against the paragraph above, because I asked for the datasheet's
 > procedure and the banner is the check that costs nothing: 0.21.2 read
 > `TRCO done, SRCO done (0x3A=0x9C 0x3B=0x9E)`. Anything but *done* twice on the first 0.22.x boot is
 > the evidence to go back on, and `MASK_DISPLAY_SRCO` is the whole of the bit change; the order is

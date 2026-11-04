@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Lightning-detector terminal — bring-up.
 //!
 //! Build order steps 1–3 (§10): prove the toolchain and console, find who is on

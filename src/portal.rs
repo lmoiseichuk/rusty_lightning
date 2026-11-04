@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The access point and the web server it carries.
 //!
 //! Raised by a long press on BOOT, dropped by another one or by its own window

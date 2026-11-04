@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! When the panel is redrawn, and what goes on it.
 //!
 //! **The refresh policy and the chart scratch, in one place.** Both were loop

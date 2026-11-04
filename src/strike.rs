@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! What a strike is, with no hardware attached.
 //!
 //! ## Why these two types live apart from the driver that produces them

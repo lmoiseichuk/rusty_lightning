@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Folding return strokes into flashes (§4.3).
 //!
 //! **Free of ESP-IDF so it can be host-tested**, like `defence`, `verdict`,

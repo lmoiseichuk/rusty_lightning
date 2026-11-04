@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Comparing times on a counter that wraps.
 //!
 //! **Free of ESP-IDF so the wrap is host-tested**, like `defence`, `verdict`,

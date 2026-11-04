@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! MAX17048 LiPo fuel gauge (§2.1).
 //!
 //! On the shared I2C bus at **0x36**, powered from the cell in its own JST

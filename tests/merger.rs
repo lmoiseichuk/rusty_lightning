@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the merge window (§4.3).
 //!
 //! **This compiles the real `src/merger.rs`**, included by path. It had no

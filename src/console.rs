@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Commands in over USB, and the awake signal that comes with them.
 //!
 //! ## Why the console decides the power policy

@@ -1,3 +1,5 @@
+# garden project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Which boards a project has, and which of them a script may touch.
 #
 # **Each project works with its own boards, and only those.** A project keeps

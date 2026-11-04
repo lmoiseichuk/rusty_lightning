@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! How many disturber and noise rows the strike log can afford.
 //!
 //! **Free of ESP-IDF so the arithmetic can be host-tested.** `log` owns the

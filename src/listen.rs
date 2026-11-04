@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The event loop.
 //!
 //! **A loop skeleton calling named steps**, which is what the decomposition was

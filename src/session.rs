@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! What a wake loop iteration accumulates, and what the screen is redrawn for.
 //!
 //! Split out of `main` because these grew there rather than belonging there:

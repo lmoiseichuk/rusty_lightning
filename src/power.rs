@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Clock and sleep policy (§7).
 //!
 //! Two policies — `Awake` at 160 MHz with no sleep, `Frugal` at 80/10 MHz with

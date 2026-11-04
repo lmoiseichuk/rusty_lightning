@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Reading a log row back, whatever shape the file is.
 //!
 //! **Free of ESP-IDF so it can be host-tested**, like `defence` and `verdict`.

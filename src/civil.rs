@@ -1,3 +1,8 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//! Reworked from Howard Hinnant's days_from_civil and civil_from_days, "chrono-Compatible
+//! Low-Level Date Algorithms" (https://howardhinnant.github.io/date_algorithms.html), which
+//! he donated to the public domain.
+//!
 //! Unix timestamp to calendar date, with no hardware and no library.
 //!
 //! **Free of ESP-IDF _and_ of every crate dependency**, so it host-tests under

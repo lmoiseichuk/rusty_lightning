@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Strike history, bucketed by time (§4.3, §6).
 //!
 //! Feeds two things: the "last hour" statistics on screen, and the day / week /

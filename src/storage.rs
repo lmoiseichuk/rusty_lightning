@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API.
 //!
 //! Carried over from the moisture project, minus what this design does not

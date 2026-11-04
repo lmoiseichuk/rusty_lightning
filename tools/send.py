@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 """Type console commands into the board once it is listening, and show the replies.
 
     ./tools/send.py --clock                    # set the clock to the host's, now

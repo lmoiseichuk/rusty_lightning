@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 """Draw the station proposal's pictures: doc/station/*.svg.
 
     python3 doc/station/figures.py    # writes the SVGs beside this file

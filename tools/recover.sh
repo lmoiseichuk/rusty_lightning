@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-#
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Recover a board that will not flash.
 #
 #     ./tools/recover.sh [port] [max-attempts]

@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the web UI's query parsing and escaping.
 //!
 //! **This compiles the real `src/query.rs`**, included by path.

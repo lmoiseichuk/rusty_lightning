@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! §4.2's noise decision: one window, one verdict, one step.
 //!
 //! **The island `listen` used to spread across nine locals** — the point, the

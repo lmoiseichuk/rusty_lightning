@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the pacing of walks over the whole strike log: that a walk
 //! blocks often enough, and for long enough, that the task watchdog never fires.
 //!

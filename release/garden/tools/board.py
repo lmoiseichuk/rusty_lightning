@@ -1,3 +1,5 @@
+# garden project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 """Ask garden's board.sh whether a project may open a port or touch a board.
 
 The answer comes from the project's own `devices.list`: board.sh, in the

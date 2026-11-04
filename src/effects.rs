@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Applying the console's hardware effects.
 //!
 //! **`commands` decides, this acts.** `commands::run` is deliberately pure — its

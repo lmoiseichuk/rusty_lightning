@@ -1,3 +1,5 @@
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # lightning's boards, and the rules for touching one -- garden's `tools/board.sh`,
 # from this repository's `garden` submodule, reading lightning's own
 # `devices.list` at the repository's root.

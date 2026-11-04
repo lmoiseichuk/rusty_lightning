@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-#
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Flash a built image from release/, without building anything.
 #
 #     ./release/flash.sh default

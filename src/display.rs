@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The 7.5" panel — hardware only (§6).
 //!
 //! UC8179 controller, 800×480, monochrome, on Seeed's XIAO ePaper driver board.

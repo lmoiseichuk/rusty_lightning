@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-#
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Rebuild every image in release/ from the current commit.
 #
 #     ./tools/release.sh                 # every variant

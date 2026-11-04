@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The settings that were in force when the device last heard lightning.
 //!
 //! **The one unambiguous signal this device ever gets.** Everything else it
@@ -71,7 +73,7 @@ use crate::strike::Distance;
 /// in eleven minutes, seven at 6-14 km and six `overhead`. Three of the six
 /// came 6-9 s after another detection and three 44-66 s after, so they are not
 /// one echo pattern; and the log cannot say which detections were the two
-/// strikes LM heard. The six carried 98,724-463,994 raw against 12,842-150,818
+/// strikes I heard. The six carried 98,724-463,994 raw against 12,842-150,818
 /// for the seven, which is not a second observation: the chip estimates
 /// distance from the stored energies of recent events (datasheet v1-04,
 /// page 33), so a high energy and the nearest bin are one reading. Nor does a

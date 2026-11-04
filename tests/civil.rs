@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the calendar arithmetic.
 //!
 //! **This compiles the real `src/civil.rs`**, included by path.

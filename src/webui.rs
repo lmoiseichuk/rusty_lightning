@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! The page the access point serves.
 //!
 //! The parsing and escaping live in [`crate::query`], which is free of

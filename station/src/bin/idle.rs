@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Leaves the on-board ESP32-C6 alone, so it can be reflashed through its pads.
 //!
 //! The P4 drives the C6's EN pin from GPIO54 (DFRobot's schematic V1.0), and

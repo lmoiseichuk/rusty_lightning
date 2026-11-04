@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! What survives a power cut, and nothing else.
 //!
 //! **Storage only** — no interpretation and no policy. Right now that is one

@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! What the console commands actually do (§5).
 //!
 //! Split from `main` because it was the largest single thing in the wake loop —

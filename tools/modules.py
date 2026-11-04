@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 """Derive the module map in doc/modules.md from the source.
 
 **Generated, not written**, for the same reason the schematics are: a map of
@@ -92,9 +95,25 @@ def summary(text):
     the module does less than it does. Joins continuation lines until the
     sentence ends, and stops at the blank line that separates the summary from
     the body.
+
+    **The copyright notice is not the summary.** Every file opens with a
+    `//! lightning project, Copyright ...` paragraph -- one line, or more where
+    it names the code a file was reworked from -- and a bare `//!` under it.
+    Read as the opening sentence, that notice would be every module's summary,
+    so the paragraph it starts is skipped first.
     """
+    lines = text.splitlines()
+    if lines and lines[0].startswith("//!") and "Copyright" in lines[0]:
+        notice_lines = 0
+        for line in lines:
+            if not line.strip().startswith("//!"):
+                break
+            notice_lines += 1
+            if line.strip() == "//!":
+                break
+        lines = lines[notice_lines:]
     collected = []
-    for line in text.splitlines():
+    for line in lines:
         stripped = line.strip()
         if not stripped.startswith("//!"):
             if collected:

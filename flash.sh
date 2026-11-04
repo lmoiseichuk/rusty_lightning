@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-#
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Flash the lightning terminal.
 #
 #   ./flash.sh                    # build + flash, then print the monitor line

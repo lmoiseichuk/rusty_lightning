@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Reading a query string, and escaping what goes back out.
 //!
 //! Two halves, and the split is deliberate. [`command_from_query`] and the

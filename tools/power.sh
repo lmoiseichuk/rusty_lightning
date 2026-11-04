@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+# lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 # Cut and restore USB power to one of lightning's boards, addressed by its MAC
 # -- garden's `tools/power.sh`, from this repository's `garden` submodule. A
 # board not on lightning's `devices.list`, or flagged `forbidden` there, is

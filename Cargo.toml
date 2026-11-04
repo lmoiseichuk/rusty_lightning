@@ -1,7 +1,7 @@
 [package]
 name = "lightning"
 version = "0.22.3"
-authors = ["LM"]
+authors = ["Leonid Moiseichuk"]
 edition = "2024"
 # **Cargo must not discover `tests/`.**
 #

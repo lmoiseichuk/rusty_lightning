@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! What the device can say about itself: clock, die temperature, free heap.
 //!
 //! Everything here is about the *computer* rather than about the weather, which

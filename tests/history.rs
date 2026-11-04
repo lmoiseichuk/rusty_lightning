@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the strike history rings.
 //!
 //! Worth testing because a ring's failures are all quiet ones. A gap that is

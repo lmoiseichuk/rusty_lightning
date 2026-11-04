@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! What one tuning window saw, and the verdict it supports.
 //!
 //! **Free of ESP-IDF on purpose**, like `defence` and for the same reason: the

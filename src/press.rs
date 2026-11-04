@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Telling a fingertip from a USB host, and one gesture from another.
 //!
 //! **Free of ESP-IDF so the timing bands are host-tested**, like `defence`,

@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for the known-good settings record.
 //!
 //! **This compiles the real `src/golden.rs`**, included by path.

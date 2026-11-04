@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! How hard the sensor is trying to reject noise (§4.2), as **one 3-bit
 //! number**.
 //!
@@ -216,7 +218,7 @@ pub const SPIKE_REJECTION_POWER_ON: u8 = 2;
 /// man-made stream through for nine days. 2 is what the chip resets to, and
 /// what [`crate::as3935::As3935::set_spike_rejection`] has always said a storm
 /// was seen to work at. Whether 1 or 2 is right for this room is
-/// LM's to judge in the field; until then the resting value is the one with
+/// mine to judge in the field; until then the resting value is the one with
 /// the shorter list of known failures, and `srej 1` is one command away.
 ///
 /// **A stored value is a person's, and the device does not change it on its

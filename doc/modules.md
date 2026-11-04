@@ -84,66 +84,66 @@ this table is generated from it.
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `listen` | The event loop. | -- | 938 |
+| `listen` | The event loop. | -- | 940 |
 
 ### The sensor and what it hears
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 759 |
-| `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 576 |
-| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/verdict.rs` | 233 |
-| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1171 |
-| `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 93 |
-| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1116 |
-| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/golden.rs`, `tests/verdict.rs` | 328 |
+| `as3935` | AS3935 franklin lightning sensor — register driver (§3). | -- | 765 |
+| `defence` | How hard the sensor is trying to reject noise (§4.2), as **one 3-bit number**. | pure, `tests/defence.rs` | 578 |
+| `merger` | Folding return strokes into flashes (§4.3). | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/verdict.rs` | 235 |
+| `session` | What a wake loop iteration accumulates, and what the screen is redrawn for. | -- | 1173 |
+| `strike` | What a strike is, with no hardware attached. | pure, `tests/golden.rs`, `tests/history.rs`, `tests/merger.rs`, `tests/verdict.rs` | 95 |
+| `tuning` | §4.2's noise decision: one window, one verdict, one step. | -- | 1118 |
+| `verdict` | What one tuning window saw, and the verdict it supports. | pure, `tests/golden.rs`, `tests/verdict.rs` | 330 |
 
 ### Keeping it
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `budget` | How many disturber and noise rows the strike log can afford. | pure, `tests/budget.rs` | 65 |
-| `civil` | Unix timestamp to calendar date, with no hardware and no library. | pure, `tests/civil.rs` | 88 |
-| `clock` | Wall-clock time without a network (§5). | -- | 194 |
-| `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 144 |
-| `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 509 |
-| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 676 |
-| `settings` | What survives a power cut, and nothing else. | -- | 473 |
-| `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 188 |
+| `budget` | How many disturber and noise rows the strike log can afford. | pure, `tests/budget.rs` | 67 |
+| `civil` | Unix timestamp to calendar date, with no hardware and no library. | pure, `tests/civil.rs` | 93 |
+| `clock` | Wall-clock time without a network (§5). | -- | 196 |
+| `csv` | Reading a log row back, whatever shape the file is. | pure, `tests/csv.rs` | 146 |
+| `history` | Strike history, bucketed by time (§4.3, §6). | pure, `tests/history.rs` | 511 |
+| `log` | The strike log: a CSV file on LittleFS, surviving power cuts (§5). | -- | 678 |
+| `settings` | What survives a power cut, and nothing else. | -- | 475 |
+| `storage` | Non-volatile storage — thin wrappers over ESP-IDF's `nvs_*` API. | -- | 190 |
 
 ### The glass
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `display` | The 7.5" panel — hardware only (§6). | -- | 566 |
-| `screen` | When the panel is redrawn, and what goes on it. | -- | 291 |
-| `ui` | Screen layout (§6). | -- | 1452 |
+| `display` | The 7.5" panel — hardware only (§6). | -- | 568 |
+| `screen` | When the panel is redrawn, and what goes on it. | -- | 293 |
+| `ui` | Screen layout (§6). | -- | 1454 |
 
 ### Talking to a person
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `commands` | What the console commands actually do (§5). | -- | 680 |
-| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 599 |
-| `credentials` | The access point's name and password. | -- | 145 |
-| `effects` | Applying the console's hardware effects. | -- | 667 |
-| `portal` | The access point and the web server it carries. | -- | 644 |
-| `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 162 |
-| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 425 |
-| `webui` | The page the access point serves. | -- | 298 |
+| `commands` | What the console commands actually do (§5). | -- | 682 |
+| `console` | Commands in over USB, and the awake signal that comes with them. | -- | 601 |
+| `credentials` | The access point's name and password. | -- | 147 |
+| `effects` | Applying the console's hardware effects. | -- | 669 |
+| `portal` | The access point and the web server it carries. | -- | 646 |
+| `press` | Telling a fingertip from a USB host, and one gesture from another. | pure, `tests/press.rs` | 164 |
+| `query` | Reading a query string, and escaping what goes back out. | pure, `tests/query.rs` | 427 |
+| `webui` | The page the access point serves. | -- | 300 |
 
 ### The board underneath
 
 | module | what it owns | tested | lines |
 |---|---|---|---|
-| `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 772 |
-| `boot` | Bring-up: everything that happens once, before the loop. | -- | 497 |
-| `i2c_scan` | Who is on the bus, and is it the right who. | -- | 100 |
-| `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 110 |
-| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 204 |
-| `power` | Clock and sleep policy (§7). | -- | 223 |
-| `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 256 |
-| `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs`, `tests/verdict.rs` | 70 |
+| `battery` | MAX17048 LiPo fuel gauge (§2.1). | -- | 774 |
+| `boot` | Bring-up: everything that happens once, before the loop. | -- | 499 |
+| `i2c_scan` | Who is on the bus, and is it the right who. | -- | 102 |
+| `pace` | When a walk over the whole strike log stops for a tick, so the task watchdog cannot fire. | pure, `tests/pace.rs` | 112 |
+| `policy` | Which clock-and-sleep policy to run, as pure arithmetic. | pure, `tests/policy.rs` | 206 |
+| `power` | Clock and sleep policy (§7). | -- | 225 |
+| `system` | What the device can say about itself: clock, die temperature, free heap. | -- | 258 |
+| `uptime` | Comparing times on a counter that wraps. | pure, `tests/golden.rs`, `tests/merger.rs`, `tests/pace.rs`, `tests/policy.rs`, `tests/uptime.rs`, `tests/verdict.rs` | 72 |
 
 **Unclassified** (add them to `ROLES` in `tools/modules.py`): `golden`
 

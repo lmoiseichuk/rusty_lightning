@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+
 use std::{env, fmt::Write as _, fs, path::PathBuf};
 
 fn main() {

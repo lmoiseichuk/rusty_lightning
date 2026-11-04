@@ -1,3 +1,5 @@
+//! lightning project, Copyright (c) 2026 Leonid Moiseichuk under MIT License
+//!
 //! Host checks for reading a log row back.
 //!
 //! **This compiles the real `src/csv.rs`**, included by path. It exists because
