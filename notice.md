@@ -29,7 +29,7 @@ need without this file, which names the same things with their history, and what
 | LittleFS | not in the repository: the `joltwallet/littlefs` component, fetched at build | Brian Pugh's `esp_littlefs`, around the littlefs project's `littlefs` | MIT, and BSD-3-Clause | yes |
 | The C6 reflash program | `station/c6_reflash/main.c` | Espressif's esp-serial-flasher, `examples/esp32_sdio_example` | Unlicense OR CC0-1.0 | no: a one-off bench program |
 | The Rust template | `.gitignore`, lines 1-21 | GitHub's gitignore templates, `Rust.gitignore` | CC0 1.0 | no |
-| Copies of four of garden's files | `release/garden/` | garden, my own project | MIT | no: host tools and its licence |
+| Copies of five of garden's files | `release/garden/` | garden, my own project | MIT | no: host tools and its licence |
 | The boot logo, since `d3e2f16b67b3` | `assets/logo.pbm` | drawn for these projects | MIT, as the project | yes: the `default` image, 0.22.4 |
 | The earlier boot logo | `assets/logo.pbm` until `d3e2f16b67b3`, and in the history | **not recorded** | **not recorded** | yes: the `no-light-sleep` image, 0.22.3; see [Origin to be confirmed](#origin-to-be-confirmed) |
 
@@ -222,9 +222,9 @@ When it has an image, that image gets its own `licences/` beside it, generated b
 
 ## garden
 
-`garden/` is a submodule, and `release/garden/` holds copies of four of its files
-(`tools/board.sh`, `tools/board.py`, `devices.list.example` and its `license`) that
-`tools/release.sh` puts there.
+`garden/` is a submodule, and `release/garden/` holds copies of five of its files
+(`tools/board.sh`, `tools/board.py`, `tools/portlock.py`, `devices.list.example`
+and its `license`) that `tools/release.sh` puts there.
 garden is my own project, MIT, with its own notice:
 <https://github.com/lmoiseichuk/garden/blob/main/notice.md>.
 

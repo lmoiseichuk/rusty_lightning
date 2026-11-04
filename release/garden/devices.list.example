@@ -1,4 +1,5 @@
-# A project's boards: `name  MAC  [hub  port]  [flags]  [serial=<usb serial>]  [# why]`.
+# A project's boards: `name  MAC  [hub  port]  [flags]  [serial=<usb serial>]
+# [path=<by-path name>]  [# why]`.
 #
 # **Each project keeps its own**, at its root, listing only the boards that
 # project works with. Copy this file there as `devices.list` (gitignored) and put
@@ -26,6 +27,11 @@
 # A board with no MAC -- a small sensor flashed over a debug probe -- carries the
 # id it derives from its die in the MAC's column, as the panel prints it.
 #
+# **Each identity once, and each name once.** Every lookup goes by the identity
+# column (or the name) and takes the first entry that has it, so a second
+# entry with the same MAC is never reached -- its `path=`, `serial=` and flags
+# are silently ignored.
+#
 # `hub` and `port` are optional: `power.sh` finds them in sysfs while the board
 # is plugged in, which is where the truth is. Recorded, they are what lets it
 # cut a board that has stopped enumerating.
@@ -35,8 +41,50 @@
 #   serial=<serial>   the USB serial of a console reached through a bridge with
 #                     a serial of its own -- a CH343 -- which is not the board's
 #                     MAC. It lets a port be traced to its board without opening
-#                     it. A CH340 has no serial at all, and its port is refused
-#                     by every check that asks which board is behind it.
+#                     it.
+#
+# ## path
+#
+#   path=<name>       for a board behind a bridge with no USB serial at all -- a
+#                     CH340 -- the name of its socket under /dev/serial/by-path/,
+#                     as `ls /dev/serial/by-path/` prints it (the whole path is
+#                     read the same). Without it, such a port is refused by every
+#                     check that asks which board is behind it, because sysfs
+#                     cannot say.
+#
+# **A by-path name identifies the socket, not the board.** It is named after
+# the USB port the bridge is plugged into, so whatever serial-less board sits in
+# that socket is taken for this entry's board -- move the board, and the entry
+# no longer finds it; plug another CH340 board in, and the entry finds that.
+# What keeps a flash script built on `tools/board.sh` from writing to the wrong
+# board, and what does not:
+#
+# * a device that has a serial of its own is always named by that serial, so a
+#   board with one is never taken for a `path=` entry's board merely for sitting
+#   in its socket -- it is taken for itself, which is right, but it may be
+#   another of the project's boards than the one the image is for;
+# * **so the flash script names the board its image is for**, and
+#   `board_is` and `board_flash_guard` refuse the port when the board behind
+#   it is any other;
+# * **and it confirms a `path=` board before it writes**, from the MAC espflash
+#   reads out of the chip on connect. `espflash board-info` prints it and
+#   writes nothing; `board_flash_guard` refuses a `path=` board unless it is
+#   given that output and the MAC is this entry's (`board_confirm_mac`).
+#
+# board-info opens the port, and opening it resets the chip, so the port is
+# checked and the board's lock taken first, and every line's status checked:
+#
+#       socket="$(board_is "$PORT" "flashing the wrong board replaces its firmware" display)" || exit 1
+#       lock="$(board_lock_path "$(board_of_port "$socket")")" || exit 1
+#       exec 9>>"$lock" || exit 1
+#       flock -n 9 || exit 1
+#       info="$(espflash board-info --chip esp32 --port "$socket" 2>&1)" || exit 1
+#       port="$(board_flash_guard "$socket" esp32 "$info" display)" || exit 1
+#
+# None of that holds for a script that leaves a step out. A console tool opens
+# the port on the socket's word alone, and opening a CH340's port can restart
+# the board behind it -- so keep a `path=` board in its own socket, and give
+# the entry its `hub port` too.
 #
 # ## flags
 #
@@ -50,8 +98,9 @@
 #
 # `board.sh` refuses -- by MAC, wherever the board is plugged in -- a board that
 # is not on this list, one flagged `forbidden`, and no board named at all; and a
-# port whose board it cannot tell. Every one of those fails closed, because the
-# board that must not be touched is exactly the one a confused invocation would
+# port whose board it cannot tell: no serial and no `path=` naming its socket, or
+# a serial no entry claims. Every one of those fails closed, because the board
+# that must not be touched is exactly the one a confused invocation would
 # otherwise reach.
 #
 # `board_mac` with no name, as a project's flash script uses it, takes the first
@@ -64,4 +113,5 @@
 # name       MAC                  hub    port   flags       # why
 # example    AA:BB:CC:DD:EE:FF    5-1    2
 # bridged    11:22:33:44:55:66                serial=0123456789   # a console through a CH343
-# probe      11:22:33:44:55:66                forbidden           # replug to recover, never cut its power
+# display    AA:BB:CC:11:22:33    5-1    3      path=pci-0000:00:14.0-usb-0:1.3:1.0-port0   # a CH340: its socket
+# probe      11:22:33:AA:BB:CC                forbidden           # replug to recover, never cut its power

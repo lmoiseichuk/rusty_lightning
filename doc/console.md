@@ -891,9 +891,10 @@ lightning   AA:BB:CC:DD:EE:FF   1-1  1
 spare       11:22:33:44:55:66              # a second C3 terminal, for the bench
 ```
 
-The first entry is the default; `BOARD=spare ./flash.sh` picks another, and
-`BOARD_MAC=AA:BB:… ./flash.sh` overrides both for one command — and is still
-checked against the list. The file is gitignored, so no device identity is
+The reading tools (`send.py`, `watch.py`, `recover.sh`) default to the first entry; the flash
+scripts default to the entry named `lightning`, since a write should never go to whichever board
+happens to be listed first. `BOARD=spare ./flash.sh` picks another, and `BOARD_MAC=AA:BB:…
+./flash.sh` overrides both for one command — and is still checked against the list. The file is gitignored, so no device identity is
 committed.
 
 **Each project works with its own boards, and only those.** Every script here
@@ -920,7 +921,7 @@ can say *which* one, and "it is `spare`" is a sentence somebody acts on where a
 bare MAC is one they squint at:
 
 ```
-⚠ /dev/ttyACM0 is not the configured board.
+⚠ /dev/ttyACM0 is not the board meant.
   it is:     spare (11:22:33:44:55:66), /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_11:22:33:44:55:66-if00
   expected:  lightning (AA:BB:CC:DD:EE:FF)
 If it is the board you mean, name it:  BOARD=spare
@@ -936,19 +937,39 @@ they open the port. Once a port has checked out, a script uses the board's
 `/dev/serial/by-id` path, named after its USB serial, so a ttyACM number cannot
 change hands under it.
 
+**One tool per board.** Every one of them takes the board's lock before it
+opens the port, and holds it until it is done: `tools/send.py` and
+`tools/watch.py` through `tools/portlock.py`, the shell scripts with `flock` on
+the same file (garden's `board_lock_path`). A second tool on the same board is
+refused, with the port unopened, so `tools/recover.sh` cannot erase the chip
+under a running `watch.py`, a flash cannot fight a monitor over the bootloader
+handshake, and two readers never split one reply between them. The lock is
+named after the board, not the ttyACM number, so it follows the board across a
+re-enumeration, and every project's tools meet at it. To hold it by hand around
+`screen` or `picocom`:
+
+```sh
+check="$(python3 tools/portlock.py "$port")" && read -r _ lock <<<"$check" && flock -n "$lock" screen "$port" 115200
+```
+
 **Every write passes `--chip esp32c3`**, so espflash and esptool refuse any
 other chip after connecting and before writing anything. lightning's list can
 hold more than terminals — the station's core is an ESP32-P4 — and an image
 built for the C3 must never land on one.
 
 The rules and the lookups are garden's `tools/board.sh`, in the `garden`
-submodule, and garden's `tools/board.py` asks them for a Python tool.
-`tools/board.sh` here sources garden's and adds lightning's few functions:
-`board_port` (the board's by-id path, found by MAC), `board_is` (whether a port
-is the board meant) and `board_port_stable` (whether lightning may open a port
-at all). It is sourced by `flash.sh` and `tools/recover.sh`, and run by
-`tools/send.py` and `tools/watch.py`. `release.sh` copies it and `send.py` in
-beside the images, and garden's `board.sh` and `board.py` into
+submodule, and garden's `tools/board.py` asks them for a Python tool. So are
+the functions the scripts put together before they open a port —
+`board_port` (the board's by-id path, found by MAC), `board_is` (whether a
+port is the board meant), `board_port_stable` (whether lightning may open a
+port at all), `board_lock_path` (the board's lock) and `board_flash_guard`
+(every check again, immediately before a write, with the board the image is
+for and the chip) — which grew here and moved to garden. `tools/board.sh`
+here sources garden's and keeps only what is lightning's: what this board's
+absence usually means, and which garden to load. It is sourced by `flash.sh`
+and `tools/recover.sh`, and run by `tools/send.py`, `tools/watch.py` and
+`tools/portlock.py`. `release.sh` copies it, `send.py` and `portlock.py` in
+beside the images, and garden's `board.sh`, `board.py` and `portlock.py` into
 `release/garden/tools/`, with garden's `devices.list.example` beside them, so a
 release tree carries the check with it. In lightning's checkout — git says the
 directory above `tools/` or `release/` is the top of a work tree that tracks

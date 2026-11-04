@@ -33,14 +33,22 @@ refused. With no port given, it is the board `board.sh` finds by MAC -- `$BOARD`
 or the list's first -- at its /dev/serial/by-id path. There is no default
 ttyACM number: `/dev/ttyACM0` is whichever device enumerated first, and on a
 bench shared with other projects that is often somebody else's.
+
+**The board is held while this runs.** It takes the board's lock --
+`portlock.claim`, garden's, through `tools/portlock.py` -- before the open, as
+every tool here does, so `tools/recover.sh` cannot erase the chip under a
+watch, `send.py` cannot split the bytes with it, and a second `watch.py` is
+refused rather than left reading half of each line.
 """
 import sys
 import time
 
 import serial
 
-# `send.py`, beside this file, already knows how to run `board.sh` and where
-# garden's `board.py` is; borrowed rather than written twice.
+# `send.py`, beside this file, already knows how to run `board.sh`; borrowed
+# rather than written twice. `portlock` is `tools/portlock.py`, beside it too:
+# importing it loads garden's, and refuses every port when there is none.
+import portlock
 import send
 
 # A bare `int()` here raised an unhandled ValueError on a typo, printing a
@@ -54,8 +62,6 @@ if len(sys.argv) > 2:
         sys.exit(2)
 else:
     seconds = 60
-
-board = send.garden_board()
 
 if len(sys.argv) > 1:
     port = sys.argv[1]
@@ -73,12 +79,12 @@ s.timeout = 1
 s.dtr = False          # GPIO9 strap released -- set BEFORE open()
 s.rts = False          # EN released
 
-# **Asked immediately before the open, every time.** `None` is an explicit
-# allow; anything else is the reason it is refused, including a check that
-# failed to run.
-refusal = board.port_refusal(port)
-if refusal is not None:
-    sys.exit(f"refusing to open {port}: {refusal}")
+# **Asked immediately before the open, every time, and the board held from
+# then on.** `claim` exits, saying why and with the port unopened, unless
+# garden explicitly allows the port -- a check that failed to run is a refusal
+# -- and no other tool holds the board. The holder keeps the lock while it
+# exists, and the process ending lets it go, however it ends.
+holder = portlock.claim(port)
 
 # **`open()` belongs inside the guard.** It sat above the try, so the single
 # most common failure -- the port missing, or already held by another console --
@@ -105,3 +111,6 @@ finally:
         s.close()
     except Exception:
         pass
+    # The port first, then the lock: closed in the other order, another tool
+    # could take the board while this one still had it open.
+    holder.close()

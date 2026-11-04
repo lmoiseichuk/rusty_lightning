@@ -48,16 +48,18 @@ SOURCES="src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defau
 # `release/flash.sh` sources this, so a release tree carries its own identity
 # check rather than depending on the checkout it was built in. `send.py` goes
 # with it because flash.sh's last instruction -- set the clock -- names it, and
-# it finds the board through the `board.sh` beside it.
+# it finds the board through the `board.sh` beside it, and takes the board's
+# lock through the `portlock.py` beside it.
 #
 # lightning's `devices.list` is its own, and never copied; its format is
 # garden's `devices.list.example`, which goes in with garden's tools below.
-SHARED_INTO_RELEASE="tools/board.sh tools/send.py"
+SHARED_INTO_RELEASE="tools/board.sh tools/send.py tools/portlock.py"
 
 # **garden's half of the check goes in too, at `release/garden/`.**
 # `tools/board.sh` is lightning's wrapper around garden's `board.sh`, and
-# `send.py` asks garden's `board.py` before it opens a port -- so a tree copied
-# away from this checkout needs both. Laid out as the submodule is, each file at
+# `send.py` takes the board's lock through garden's `portlock.py`, which asks
+# garden's `board.py` before it opens a port -- so a tree copied away from this
+# checkout needs all three. Laid out as the submodule is, each file at
 # the same path under `release/` as under the checkout's root, so that each
 # finds the list as it does from the submodule: two levels above `tools/`,
 # which for the copy is the release tree's root. The example goes with them
@@ -66,7 +68,7 @@ SHARED_INTO_RELEASE="tools/board.sh tools/send.py"
 # In lightning's checkout the wrapper uses the submodule, so the copy is used
 # only by a tree that is not one. garden's `license` goes with its files, as
 # lightning's `LICENSE` goes with lightning's (below).
-GARDEN_INTO_RELEASE="garden/tools/board.sh garden/tools/board.py garden/devices.list.example garden/license"
+GARDEN_INTO_RELEASE="garden/tools/board.sh garden/tools/board.py garden/tools/portlock.py garden/devices.list.example garden/license"
 
 # **The licence notices go in too, so a copy of release/ owes nothing to the
 # checkout.** The images are lightning's code and other people's: the crates

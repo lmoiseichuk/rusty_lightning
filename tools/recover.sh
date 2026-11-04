@@ -104,6 +104,41 @@ else
     PORT="$(board_is "$ASKED_PORT" "$WHAT")" || exit 1
 fi
 
+# **The board's lock, held for the whole run** -- the one every tool here takes
+# before it opens the port (garden's `board_lock_path`; `tools/portlock.py` for
+# the Python tools). Without it this erased the chip under a running
+# `tools/watch.py`, or under `send.py` reading out the strike log: an erase is
+# the one thing here that cannot be undone, so it is the one that most needs to
+# know nobody else is on the port. A second tool is refused for as long as this
+# runs, the build and every retry included, and this is refused while one of
+# them holds the board.
+#
+# **Taken now, while the port is present**: the lock is named after the board's
+# identity, which is read from sysfs and so needs the board on the bus -- as it
+# is, having just been checked -- whereas the retry loop below is for a port
+# that comes and goes. The lock is on the file, not the port, so it holds
+# across those gaps.
+#
+# **Every line's status is checked.** `board_lock_path` prints nothing and
+# fails for a board that has gone; bash would not stop on the `exec 9>>""`
+# that follows, and a descriptor 9 inherited from a parent would then be
+# locked in place of the board's. Descriptor 9 stays open until this script
+# ends, which is what keeps the lock; the esptool and espflash it runs inherit
+# it, which holds the same lock, not a second one.
+if ! LOCK="$(board_lock_path "$(board_of_port "$PORT")")"; then
+    echo "Refusing: no lock can be named for $PORT -- its board is no longer on the bus. Nothing has been erased." >&2
+    exit 1
+fi
+if ! exec 9>>"$LOCK"; then
+    echo "Refusing: the lock file $LOCK cannot be opened. Nothing has been erased." >&2
+    exit 1
+fi
+if ! flock -n 9; then
+    echo "Refusing: $PORT is held by another tool -- a watch.py, a send.py, a flash." >&2
+    echo "Stop it first; erasing under it would lose what it is reading. Nothing has been erased." >&2
+    exit 1
+fi
+
 # Why `$PORT` must not be opened now, printed with success, or nothing and
 # failure when it may -- garden's `board_port_refusal`, asked of sysfs
 # immediately before every erase and every write, never once for the whole run.

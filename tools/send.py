@@ -58,12 +58,16 @@ restarts whatever is on it.
 board" -- deliberately, to talk to another of lightning's boards without naming
 it in `$BOARD`. It does not skip those refusals.
 
-**Asked again immediately before the open**, of garden's `board.py`, which
-reads sysfs and never the port, and fails closed: a check that could not run
-is a refusal.
+**Asked again immediately before the open, and the board held while it is
+open.** `portlock.claim` -- garden's, through `tools/portlock.py` -- asks
+garden's `board.py`, which reads sysfs and never the port, and fails closed: a
+check that could not run is a refusal. It then takes the board's lock, which
+every tool here takes before it opens the port, so a second tool on the same
+board -- `watch.py`, `recover.sh`, a flash -- is refused while this runs, and
+this is refused while one of them does: two readers split the bytes between
+them, and an erase under a `dump` loses the log being read.
 """
 import argparse
-import importlib.util
 import os
 import subprocess
 import sys
@@ -95,33 +99,6 @@ def board_helper(function, *arguments):
         text=True,
     )
     return done.returncode, done.stdout.strip()
-
-
-def garden_board():
-    """Garden's `board.py`, imported from the garden lightning's `board.sh`
-    loaded -- the submodule in a checkout, the copy in a release tree -- so the
-    check before the open reads the same list as the checks before it.
-
-    Exits when it cannot be had: a check that cannot run is a refusal, never a
-    pass."""
-    code, tools = board_helper("board_garden_tools")
-    if code != 0 or not tools:
-        sys.exit("refusing: garden's tools could not be found, so no port can be checked")
-    path = os.path.join(tools, "board.py")
-    if not os.path.isfile(path):
-        sys.exit(f"refusing: there is no board.py in {tools}, so no port can be checked")
-    # **Loaded by its path, never by `import board`.** A plain import searches
-    # the module path, and another module of that name can be found first --
-    # Adafruit's Blinka installs one -- or already be loaded, in which case
-    # the import hands that one back without looking. Garden's own instructions
-    # for a Python tool are these three lines: a module object made from this
-    # exact file, under a name nothing else uses.
-    specification = importlib.util.spec_from_file_location("garden_board", path)
-    if specification is None or specification.loader is None:
-        sys.exit(f"refusing: {path} could not be loaded, so no port can be checked")
-    board = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(board)
-    return board
 
 
 def find_port(asked):
@@ -213,7 +190,11 @@ def main():
     if not args.commands and not args.clock:
         parser.error("nothing to send: give commands, or --clock")
 
-    board = garden_board()
+    # `portlock` is `tools/portlock.py`, beside this file -- the script's own
+    # directory is the first place an import looks. Imported here rather than
+    # at the top, so that `--help` works in a tree without garden; importing
+    # it loads garden's, and refuses every port when there is none.
+    import portlock
     where = find_port(args.port)
 
     port = serial.Serial()
@@ -226,11 +207,12 @@ def main():
     port.rts = False
 
     # **Asked immediately before the open, every time** -- garden's rule, since
-    # opening is what restarts the board. `None` is an explicit allow; anything
-    # else is the reason it is refused, including a check that failed to run.
-    refusal = board.port_refusal(where)
-    if refusal is not None:
-        sys.exit(f"refusing to open {where}: {refusal}")
+    # opening is what restarts the board -- **and the board held from then
+    # on.** `claim` exits, saying why and with the port unopened, unless garden
+    # explicitly allows the port and no other tool holds the board. The holder
+    # keeps the lock while it exists, so it is kept in a name until the port
+    # is closed; the process ending lets it go, however it ends.
+    holder = portlock.claim(where)
     try:
         port.open()
     except serial.SerialException as e:
@@ -286,6 +268,9 @@ def main():
             port.close()
         except Exception:
             pass
+        # The port first, then the lock: closed in the other order, another
+        # tool could take the board while this one still had it open.
+        holder.close()
 
 
 if __name__ == "__main__":

@@ -65,8 +65,8 @@ PURPOSE="$(field purpose)"
 # refused by MAC.
 #
 # `board.sh` -- lightning's wrapper -- is copied in beside this file by
-# `tools/release.sh`, and so are garden's `tools/board.sh`, `tools/board.py`
-# and `devices.list.example`, laid out as the submodule is. In lightning's
+# `tools/release.sh`, and so are garden's `tools/board.sh`, `tools/board.py`,
+# `tools/portlock.py` and `devices.list.example`, laid out as the submodule is. In lightning's
 # checkout -- git says the directory above is a work tree whose root tracks
 # `release/board.sh` -- the wrapper uses the submodule and the checkout's
 # `devices.list`; anywhere else, such as a release tree copied away from it,
@@ -81,12 +81,26 @@ PURPOSE="$(field purpose)"
 
 WHAT="flashing the wrong board replaces its firmware"
 
+# **The board these images are for, by name: `lightning`, the terminal.**
+# lightning's list holds more than the terminal -- the station's core, an
+# ESP32-P4, is on it -- and any board on the list may be opened, so "which one
+# is this image for" has to be said, not left to whichever entry comes first.
+# garden's `board_flash_guard` compares the board behind the port with it
+# immediately before the write. `$BOARD`, or `$BOARD_MAC` for a one-off, names
+# another terminal on the list instead; either is still checked against it.
+MEANT="${BOARD_MAC:-${BOARD:-lightning}}"
+
+# **The chip, said once** and given to both the guard and espflash, so the two
+# cannot disagree. espflash told `--chip` refuses any other chip after it
+# connects and before it writes anything.
+CHIP="esp32c3"
+
 if [[ -z "$PORT" ]]; then
     # 1 is an absent board, 2 a refusal; `board_port` has said which on
     # stderr. The advice below is for an absent board only -- after a refusal
     # it would point the way round it.
     status=0
-    PORT="$(board_port)" || status=$?
+    PORT="$(board_port "$MEANT")" || status=$?
     if (( status == 1 )); then
         cat >&2 <<'EOF'
 
@@ -102,7 +116,7 @@ fi
 # The board's by-id path from here on, whatever was given: it is named after
 # the board's USB serial, so it cannot come to mean another board, as a ttyACM
 # number can between this check and the write.
-PORT="$(board_is "$PORT" "$WHAT")" || exit 1
+PORT="$(board_is "$PORT" "$WHAT" "$MEANT")" || exit 1
 
 echo "port    : $PORT"
 echo "variant : $TARGET"
@@ -147,17 +161,56 @@ for f in bootloader.bin partition-table.bin "$IMAGE"; do
     [[ -f "$DIR/$f" ]] || { echo "missing artifact: $DIR/$f" >&2; exit 1; }
 done
 
+# --- the write ----------------------------------------------------------------
+#
+# garden's order, in which **nothing opens the port before it is checked and
+# locked**: the port, asked of sysfs and compared with the board meant (above);
+# the board's lock; for a board known only by its USB socket, the chip's own
+# MAC; and then `board_flash_guard`, immediately before espflash.
+#
+# **The board's lock** -- the one every tool here takes before it opens the
+# port (`tools/portlock.py` for the Python tools) -- so a flash is refused
+# while `send.py` or `watch.py` holds the board, and they are refused while
+# this writes. Two tools on one port fight over the bootloader handshake and
+# fail in ways that look like a bad board. Descriptor 9 stays open until this
+# script ends, which keeps the lock; espflash inherits it, which holds the same
+# lock, not a second one.
+#
+# **Every line's status is checked**, the lock path's too: `board_lock_path`
+# prints nothing and fails for a board that has gone, bash does not stop on the
+# `exec 9>>""` that would follow, and a descriptor 9 inherited from a parent
+# would then be locked in place of the board's.
+SOCKET="$PORT"
+LOCK="$(board_lock_path "$(board_of_port "$SOCKET")")" || exit 1
+exec 9>>"$LOCK" || exit 1
+flock -n 9 || { echo "$SOCKET is held by another tool -- a send.py, a watch.py, a flash. Refusing." >&2; exit 1; }
+
+# **A board known only by its socket** -- a `path=` entry, a bridge with no USB
+# serial -- can be told only by the chip: `espflash board-info` reads its MAC
+# and writes nothing, and the guard confirms it against the entry. It opens the
+# port, which resets the chip, so it runs only now, checked and locked. A board
+# with a USB serial of its own -- the terminal's USB Serial/JTAG has one -- is
+# named by that serial, and needs no board-info.
+INFO=""
+if board_on_socket "$SOCKET"; then
+    INFO="$(espflash board-info --chip "$CHIP" --port "$SOCKET" 2>&1)" || { echo "espflash board-info could not read $SOCKET -- refusing." >&2; exit 1; }
+fi
+
+# **Asked once more immediately before writing** (garden's
+# `board_flash_guard`), of sysfs, never of the port: whether lightning may
+# still open it, whether it is still the board these images are for, the chip
+# named, and the MAC read above when there was one. It prints the board's
+# stable path, which espflash is given from here on, and says which board it
+# is on stderr, so a person watching sees it before the write starts.
+PORT="$(board_flash_guard "$SOCKET" "$CHIP" "$INFO" "$MEANT")" || exit 1
+
 # `--before usb-reset` because this board has no external reset line the flasher
 # can pull; the USB peripheral's own reset is what puts it into the downloader.
 #
-# **`--chip esp32c3`, so espflash itself refuses any other chip** -- after it
-# connects and before it writes anything. lightning's list holds more than the
-# terminal: the station's core is an ESP32-P4, and these images are for the C3.
-#
-# **Asked once more immediately before writing**, of sysfs, never of the port:
-# whether lightning may still open it, and whether it is still the board meant.
-board_is "$PORT" "$WHAT" >/dev/null || exit 1
-espflash flash --chip esp32c3 --port "$PORT" --non-interactive --before usb-reset \
+# **`--chip`, so espflash itself refuses any other chip** -- after it connects
+# and before it writes anything. lightning's list holds more than the terminal:
+# the station's core is an ESP32-P4, and these images are for the C3.
+espflash flash --chip "$CHIP" --port "$PORT" --non-interactive --before usb-reset \
     --bootloader "$DIR/bootloader.bin" \
     --partition-table "$DIR/partition-table.bin" \
     "$DIR/$IMAGE"

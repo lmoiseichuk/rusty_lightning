@@ -63,8 +63,10 @@ fi
 #
 # The board's identity lives in lightning's own `devices.list`, at the root of
 # this checkout, not here -- see tools/board.sh. With no `$BOARD` the board is
-# the list's first entry. A board that is not on the list, or that the list
-# flags `forbidden`, is refused by MAC, whichever port it is on.
+# the one named `lightning` -- by name, not the list's first entry as the
+# reading tools take, because a flash writes, and a write should never land on
+# whichever board happens to be listed first. A board that is not on the list,
+# or that the list flags `forbidden`, is refused by MAC, whichever port it is on.
 #
 # `|| exit 1`, though `set -e` above would stop here too: board.sh refuses to
 # load -- garden's submodule missing, or lacking a function lightning calls --
@@ -77,10 +79,23 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WHAT="flashing the wrong board replaces its firmware"
 ASKED_PORT="${1:-}"
 
+# **The board this image is for, by name: `lightning`, the terminal.**
+# lightning's list holds more than the terminal -- the station's core, an
+# ESP32-P4, is on it -- and any board on the list may be opened, so "which one
+# is this image for" has to be said, not left to whichever entry comes first.
+# garden's `board_flash_guard` compares the board behind the port with it
+# immediately before the write. `$BOARD`, or `$BOARD_MAC` for a one-off, names
+# another terminal on the list instead; either is still checked against it.
+MEANT="${BOARD_MAC:-${BOARD:-lightning}}"
+
+# **The chip, said once** and given to both the guard and espflash, so the two
+# cannot disagree.
+CHIP="esp32c3"
+
 # **The board, before the build.** Whether lightning may touch the board meant
 # needs no port, so it is asked first: a refusal after several minutes of build
 # would be a refusal that wasted them.
-board_wanted >/dev/null || exit 1
+board_wanted "$MEANT" >/dev/null || exit 1
 
 DIR="$HERE/target/riscv32imc-esp-espidf/release"
 
@@ -96,9 +111,9 @@ done
 # way the answer is the board's by-id path, used from here on: `board_is` and
 # `board_port` print that path, never the number they were given.
 if [[ -n "$ASKED_PORT" ]]; then
-    PORT="$(board_is "$ASKED_PORT" "$WHAT")" || exit 1
+    PORT="$(board_is "$ASKED_PORT" "$WHAT" "$MEANT")" || exit 1
 else
-    PORT="$(board_port)" || exit 1
+    PORT="$(board_port "$MEANT")" || exit 1
 fi
 
 echo "port  : $PORT"
@@ -126,15 +141,46 @@ echo
 # evening into working around the wrong tool. `usb-reset` is the sequence for
 # the USB-JTAG-Serial peripheral, and it connects first time.
 #
-# **`--chip esp32c3`, so espflash itself refuses any other chip** -- after it
-# connects and before it writes anything. lightning's list holds more than the
-# terminal: the station's core is an ESP32-P4, and without this an image built
-# for the C3 terminal would be written to it.
+# **`--chip`, so espflash itself refuses any other chip** -- after it connects
+# and before it writes anything. lightning's list holds more than the terminal:
+# the station's core is an ESP32-P4, and without this an image built for the C3
+# terminal would be written to it.
 #
-# **Asked once more immediately before writing**, of sysfs, never of the port:
-# whether lightning may still open it, and whether it is still the board meant.
-board_is "$PORT" "$WHAT" >/dev/null || exit 1
-espflash flash --chip esp32c3 --port "$PORT" --non-interactive --before usb-reset \
+# garden's order, in which **nothing opens the port before it is checked and
+# locked**: the port, asked of sysfs and compared with the board meant (above);
+# the board's lock; for a board known only by its USB socket, the chip's own
+# MAC; and then `board_flash_guard`, immediately before espflash.
+#
+# **The board's lock** -- the one every tool here takes before it opens the
+# port (`tools/portlock.py` for the Python tools) -- so a flash is refused
+# while `send.py` or `watch.py` holds the board, and they are refused while
+# this writes. Descriptor 9 stays open until this script ends, which keeps the
+# lock; espflash inherits it, which holds the same lock, not a second one.
+# **Every line's status is checked**: `board_lock_path` prints nothing and
+# fails for a board that has gone, and bash would not stop on the `exec 9>>""`
+# that followed.
+SOCKET="$PORT"
+LOCK="$(board_lock_path "$(board_of_port "$SOCKET")")" || exit 1
+exec 9>>"$LOCK" || exit 1
+flock -n 9 || { echo "$SOCKET is held by another tool -- a send.py, a watch.py, a flash. Refusing." >&2; exit 1; }
+
+# **A board known only by its socket** -- a `path=` entry, a bridge with no
+# USB serial -- can be told only by the chip: `espflash board-info` reads its
+# MAC and writes nothing, and the guard confirms it. It opens the port, which
+# resets the chip, so it runs only now, checked and locked. The terminal's USB
+# Serial/JTAG has a serial of its own and needs none.
+INFO=""
+if board_on_socket "$SOCKET"; then
+    INFO="$(espflash board-info --chip "$CHIP" --port "$SOCKET" 2>&1)" || { echo "espflash board-info could not read $SOCKET -- refusing." >&2; exit 1; }
+fi
+
+# **Asked once more immediately before writing** (garden's
+# `board_flash_guard`), of sysfs, never of the port: whether lightning may
+# still open it, whether it is still the board this image is for, and the
+# chip. It prints the stable path espflash is given, and names the board on
+# stderr before the write starts.
+PORT="$(board_flash_guard "$SOCKET" "$CHIP" "$INFO" "$MEANT")" || exit 1
+espflash flash --chip "$CHIP" --port "$PORT" --non-interactive --before usb-reset \
     --bootloader "$DIR/bootloader.bin" \
     --partition-table "$DIR/partition-table.bin" \
     "$DIR/lightning"

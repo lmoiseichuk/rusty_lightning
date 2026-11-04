@@ -19,10 +19,13 @@ did not run" must never read as "the check passed".
 
 From a project's Python tool, with garden as the project's submodule, load
 this file by its path -- a plain `import board` could find another module of
-that name first (Adafruit's Blinka installs one):
+that name first (Adafruit's Blinka installs one). **The path as it was
+reached, never resolved**: `resolve()` would follow a symbolic link on the way
+to garden, and board.sh would then read the link target's project's list (see
+`BOARD_SH` below):
 
-    import importlib.util, pathlib
-    path = pathlib.Path(__file__).resolve().parent.parent / "garden" / "tools" / "board.py"
+    import importlib.util, os, pathlib
+    path = pathlib.Path(os.path.abspath(__file__)).parent.parent / "garden" / "tools" / "board.py"
     spec = importlib.util.spec_from_file_location("garden_board", path)
     board = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(board)
@@ -34,6 +37,13 @@ that name first (Adafruit's Blinka installs one):
 From a shell, to see an answer by hand:
 
     python3 garden/tools/board.py <port>
+
+**Lookups, and the functions a tool's script would call.** Besides the two
+refusals, this runs board.sh's lookups -- which board is behind a port, its
+name, its lock file -- and the functions a console or flash tool puts together
+before it opens a port: `wanted`, `board_port`, `stable_port` and `board_is`.
+Each runs board.sh's function of the same name and returns what it printed;
+board.sh's messages, on stderr, go to the tool's own stderr unchanged.
 """
 
 import os
@@ -119,6 +129,136 @@ def port_refusal(port):
 def board_refusal(identity):
     """Why this project must not touch the board with this MAC or id, or None."""
     return _ask("board_refusal", str(identity))
+
+
+# --- lookups, and what a tool calls before it opens a port --------------------
+
+# The shell's side for everything below. `$0` is board.sh, `$1` the function,
+# and the rest its arguments; `"$@"` is all of `$1...`, so the function runs
+# with its arguments, each one still a single word however many spaces it
+# holds. Exit 3 is a board.sh that would not load and 4 a function it lacks:
+# neither is a status any of these functions gives, so neither can be read as
+# an answer.
+LOOKUP = """
+. "$0" || exit 3
+declare -F "$1" >/dev/null || exit 4
+"$@"
+"""
+
+
+def _run(function, *arguments):
+    """Run one of board.sh's functions: (its exit status, what it printed on stdout).
+
+    stdout is captured, because it is the answer. stderr is not: it is where
+    board.sh says why it refused, and that goes to the tool's own stderr as it
+    is, for the person running the tool. A check that could not start reads as
+    status 2, refused.
+    """
+    if not BOARD_SH.is_file():
+        print(f"garden's board.sh is missing ({BOARD_SH}), so nothing can be checked", file=sys.stderr)
+        return 2, ""
+    environment = {"PATH": "/usr/local/bin:/usr/bin:/bin"}
+    command = ["bash", "-c", LOOKUP, str(BOARD_SH), function]
+    for argument in arguments:
+        command.append(str(argument))
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=environment,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"the check could not run: {error}", file=sys.stderr)
+        return 2, ""
+    if result.returncode == 3:
+        print("garden's board.sh would not load, so nothing can be checked", file=sys.stderr)
+        return 2, ""
+    if result.returncode == 4:
+        print(f"garden's board.sh has no function {function}, so this cannot be checked", file=sys.stderr)
+        return 2, ""
+    return result.returncode, result.stdout.strip()
+
+
+def _lookup(function, argument):
+    """A lookup's answer -- its first line -- or None when it has none or failed."""
+    status, output = _run(function, argument)
+    if status != 0 or not output:
+        return None
+    return output.splitlines()[0]
+
+
+def identity_of_port(port):
+    """The identity (MAC, or the entry's id) of the board behind `port`, or None.
+
+    A lookup, not a permission: a board it names may still be refused. Read
+    from sysfs; the port is not opened.
+    """
+    return _lookup("board_of_port", str(port))
+
+
+def name_of(identity):
+    """The name the project's list gives this identity, or None."""
+    return _lookup("board_name_of", str(identity))
+
+
+def lock_path(identity):
+    """The lock file every tool takes for this board, or None for no identity."""
+    return _lookup("board_lock_path", str(identity))
+
+
+def _go_ahead(function, *arguments):
+    """(status, text) from one of the functions that say "go ahead".
+
+    Their statuses are 0 go ahead (the text is the answer), 1 absent or another
+    of the project's boards, 2 refused. **Anything else is a check that failed**,
+    and is returned as 2: a status these functions never give means something
+    went wrong in the shell, and that is not permission. A 0 with nothing
+    printed is refused for the same reason -- there is no answer to go ahead
+    with.
+    """
+    status, output = _run(function, *arguments)
+    if status == 0:
+        if output:
+            return 0, output.splitlines()[0]
+        print(f"the check failed ({function} said go ahead, and printed nothing to go ahead with)", file=sys.stderr)
+        return 2, ""
+    if status == 1:
+        return 1, ""
+    if status == 2:
+        return 2, ""  # board.sh has said why, on stderr
+    print(f"the check failed ({function}, status {status})", file=sys.stderr)
+    return 2, ""
+
+
+def wanted(name=None):
+    """(status, identity) of the board meant, when the project may touch it.
+
+    `name` is a name or an identity from the list. With None, the list's first
+    entry -- this passes no environment to board.sh, so `$BOARD` and
+    `$BOARD_MAC` do not reach it: a tool that honours them reads them itself
+    and passes the value here.
+    """
+    return _go_ahead("board_wanted", name or "")
+
+
+def board_port(name=None):
+    """(status, path): the stable path of the board meant -- 1 when it is not on the bus now."""
+    return _go_ahead("board_port", name or "")
+
+
+def stable_port(port, what=""):
+    """(status, path): the stable path of `port`, when the project may open it at all.
+
+    `what` is what refusing protects, for board.sh's message.
+    """
+    return _go_ahead("board_port_stable", str(port), what)
+
+
+def board_is(port, what="", name=None):
+    """(status, path): the stable path of `port` when it is the board meant -- 1 when it is another of ours."""
+    return _go_ahead("board_is", str(port), what, name or "")
 
 
 if __name__ == "__main__":

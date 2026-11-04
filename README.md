@@ -61,7 +61,9 @@ committed and a clone is somebody else's bench, not this one.
 list is refused, by MAC, wherever it is plugged in — another project's board is
 not this one's business — and so is one the list flags `forbidden`. The rules
 and the lookups are garden's `tools/board.sh`, from the `garden` submodule;
-`tools/board.sh` here sources it and adds lightning's port checks. See
+`tools/board.sh` here sources it and keeps only what is lightning's own. Every
+tool takes the board's lock before it opens the port, so a second one on the
+same board — a flash or an erase under a running monitor — is refused. See
 [doc/console.md](doc/console.md#which-board-a-script-talks-to).
 
 Then open the console at 115200 and type `help`. Or hold **BOOT** for five
