@@ -19,6 +19,14 @@
 # the board. On first bring-up here that was a vendor image with no `storage`
 # partition, and the app loaded and immediately reset while printing nothing --
 # which reads exactly like a firmware bug. See ../flash.sh for the full story.
+#
+# **The licence texts travel with the images.** An image is lightning's code and
+# other people's -- Rust crates, the Rust standard library, ESP-IDF -- and their
+# licences ask for their texts to go with every copy. They are here beside this
+# script: `notice.md` and `LICENSE` in this folder, and each variant's
+# `licences/`, generated from that image by `../tools/release.sh`. Writing an
+# image to a board needs none of them; handing a copy of an image, of this
+# folder, or a board that carries one, to anyone else means handing them on too.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
