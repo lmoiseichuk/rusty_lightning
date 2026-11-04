@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "lightning"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "embedded-graphics",
  "embedded-hal 1.0.0",
