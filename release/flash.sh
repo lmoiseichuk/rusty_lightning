@@ -3,8 +3,8 @@
 # Flash a built image from release/, without building anything.
 #
 #     ./release/flash.sh default
-#     ./release/flash.sh no-light-sleep /dev/ttyACM2
-#     ./release/flash.sh default --force        # flash a stale image on purpose
+#     ./release/flash.sh no-light-sleep <port>    # checked by MAC
+#     ./release/flash.sh default --force          # flash a stale image on purpose
 #
 # ## Why this is not ../flash.sh
 #
@@ -50,16 +50,34 @@ PURPOSE="$(field purpose)"
 #
 # **By its stable path, never by ttyACM<n>.** The numbering shuffles between
 # plug-ins and has pointed at a different board before. Which board this is
-# lives in `devices.list`, not in this script: the script is the reusable part.
+# lives in lightning's own `devices.list`, not in this script: the script is the
+# reusable part. A board not on the list, or flagged `forbidden` there, is
+# refused by MAC.
 #
-# `board.sh` is copied in beside this file by `tools/release.sh`, so a release
-# tree carries the check with it rather than depending on the checkout it came
-# from.
+# `board.sh` -- lightning's wrapper -- is copied in beside this file by
+# `tools/release.sh`, and so are garden's `tools/board.sh`, `tools/board.py`
+# and `devices.list.example`, laid out as the submodule is. In lightning's
+# checkout -- git says the directory above is a work tree whose root tracks
+# `release/board.sh` -- the wrapper uses the submodule and the checkout's
+# `devices.list`; anywhere else, such as a release tree copied away from it,
+# the copy and a `devices.list` at the copied tree's root. Either way the tree
+# carries the check with it.
+#
+# `|| exit 1`, though `set -e` above would stop here too: board.sh refuses to
+# load when it has no garden, or one lacking a function it calls, precisely so
+# that no check below runs undefined.
 # shellcheck source=../tools/board.sh
-. "$HERE/board.sh"
+. "$HERE/board.sh" || exit 1
+
+WHAT="flashing the wrong board replaces its firmware"
 
 if [[ -z "$PORT" ]]; then
-    PORT="$(board_port)" || {
+    # 1 is an absent board, 2 a refusal; `board_port` has said which on
+    # stderr. The advice below is for an absent board only -- after a refusal
+    # it would point the way round it.
+    status=0
+    PORT="$(board_port)" || status=$?
+    if (( status == 1 )); then
         cat >&2 <<'EOF'
 
 If it is plugged in and still missing, it is probably asleep: light sleep powers
@@ -67,11 +85,14 @@ down the USB Serial/JTAG PHY, so the port comes and goes. Either catch it in a
 waking window, or flash the no-light-sleep variant once and it will stay. On
 the ordinary build, `awake on` once it is caught keeps it up across restarts.
 EOF
-        exit 1
-    }
+    fi
+    (( status == 0 )) || exit 1
 fi
 
-board_is "$PORT" "flashing the wrong board replaces its firmware" || exit 1
+# The board's by-id path from here on, whatever was given: it is named after
+# the board's USB serial, so it cannot come to mean another board, as a ttyACM
+# number can between this check and the write.
+PORT="$(board_is "$PORT" "$WHAT")" || exit 1
 
 echo "port    : $PORT"
 echo "variant : $TARGET"
@@ -118,7 +139,15 @@ done
 
 # `--before usb-reset` because this board has no external reset line the flasher
 # can pull; the USB peripheral's own reset is what puts it into the downloader.
-espflash flash --port "$PORT" --non-interactive --before usb-reset \
+#
+# **`--chip esp32c3`, so espflash itself refuses any other chip** -- after it
+# connects and before it writes anything. lightning's list holds more than the
+# terminal: the station's core is an ESP32-P4, and these images are for the C3.
+#
+# **Asked once more immediately before writing**, of sysfs, never of the port:
+# whether lightning may still open it, and whether it is still the board meant.
+board_is "$PORT" "$WHAT" >/dev/null || exit 1
+espflash flash --chip esp32c3 --port "$PORT" --non-interactive --before usb-reset \
     --bootloader "$DIR/bootloader.bin" \
     --partition-table "$DIR/partition-table.bin" \
     "$DIR/$IMAGE"

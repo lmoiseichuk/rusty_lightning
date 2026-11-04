@@ -1441,7 +1441,8 @@ cd lightning-terminal
 cargo run          # = build + flash + serial monitor
 ```
 The **first build is slow** — it downloads and builds ESP-IDF once (several minutes); subsequent
-builds are quick. If the port isn't auto-detected, add `--port /dev/ttyACM0`.
+builds are quick. If the port isn't auto-detected, add `--port <by-id path>` — the board's
+`/dev/serial/by-id/` name, never a `ttyACM` number.
 
 **6. Crates you'll pull in as you go** (check crates.io for current versions — pin what the template
 suggests):

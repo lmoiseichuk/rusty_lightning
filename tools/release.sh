@@ -47,7 +47,23 @@ SOURCES="src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defau
 # check rather than depending on the checkout it was built in. `send.py` goes
 # with it because flash.sh's last instruction -- set the clock -- names it, and
 # it finds the board through the `board.sh` beside it.
-SHARED_INTO_RELEASE="tools/board.sh tools/send.py devices.list.example"
+#
+# lightning's `devices.list` is its own, and never copied; its format is
+# garden's `devices.list.example`, which goes in with garden's tools below.
+SHARED_INTO_RELEASE="tools/board.sh tools/send.py"
+
+# **garden's half of the check goes in too, at `release/garden/`.**
+# `tools/board.sh` is lightning's wrapper around garden's `board.sh`, and
+# `send.py` asks garden's `board.py` before it opens a port -- so a tree copied
+# away from this checkout needs both. Laid out as the submodule is, each file at
+# the same path under `release/` as under the checkout's root, so that each
+# finds the list as it does from the submodule: two levels above `tools/`,
+# which for the copy is the release tree's root. The example goes with them
+# because garden's message for a missing list says to copy it from there.
+#
+# In lightning's checkout the wrapper uses the submodule, so the copy is used
+# only by a tree that is not one.
+GARDEN_INTO_RELEASE="garden/tools/board.sh garden/tools/board.py garden/devices.list.example"
 
 TARGET_TRIPLE="riscv32imc-esp-espidf"
 BINARY="lightning"
@@ -59,6 +75,14 @@ VARIANTS=(
   "default|(default)|THE INSTRUMENT: light sleep on, so the battery lasts. The USB console is only reachable in the waking windows -- send \`freq 160\` to keep the port up until the next restart, or \`awake on\` to keep it up across restarts (saved; ~2.5 days on the cell, against up to a week asleep)."
   "no-light-sleep|--features no-light-sleep|RECOVERY BUILD: light sleep compiled out entirely, so the USB port never goes away. Costs the battery saving; buys a board that can always be talked to. Flash this before a long debugging session, and the ordinary build afterwards -- or keep the ordinary build and send \`awake on\`, which holds the port up across restarts without a reflash."
 )
+
+# Checked before anything is built, so a missing submodule costs no build.
+for shared in $GARDEN_INTO_RELEASE; do
+    if [[ ! -f "$HERE/$shared" ]]; then
+        echo "missing $shared -- fetch the submodule: git submodule update --init" >&2
+        exit 1
+    fi
+done
 
 want=("$@")
 built=0
@@ -116,6 +140,10 @@ for row in "${VARIANTS[@]}"; do
     # the wrong board even in a tree copied to another machine.
     for shared in $SHARED_INTO_RELEASE; do
         cp "$HERE/$shared" "$(dirname "$out")/$(basename "$shared")"
+    done
+    for shared in $GARDEN_INTO_RELEASE; do
+        mkdir -p "$(dirname "$out")/$(dirname "$shared")"
+        cp "$HERE/$shared" "$(dirname "$out")/$shared"
     done
 
     version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"

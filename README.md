@@ -43,16 +43,26 @@ number in a commit message is a number nobody reads again.
 ## Getting one running
 
 ```sh
-cp devices.list.example devices.list     # name your board, once
-./flash.sh                               # build and flash, by MAC not by ttyACM
-./tools/send.py --clock                  # set the clock -- flashing stops the RTC
+git submodule update --init                    # garden: the shared tools, at the pinned commit
+cp garden/devices.list.example devices.list    # then put lightning's own boards in it, once
+./flash.sh                                     # build and flash, by MAC not by ttyACM
+./tools/send.py --clock                        # set the clock -- flashing stops the RTC
 ```
 
-**`devices.list` is why the first line exists.** Every script that can write to a
-device looks the board up there and refuses anything else — `/dev/ttyACM<n>`
+**`devices.list` is why the second line exists.** Every script that can write to
+a device looks the board up there and refuses anything else — `/dev/ttyACM<n>`
 numbering shuffles between plug-ins, and this repository has already come within
-one guard of erasing a different board's flash. The file is gitignored, so no
-device identity is committed and a clone is somebody else's bench, not this one.
+one guard of erasing a different board's flash. It is lightning's own list, at
+the root of this checkout, holding only lightning's boards; its format is
+garden's `devices.list.example`. It is gitignored, so no device identity is
+committed and a clone is somebody else's bench, not this one.
+
+**Each project works with its own boards.** A board that is not on lightning's
+list is refused, by MAC, wherever it is plugged in — another project's board is
+not this one's business — and so is one the list flags `forbidden`. The rules
+and the lookups are garden's `tools/board.sh`, from the `garden` submodule;
+`tools/board.sh` here sources it and adds lightning's port checks. See
+[doc/console.md](doc/console.md#which-board-a-script-talks-to).
 
 Then open the console at 115200 and type `help`. Or hold **BOOT** for five
 seconds and point a phone at the screen.
@@ -64,7 +74,8 @@ seconds and point a phone at the screen.
 ```sh
 tools/check.sh          # the host checks, then the release build
 tools/release.sh        # stamped images into release/
-tools/power.sh          # cut and restore USB power, when the port stops appearing
+tools/power.sh list     # lightning's boards, where each is, present or not
+tools/power.sh cycle <name>   # cut and restore USB power, when the port stops appearing
 tools/send.py           # type console commands once the board is listening
 tools/modules.py        # regenerate the module map
 ```

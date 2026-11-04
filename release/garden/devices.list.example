@@ -1,0 +1,67 @@
+# A project's boards: `name  MAC  [hub  port]  [flags]  [serial=<usb serial>]  [# why]`.
+#
+# **Each project keeps its own**, at its root, listing only the boards that
+# project works with. Copy this file there as `devices.list` (gitignored) and put
+# your boards in:
+#
+#     cp garden/devices.list.example devices.list
+#     $EDITOR devices.list
+#
+# Every tool in garden refuses a board that is not on the project's list: each
+# project works with its own boards, and another project's are not its
+# business. Garden itself has no list -- it shares the code, not the boards.
+#
+# Every script that can write to or power-cycle a device looks the board up here
+# first, because /dev/ttyACM<n> numbering shuffles between plug-ins and a guard
+# keyed to anything but the MAC is one replug away from protecting the wrong
+# device.
+#
+# The MAC is on the by-id path the board enumerates as, and `tools/power.sh
+# list` prints every board it can see:
+#
+#     ls /dev/serial/by-id/
+#     usb-Espressif_USB_JTAG_serial_debug_unit_AA:BB:CC:DD:EE:FF-if00
+#                                              ^^^^^^^^^^^^^^^^^
+#
+# A board with no MAC -- a small sensor flashed over a debug probe -- carries the
+# id it derives from its die in the MAC's column, as the panel prints it.
+#
+# `hub` and `port` are optional: `power.sh` finds them in sysfs while the board
+# is plugged in, which is where the truth is. Recorded, they are what lets it
+# cut a board that has stopped enumerating.
+#
+# ## serial
+#
+#   serial=<serial>   the USB serial of a console reached through a bridge with
+#                     a serial of its own -- a CH343 -- which is not the board's
+#                     MAC. It lets a port be traced to its board without opening
+#                     it. A CH340 has no serial at all, and its port is refused
+#                     by every check that asks which board is behind it.
+#
+# ## flags
+#
+#   forbidden   never write to it, never cut its power, wherever it is plugged.
+#               For one of the project's own boards that must be left alone --
+#               a probe to be replugged rather than cut, a live device whose
+#               interruption costs more than reaching it. The text after `#` is
+#               quoted back when a script refuses.
+#
+# ## What is refused
+#
+# `board.sh` refuses -- by MAC, wherever the board is plugged in -- a board that
+# is not on this list, one flagged `forbidden`, and no board named at all; and a
+# port whose board it cannot tell. Every one of those fails closed, because the
+# board that must not be touched is exactly the one a confused invocation would
+# otherwise reach.
+#
+# `board_mac` with no name, as a project's flash script uses it, takes the first
+# entry. `power.sh cycle` always needs a name.
+
+# The entries below are commented out, so a list copied from this file holds no
+# board until one is put in -- a placeholder left in, with a hub and port, could
+# be cut at a real port that holds something else.
+#
+# name       MAC                  hub    port   flags       # why
+# example    AA:BB:CC:DD:EE:FF    5-1    2
+# bridged    11:22:33:44:55:66                serial=0123456789   # a console through a CH343
+# probe      11:22:33:44:55:66                forbidden           # replug to recover, never cut its power

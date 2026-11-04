@@ -59,32 +59,72 @@ set -uo pipefail
 # already pointed at a different board -- so the default was one port shuffle
 # away from erasing somebody else's log. `release/flash.sh` looks the board up by
 # MAC and this had no equivalent.
-# The board's identity lives in devices.list, not here -- see tools/board.sh.
+#
+# The board's identity lives in lightning's own `devices.list`, at the root of
+# this checkout, not here -- see tools/board.sh. With no `$BOARD` the board is
+# the list's first entry. A board that is not on the list, or that the list
+# flags `forbidden`, is refused by MAC.
+#
+# `|| exit 1` because this script does not run under `set -e`: a board.sh that
+# failed to load -- garden's submodule not fetched -- would otherwise leave every
+# check below undefined, and an undefined check is not a refusal.
 # shellcheck source=board.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/board.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/board.sh" || exit 1
 
+readonly WHAT="this script ERASES THE WHOLE CHIP, including the strike log and NVS"
+
+# `board_port` explains itself on stderr either way: for an absent board (1)
+# with what absence usually means on this one, for a refusal (2) with why. No
+# advice is added here -- after a refusal, any would point the way round it.
 if [[ -n "${1:-}" ]]; then
-    PORT="$1"
+    ASKED_PORT="$1"
 else
-    PORT="$(board_port)" || {
-        echo "Pass a port explicitly if you are sure, or check the power switch:" >&2
-        echo "in battery mode with no cell fitted the board never enumerates." >&2
-        exit 1
-    }
+    ASKED_PORT="$(board_port)" || exit 1
 fi
 
 # **An explicit port is checked too**, because being explicit is not the same as
 # being right -- and this is the one script here that erases a whole chip.
+#
+# **Skipping the check skips "is it the configured board", and nothing else.**
+# `RECOVER_SKIP_IDENTITY_CHECK=1` lets this erase another of lightning's own
+# boards without naming it in `$BOARD`. It never lets through a port that
+# lightning's list refuses -- not on it, flagged `forbidden`, or a port whose
+# board cannot be told -- because that check is `board_port_stable`, and the
+# skip calls it in place of `board_is`, not instead of it.
+#
+# Either way `PORT` becomes the board's by-id path: named after its USB serial,
+# so it cannot come to mean another board across the build and the replugs
+# below, as a ttyACM number can.
 if [[ "${RECOVER_SKIP_IDENTITY_CHECK:-}" == "1" ]]; then
-    echo "⚠ RECOVER_SKIP_IDENTITY_CHECK=1 -- erasing $PORT without checking which board it is."
-elif ! board_is "$PORT" "this script ERASES THE WHOLE CHIP, including the strike log and NVS"; then
-    echo >&2
-    echo "If the board really is this one and udev has not named it, set" >&2
-    echo "RECOVER_SKIP_IDENTITY_CHECK=1 deliberately:" >&2
-    echo >&2
-    echo "    RECOVER_SKIP_IDENTITY_CHECK=1 $0 $PORT" >&2
-    exit 1
+    PORT="$(board_port_stable "$ASKED_PORT" "$WHAT")" || exit 1
+    echo "⚠ RECOVER_SKIP_IDENTITY_CHECK=1 -- erasing $PORT without checking it is the configured board."
+else
+    PORT="$(board_is "$ASKED_PORT" "$WHAT")" || exit 1
 fi
+
+# Why `$PORT` must not be opened now, printed with success, or nothing and
+# failure when it may -- garden's `board_port_refusal`, asked of sysfs
+# immediately before every erase and every write, never once for the whole run.
+#
+# **Asked again because the run is long and the list is not frozen.** Between
+# the check above and an attempt there can be a build of several minutes and
+# five minutes of waiting for the port, across replugs this script asks for.
+# The by-id path cannot change boards, but the list can change what it says
+# about the board, and the port can be gone.
+#
+# **Failure -- "go ahead" -- only for an explicit allow.** `board_garden_allows`
+# succeeds only when garden's check ran and said "allowed"; a check that could
+# not run, or a `board_garden_allows` that is not there, fails it, and this
+# then says refused. The one place in this script where the answer is read is
+# also the one just before a whole-chip erase.
+port_refused_now() {
+    local refusal
+    if refusal="$(board_garden_allows board_port_refusal "$PORT")"; then
+        return 1
+    fi
+    printf '%s\n' "$refusal"
+    return 0
+}
 
 MAX_ATTEMPTS="${2:-8}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -167,15 +207,35 @@ while (( attempt < MAX_ATTEMPTS )); do
         sleep 2
         continue
     fi
+    # **Checked immediately before the erase.** A port that went again between
+    # the `-e` above and this check is not a refusal: back to waiting for it,
+    # counted as waiting so that a port flickering in and out still meets the
+    # bound. Anything else refused stops the run, with nothing erased.
+    if why="$(port_refused_now)"; then
+        if [[ ! -e "$PORT" ]]; then
+            waited=$((waited + 1))
+            continue
+        fi
+        echo
+        echo "Refusing to erase $PORT: ${why:-refused by board.sh}" >&2
+        echo "Nothing has been erased on this attempt." >&2
+        exit 1
+    fi
     waited=0
     port_seen=1
     attempt=$((attempt + 1))
     echo
 
     echo "[$(stamp)] attempt $attempt/$MAX_ATTEMPTS: ERASING with esptool -- do not power-cycle"
-    # Deliberately bare. esptool's own defaults handle USB-Serial/JTAG; every
-    # override tried here made it worse, and espflash could not connect at all.
-    if ! erase_out=$(timeout 40 esptool --port "$PORT" erase-flash 2>&1); then
+    # Bare in how it resets and connects. esptool's own defaults handle
+    # USB-Serial/JTAG; every override of those tried here made it worse, and
+    # espflash could not connect at all.
+    #
+    # **`--chip esp32c3` is not one of those overrides.** It changes neither the
+    # reset nor the connection: it makes esptool compare the chip it reached
+    # with a C3, and stop before erasing anything when it is not one -- the
+    # station core on lightning's list is an ESP32-P4.
+    if ! erase_out=$(timeout 40 esptool --chip esp32c3 --port "$PORT" erase-flash 2>&1); then
         last_error=$(grep -iE 'error|exception|failed' <<<"$erase_out" | head -2 | tr '\n' ' ')
         [[ -z "$last_error" ]] && last_error="erase timed out with no output (port vanished mid-attempt)"
         echo "           erase failed: $last_error"
@@ -185,6 +245,23 @@ while (( attempt < MAX_ATTEMPTS )); do
 
     # The chip now has no app, so it sits in the ROM downloader -- which is the
     # easy case, and why the write below needs no coaxing.
+    #
+    # **Checked again immediately before the write.** A port gone since the
+    # erase is a failed attempt, as espflash finding no port would have been:
+    # the loop waits for it and starts over. Anything else refused stops the
+    # run -- and says the flash is now empty, because it is.
+    if why="$(port_refused_now)"; then
+        if [[ ! -e "$PORT" ]]; then
+            last_error="the port went away after the erase, before the write"
+            echo "           write not started: $last_error"
+            continue
+        fi
+        echo >&2
+        echo "Refusing to write $PORT: ${why:-refused by board.sh}" >&2
+        echo "⚠ Its flash was ERASED on this attempt and nothing has been written:" >&2
+        echo "  it has no app until a recovery completes." >&2
+        exit 1
+    fi
     echo "[$(stamp)] WRITING -- do not power-cycle"
     # **Gated on the exit status, not on the wording.** This tested only
     # `grep -q 'Flashing has completed'` and threw the exit status away, while

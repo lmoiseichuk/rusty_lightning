@@ -44,15 +44,36 @@ resistor, touching a wrong pad does no harm.
          CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
          CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
-   Build it for `esp32p4` and flash it to the P4 over its USB.
+   Build it for `esp32p4` and flash it to the P4 over its USB, **by the P4's
+   own port, and only after asking whether lightning may open it.** Never use
+   `ttyACM<n>`, and never leave the port to the flasher's auto-detection: on a
+   bench shared with other projects it opens one serial port after another,
+   and opening a port restarts whatever board is on it. The P4 is `firebeetle`
+   on lightning's `devices.list`. Garden's `board.py` reads sysfs, opens
+   nothing, and says whether lightning may open that port. From the example's
+   directory, with `lightning` set to this checkout:
+
+       port=<the P4's by-id path>    # /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_<MAC>-if00
+       python3 "$lightning/garden/tools/board.py" "$port" && idf.py -p "$port" flash monitor
+
+   `monitor` keeps its log open on the same port, for the next step. A
+   refusal stops the line before `idf.py` opens anything.
 
 3. **The hold:** with the P4 running the flasher and its log open, hold IO9 to
    GND. Within a second or two the log says `connected: the C6 is in download
    mode`. Let go; the P4 writes and verifies the four images in about five
    seconds and resets the C6.
 
-4. **Back to the station:** flash `wifi_check` again. The P4's log should say
-   `Identified slave [esp32c6]`, then a scan.
+4. **Back to the station:** flash `wifi_check` again, on the same port and
+   after the same question. From `station/`:
+
+       cargo build --release --bin wifi_check
+       python3 ../garden/tools/board.py "$port" && espflash flash --chip esp32p4 --port "$port" --monitor \
+           target/riscv32imafc-esp-espidf/release/wifi_check
+
+   `--chip esp32p4` makes espflash refuse any other chip once connected, and
+   before it writes. The P4's log should say `Identified slave [esp32c6]`,
+   then a scan.
 
 ## What did not work first
 

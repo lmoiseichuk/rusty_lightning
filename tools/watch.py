@@ -20,13 +20,25 @@ that line exists.
 
 To type commands rather than only watch, use `tools/send.py`, which waits for
 the console to be listening first.
+
+## Which board
+
+**Since the open restarts the board, the port is checked before it**, by
+garden's `board.py` against lightning's own `devices.list`: a board not on the
+list, one flagged `forbidden` there, and a port whose board cannot be told are
+refused. With no port given, it is the board `board.sh` finds by MAC -- `$BOARD`,
+or the list's first -- at its /dev/serial/by-id path. There is no default
+ttyACM number: `/dev/ttyACM0` is whichever device enumerated first, and on a
+bench shared with other projects that is often somebody else's.
 """
 import sys
 import time
 
 import serial
 
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
+# `send.py`, beside this file, already knows how to run `board.sh` and where
+# garden's `board.py` is; borrowed rather than written twice.
+import send
 
 # A bare `int()` here raised an unhandled ValueError on a typo, printing a
 # traceback where a usage line belongs.
@@ -40,12 +52,30 @@ if len(sys.argv) > 2:
 else:
     seconds = 60
 
+board = send.garden_board()
+
+if len(sys.argv) > 1:
+    port = sys.argv[1]
+else:
+    # `board_port` prints the by-id path, or says on stderr why there is none:
+    # the board absent (1) or refused (2).
+    code, port = send.board_helper("board_port")
+    if code != 0:
+        sys.exit(1)
+
 s = serial.Serial()
 s.port = port
 s.baudrate = 115200
 s.timeout = 1
 s.dtr = False          # GPIO9 strap released -- set BEFORE open()
 s.rts = False          # EN released
+
+# **Asked immediately before the open, every time.** `None` is an explicit
+# allow; anything else is the reason it is refused, including a check that
+# failed to run.
+refusal = board.port_refusal(port)
+if refusal is not None:
+    sys.exit(f"refusing to open {port}: {refusal}")
 
 # **`open()` belongs inside the guard.** It sat above the try, so the single
 # most common failure -- the port missing, or already held by another console --

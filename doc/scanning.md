@@ -296,20 +296,22 @@ live in RAM on purpose, so a second open part-way would undo them. A reader that
 holds the port makes every `echo` a second open, which restarts nothing:
 
 ```sh
-stty -F /dev/ttyACM0 115200 raw -echo
-cat /dev/ttyACM0 > sweep.log &                   # this open restarts the board
+port="<by-id path>"                              # the board's /dev/serial/by-id path
+python3 garden/tools/board.py "$port" || exit    # at a refusal, nothing below opens it
+stty -F "$port" 115200 raw -echo
+cat "$port" > sweep.log &                        # this open restarts the board
 until grep -q 'con:  listening' sweep.log; do sleep 1; done
 
-echo "freq 160"     > /dev/ttyACM0               # stay awake: light sleep drops the port
-echo "events 20000" > /dev/ttyACM0               # log disturbers and noise, capped to what fits
-echo "mask off"     > /dev/ttyACM0               # or the disturber curve is empty by construction
-echo "sensitive on" > /dev/ttyACM0               # freeze the tuner, or it walks off each rung
+echo "freq 160"     > "$port"                    # stay awake: light sleep drops the port
+echo "events 20000" > "$port"                    # log disturbers and noise, capped to what fits
+echo "mask off"     > "$port"                    # or the disturber curve is empty by construction
+echo "sensitive on" > "$port"                    # freeze the tuner, or it walks off each rung
 for nf in 0 1 2 3 4 5 6 7; do
-    echo "defence $nf" > /dev/ttyACM0; sleep 600 # ten minutes a rung
+    echo "defence $nf" > "$port"; sleep 600      # ten minutes a rung
 done
-echo "sensitive off" > /dev/ttyACM0
-echo "mask on"       > /dev/ttyACM0              # saved, so put it back
-echo "freq auto"     > /dev/ttyACM0
+echo "sensitive off" > "$port"
+echo "mask on"       > "$port"                   # saved, so put it back
+echo "freq auto"     > "$port"
 kill %1
 
 ./tools/send.py --until "# end" dump | sed -n '/^# lightning strike log/,/^# end/p' > sweep.csv

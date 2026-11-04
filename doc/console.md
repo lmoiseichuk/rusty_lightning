@@ -12,12 +12,29 @@ The XIAO ESP32-C3 uses **native USB Serial/JTAG**, not a USB-UART bridge. There
 is no baud rate in any real sense — the port is USB all the way down, and the
 number is ignored. Set one anyway, because the tools insist.
 
-The device appears as `/dev/ttyACM0` (Linux) or `/dev/cu.usbmodem*` (macOS).
+The device appears as `/dev/ttyACM<n>` (Linux) or `/dev/cu.usbmodem*` (macOS).
+On Linux, address it by its stable path,
+`/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_<MAC>-if00` —
+written `<by-id path>` below — never by the number: that is whichever device
+enumerated first, and on a bench shared with other projects it is often one of
+theirs. **Opening the port restarts the board**, so ask first whether it is
+lightning's to open (see [Which board a script talks to](#which-board-a-script-talks-to)):
+
+```sh
+port="<by-id path>"
+python3 garden/tools/board.py "$port"   # "allowed", or why not; asked of sysfs, opens nothing
+```
+
+**Every recipe below asks that first, and goes no further at a refusal** —
+`&&` in front of a single command, `|| exit` at the top of a block of them.
+`board.py` exits 0 only for "allowed", and a check that could not run is a
+refusal too. `|| exit` is what stops a script; typed into a terminal it closes
+that terminal, which is also nothing opened.
 
 ### The quick one — `screen`
 
 ```sh
-screen /dev/ttyACM0 115200
+python3 garden/tools/board.py "$port" && screen "$port" 115200
 ```
 
 Leave with `Ctrl-A` then `k`, then `y`. If you forget, the port stays claimed
@@ -26,7 +43,7 @@ and the next tool reports it as busy; `pkill screen` clears it.
 ### Nicer — `picocom`
 
 ```sh
-picocom -b 115200 --imap lfcrlf /dev/ttyACM0
+python3 garden/tools/board.py "$port" && picocom -b 115200 --imap lfcrlf "$port"
 ```
 
 `--imap lfcrlf` matters: the firmware ends lines with `\n` alone, and without
@@ -58,10 +75,12 @@ shell expanded `$(date +%s)` fifteen seconds of boot earlier.
 Useful when you want the output in a file rather than on a screen:
 
 ```sh
-stty -F /dev/ttyACM0 115200 raw -echo -echoe -echok
-cat /dev/ttyACM0 &            # reader in the background -- this open restarts it
+port="<by-id path>"
+python3 garden/tools/board.py "$port" || exit   # at a refusal, nothing below runs
+stty -F "$port" 115200 raw -echo -echoe -echok
+cat "$port" &                 # reader in the background -- this open restarts it
 # ... wait for `con:  listening` in the reader's output ...
-echo status > /dev/ttyACM0    # writer: the reader holds the port, so no restart
+echo status > "$port"         # writer: the reader holds the port, so no restart
 ```
 
 `raw` is the important flag. Without it the line discipline buffers, translates
@@ -82,9 +101,21 @@ Stop the reader with `kill %1` when done.
 without fighting the shell. `tools/send.py` is the worked example; the shape is:
 
 ```python
+import importlib.util
+import sys
 import serial
 
-port = serial.Serial('/dev/ttyACM0', 115200, timeout=1)   # restarts the board
+# garden's board.py, from the submodule, loaded by its path: a plain
+# `import board` can find another module of that name first (Blinka's).
+spec = importlib.util.spec_from_file_location("garden_board", "garden/tools/board.py")
+board = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(board)
+
+path = "<by-id path>"
+refusal = board.port_refusal(path)      # asked of sysfs, immediately before the open
+if refusal is not None:
+    sys.exit(f"refusing: {refusal}")
+port = serial.Serial(path, 115200, timeout=1)             # restarts the board
 for line in iter(port.readline, None):                    # wait for the loop
     if b'con:  listening' in line:
         break
@@ -672,19 +703,21 @@ be rebuilt from CSV on every wake, and this device has no reason to use it.
 ## A debugging session, end to end
 
 ```sh
-stty -F /dev/ttyACM0 115200 raw -echo
-cat /dev/ttyACM0 &                         # this open restarts the board
+port="<by-id path>"
+python3 garden/tools/board.py "$port" || exit   # at a refusal, nothing below runs
+stty -F "$port" 115200 raw -echo
+cat "$port" &                              # this open restarts the board
 # ... wait for `con:  listening` ...
 
-echo "date $(date +%s)" > /dev/ttyACM0   # the clock is only as fresh as its last save
-echo "freq 160"         > /dev/ttyACM0   # stay reachable
-echo "regs"             > /dev/ttyACM0   # confirm the sensor is configured as intended
-echo "status"           > /dev/ttyACM0   # and that it is hearing something
+echo "date $(date +%s)" > "$port"          # the clock is only as fresh as its last save
+echo "freq 160"         > "$port"          # stay reachable
+echo "regs"             > "$port"          # confirm the sensor is configured as intended
+echo "status"           > "$port"          # and that it is hearing something
 
 # ... leave it running; strikes print as they arrive ...
 
-echo "dump"             > /dev/ttyACM0   # the whole log when you are done
-echo "freq auto"        > /dev/ttyACM0   # hand the clock back before you walk away
+echo "dump"             > "$port"          # the whole log when you are done
+echo "freq auto"        > "$port"          # hand the clock back before you walk away
 kill %1                                    # the last close; the next open restarts it again
 ```
 
@@ -845,43 +878,105 @@ nothing.
 
 ## Which board a script talks to
 
-`devices.list` in the checkout root, one `name  MAC` pair per line:
+`devices.list` in the checkout root holds **lightning's own boards**, one per
+line, `name  MAC  [hub  port]  [flags]  [serial=<usb serial>]  [# why]`. Make it
+from garden's example, which documents every column:
+
+```sh
+cp garden/devices.list.example devices.list
+```
 
 ```
-lightning   AA:BB:CC:DD:EE:FF
-panel-c5    11:22:33:44:55:66
+lightning   AA:BB:CC:DD:EE:FF   1-1  1
+spare       11:22:33:44:55:66              # a second C3 terminal, for the bench
 ```
 
-The first entry is the default; `BOARD=panel-c5 ./flash.sh` picks another, and
-`BOARD_MAC=AA:BB:… ./flash.sh` overrides both for one command. It is gitignored,
-and `devices.list.example` shows the format.
+The first entry is the default; `BOARD=spare ./flash.sh` picks another, and
+`BOARD_MAC=AA:BB:… ./flash.sh` overrides both for one command — and is still
+checked against the list. The file is gitignored, so no device identity is
+committed.
 
-**Naming them is not decoration.** When a port resolves to the wrong board the
-refusal can say *which* one, and "it resolves to `panel-c5`" is a sentence
-somebody acts on where a bare MAC is one they squint at:
+**Each project works with its own boards, and only those.** Every script here
+refuses, by MAC and wherever the board is plugged in:
+
+* a board that is not on lightning's list — another project's, or nobody's yet;
+* one the list flags `forbidden` — a board lightning keeps listed so that it is
+  never written to or cut; the note after its `#` is quoted in the refusal;
+* a port whose board cannot be told: one that does not exist at the moment it
+  is checked, one with no USB serial behind it (a CH340), or one whose serial
+  no entry claims.
+
+Each of those fails closed, and so does having no list, naming no board, or a
+check that could not run: the board that must not be touched is exactly the one
+a confused invocation would otherwise reach. **Only an explicit "allowed" is
+allowed**, in the shell as in Python. Garden's shell checks answer "refused" by
+succeeding, so "command not found" would read as a pass; `tools/board.sh`
+therefore refuses to load at all when garden's lacks a function it calls, and
+reads each answer by its exit status, refusing anything but garden's own
+"allowed".
+
+**Naming them is not decoration.** When a port is the wrong board the refusal
+can say *which* one, and "it is `spare`" is a sentence somebody acts on where a
+bare MAC is one they squint at:
 
 ```
 ⚠ /dev/ttyACM0 is not the configured board.
-  it resolves to: /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_11:22:33:44:55:66-if00
-  which is:       panel-c5
-  expected MAC:   AA:BB:CC:DD:EE:FF
+  it is:     spare (11:22:33:44:55:66), /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_11:22:33:44:55:66-if00
+  expected:  lightning (AA:BB:CC:DD:EE:FF)
+If it is the board you mean, name it:  BOARD=spare
 Refusing: flashing the wrong board replaces its firmware
 ```
 
-The lookup and the guard live in `tools/board.sh`, sourced by `flash.sh`,
-`tools/recover.sh`, `tools/power.sh` and `release/flash.sh` — `release.sh` copies
-it in beside the images, so a release tree carries the check with it rather than
-depending on the checkout it came from.
+**Which board is behind a port is read from sysfs, never by opening it** —
+the open is what restarts the board — **and it is asked again immediately
+before every write**, not once at the start: `flash.sh` checks after its build
+and again just before espflash, `tools/recover.sh` before every erase and every
+write in its retry loop, and `tools/send.py` and `tools/watch.py` just before
+they open the port. Once a port has checked out, a script uses the board's
+`/dev/serial/by-id` path, named after its USB serial, so a ttyACM number cannot
+change hands under it.
+
+**Every write passes `--chip esp32c3`**, so espflash and esptool refuse any
+other chip after connecting and before writing anything. lightning's list can
+hold more than terminals — the station's core is an ESP32-P4 — and an image
+built for the C3 must never land on one.
+
+The rules and the lookups are garden's `tools/board.sh`, in the `garden`
+submodule, and garden's `tools/board.py` asks them for a Python tool.
+`tools/board.sh` here sources garden's and adds lightning's few functions:
+`board_port` (the board's by-id path, found by MAC), `board_is` (whether a port
+is the board meant) and `board_port_stable` (whether lightning may open a port
+at all). It is sourced by `flash.sh` and `tools/recover.sh`, and run by
+`tools/send.py` and `tools/watch.py`. `release.sh` copies it and `send.py` in
+beside the images, and garden's `board.sh` and `board.py` into
+`release/garden/tools/`, with garden's `devices.list.example` beside them, so a
+release tree carries the check with it. In lightning's checkout — git says the
+directory above `tools/` or `release/` is the top of a work tree that tracks
+that `board.sh` — the submodule is used and the copy never is. Anywhere else,
+such as a release tree copied away, the copy is used, with a `devices.list` at
+the copied tree's own root: never a `garden/` or a list that merely happens to
+sit beside it.
+
+To ask by hand whether a port may be opened — before `screen` or `picocom`,
+say:
+
+```sh
+python3 garden/tools/board.py <by-id path>   # "allowed", or why not; opens nothing
+```
+
+**Skipping the identity check skips only that.** `RECOVER_SKIP_IDENTITY_CHECK=1`
+and `SEND_SKIP_IDENTITY_CHECK=1` skip "is it the configured board", to reach
+another of lightning's boards without naming it in `$BOARD`. Everything in the
+list of refusals above is refused all the same.
 
 ### Cutting the power
 
-Two optional columns, `hub` and `port`, say where a board sits on a switchable
-USB hub. `tools/power.sh` uses them and nothing else does.
+`tools/power.sh` is garden's, run from the submodule against lightning's list:
 
 ```sh
-tools/power.sh              # cycle the default board
-tools/power.sh lightning    # by name
-tools/power.sh --list       # what is on the switchable hubs
+tools/power.sh list              # lightning's boards: hub, port, present or not
+tools/power.sh cycle lightning   # by name
+tools/power.sh cycle AA:BB:…     # or by MAC, still checked
 ```
 
 **This is the last lever.** Light sleep powers down the USB PHY, so a board
@@ -889,14 +984,25 @@ running the ordinary build appears in windows — and when it stops appearing at
 all, `espflash` cannot connect, the console cannot attach, and there is no reset
 line. Cutting VBUS is what is left.
 
-It takes a **name**, never a port number. The ports on a bench carry devices
-from more than one project, and a script given a port number has no way to know
-it was the wrong one. It also names whatever else is on the hub before cutting:
-these Genesys hubs report `ganged`, which would mean one port cannot be switched
-alone. **Measured here it is false** — port 1 was cycled with a live device on
-port 2 and the neighbour did not blink — but "measured false once" is not
-"cannot happen", and the neighbour may be somebody else's running experiment.
+It takes a **name or a MAC**, never a port number: the ports on this bench
+carry devices from more than one project, and a script given a port number has
+no way to know it was the wrong one. It refuses a board that is not on
+lightning's list or is flagged `forbidden`, by MAC, and **with no name it cuts
+nothing** — bare, it lists, and the listing shows every other board whose USB
+serial is a MAC as not lightning's. The board's hub and port come from sysfs while it is
+plugged in; the optional `hub` and `port` columns in the list are the fallback
+for a board that has stopped enumerating, which is exactly when a cut is
+wanted.
 
-`uhubctl` needs `-f` on this hub (without it: *"No compatible devices
-detected"*), and is often installed to `/usr/sbin`, which is not on a normal
-PATH. Set `UHUBCTL=` if it lives elsewhere.
+It also names whatever else is on the hub before cutting: these Genesys hubs
+report `ganged`, which would mean one port cannot be switched alone. **Measured
+here it is false** — port 1 was cycled with a live device on port 2 and the
+neighbour did not blink — but "measured false once" is not "cannot happen", and
+the neighbour may be somebody else's running experiment. Only boards it can
+identify are named there: one whose USB serial is a MAC, or a bridge whose
+serial a `serial=` entry on lightning's list claims. A CH340 has no serial, and
+is not seen.
+
+Garden's script runs `sudo -n uhubctl -f`: `-f` because this hub otherwise
+reports *"No compatible devices detected"*, and `sudo -n` because the hub needs
+root — so `uhubctl` has to be on root's PATH and allowed without a password.
