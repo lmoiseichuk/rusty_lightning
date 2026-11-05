@@ -1,9 +1,0 @@
-build   : no-light-sleep
-version : 0.22.3
-commit  : 9f0c1676f4fc
-built   : 2026-11-02T03:52:56Z
-flags   : --features no-light-sleep
-image   : lightning
-target  : riscv32imc-esp-espidf
-sources : src tests Cargo.toml Cargo.lock build.rs partitions.csv sdkconfig.defaults rust-toolchain.toml littlefs_bindings.h assets .cargo/config.toml components_esp32c3.lock
-purpose : RECOVERY BUILD: light sleep compiled out entirely, so the USB port never goes away. Costs the battery saving; buys a board that can always be talked to. Flash this before a long debugging session, and the ordinary build afterwards -- or keep the ordinary build and send `awake on`, which holds the port up across restarts without a reflash.

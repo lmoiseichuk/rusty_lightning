@@ -4,6 +4,10 @@
 
 # Rebuild every image in release/ from the current commit.
 #
+# **The images stay on this machine.** release/<variant>/ is gitignored: build
+# them here and keep them here. What git tracks under release/ is the tooling
+# that writes them -- flash.sh, and the copies this script puts beside it.
+#
 #     ./tools/release.sh                 # every variant
 #     ./tools/release.sh default         # just one
 #     ./tools/release.sh no-light-sleep
@@ -33,7 +37,7 @@ cd "$HERE"
 # Written into every image's VERSION so `release/flash.sh` can judge staleness
 # without knowing anything about the layout here. One crate, so this is short --
 # but it is still a list rather than "everything", because committing the
-# release/ tree must not make every image stale.
+# copies this script puts in release/ must not make every image stale.
 #
 # **`.cargo/config.toml` and `components_esp32c3.lock` are build inputs.** They
 # were missing, and both change the binary: the first pins ESP_IDF_VERSION, the
@@ -70,36 +74,11 @@ SHARED_INTO_RELEASE="tools/board.sh tools/send.py tools/portlock.py"
 # lightning's `LICENSE` goes with lightning's (below).
 GARDEN_INTO_RELEASE="garden/tools/board.sh garden/tools/board.py garden/tools/portlock.py garden/devices.list.example garden/license"
 
-# **The licence notices go in too, so a copy of release/ owes nothing to the
-# checkout.** The images are lightning's code and other people's: the crates
-# they link, the Rust standard library, and ESP-IDF underneath. Those licences
-# ask for their texts to go with every copy of an image. Four things carry them:
-#
-#   release/LICENSE               lightning's own, copied from the root
-#   release/<variant>/licences/   made by garden's licences.py from the build
-#                                 just finished: every linked crate's licence
-#                                 files, the standard library's, ESP-IDF's
-#                                 with its linked components', and the notices
-#                                 in the headers of the sources it links --
-#                                 see below
-#   release/notice.md             written by hand, kept in git: what the tool
-#                                 cannot collect (the fonts, DFRobot's driver,
-#                                 the crates it flags), LittleFS's texts as
-#                                 well, and the logo
-#   release/garden/license        garden's, for its files under release/garden/
+# lightning's `LICENSE` goes in beside the scripts it covers, as garden's
+# `license` goes in with garden's files above. What in this repository is
+# other people's work is listed in `notice.md` at the repository's root; the
+# libraries the images link keep their own licences, as their sources state.
 NOTICES_INTO_RELEASE="LICENSE"
-LICENCES_TOOL="garden/tools/licences.py"
-
-# **The crates licences.py flags that release/notice.md answers by hand.** The
-# tool exits 1 when it flags anything: a crate that ships no licence text, or
-# one whose licence is given only as a file. Each one here has its text, or its
-# reading, in release/notice.md. A flag not on this list stops the release --
-# including one of these at a new version, whose text has to be checked again.
-ANSWERED_FLAGS=(
-  "u8g2-fonts 0.8.0"   # its licence is a file: MIT OR Apache-2.0, fonts under U8g2's terms
-  "qrcodegen 1.8.0"    # ships no licence file: the notice is in its src/lib.rs
-  "void 1.0.2"         # ships no licence file: its repository's LICENSE-MIT
-)
 
 TARGET_TRIPLE="riscv32imc-esp-espidf"
 BINARY="lightning"
@@ -119,22 +98,12 @@ for shared in $GARDEN_INTO_RELEASE; do
         exit 1
     fi
 done
-# **No notice, no release.** An image copied away without its licence texts is
-# the one thing this step exists to prevent, so a garden without the tool
-# refuses, rather than releasing the image bare.
-if [[ ! -f "$HERE/$LICENCES_TOOL" ]]; then
-    echo "missing $LICENCES_TOOL -- move the garden submodule to a commit that has it" >&2
-    exit 1
-fi
 
-# **Every variant is built before anything goes into release/.** licences.py
-# names the commit it read, and says so when the checkout has changes git can
-# see -- and an image already copied into release/ is such a change. Copying
-# each variant in as it was built would make every later variant's notice say
-# its checkout had changes, when the only change was the earlier image. So each
-# variant is built, read and stamped into target/release-staging/ (target/ is
-# gitignored), and release/ is written only once the last one has succeeded --
-# which also means a failed build leaves release/ as it was.
+# **Every variant is built before anything goes into release/.** Each one is
+# built and stamped into target/release-staging/ (target/ is gitignored), and
+# release/ is written only once the last one has succeeded -- so a failed build
+# leaves the images already in release/ as they were, rather than half of them
+# replaced.
 STAGING="$HERE/target/release-staging"
 rm -rf "$STAGING"
 
@@ -175,8 +144,8 @@ for row in "${VARIANTS[@]}"; do
     fi
 
     echo "== $variant =="
-    # The table writes "(default)" for no flags at all; cargo and licences.py
-    # are both given the flags themselves, which for that row is nothing.
+    # The table writes "(default)" for no flags at all; cargo is given the
+    # flags themselves, which for that row is nothing.
     if [[ "$flags" == "(default)" ]]; then
         cargo_flags=""
     else
@@ -192,54 +161,6 @@ for row in "${VARIANTS[@]}"; do
         [[ -f "$from/$f" ]] || { echo "missing build artifact: $from/$f" >&2; exit 1; }
         cp "$from/$f" "$staged/$f"
     done
-
-    # **The image's licence notice, from the build just finished.** target/
-    # holds only the last variant built, so this is the one moment the build
-    # beside the image is this image's. licences.py reads the image itself:
-    # its ELF symbols decide which ESP-IDF components it links. The notice goes
-    # to licences/licences.md; its standard output, the same text, is not needed.
-    #
-    # Exit status 0 is nothing flagged, 1 something flagged, 2 no notice made.
-    status=0
-    # shellcheck disable=SC2086
-    python3 "$HERE/$LICENCES_TOOL" "$HERE" $cargo_flags --collect "$staged/licences" >/dev/null || status=$?
-    if (( status >= 2 )); then
-        echo "licences.py could not make $variant's notice -- see its message above" >&2
-        exit 1
-    fi
-    if (( status == 1 )); then
-        # The flags are the "- <crate> <version>: <why>" lines under the
-        # notice's "## Flagged" heading. Each must be one release/notice.md
-        # answers; finding none at all means the format changed, which is
-        # refused too rather than read as "nothing flagged".
-        found=0
-        unanswered=""
-        while IFS= read -r line; do
-            found=$((found + 1))
-            what="${line#- }"
-            what="${what%%:*}"
-            answered=0
-            for known in "${ANSWERED_FLAGS[@]}"; do
-                if [[ "$what" == "$known" ]]; then
-                    answered=1
-                fi
-            done
-            if (( answered == 0 )); then
-                unanswered+="    $line"$'\n'
-            fi
-        done < <(sed -n '/^## Flagged$/,$p' "$staged/licences/licences.md" | grep '^- ')
-        if (( found == 0 )); then
-            echo "licences.py flagged something in $variant's notice, and no flag could be read from it" >&2
-            exit 1
-        fi
-        if [[ -n "$unanswered" ]]; then
-            echo "licences.py flagged what release/notice.md does not answer, in $variant's notice:" >&2
-            printf '%s' "$unanswered" >&2
-            echo "Add its text, or its reading, to release/notice.md, then its name and version to" >&2
-            echo "ANSWERED_FLAGS in this script." >&2
-            exit 1
-        fi
-    fi
 
     version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
     cat > "$staged/VERSION" <<EOF
@@ -264,18 +185,15 @@ fi
 
 # --- into release/ ----------------------------------------------------------
 #
-# Each built variant replaces its folder's files. `licences/` is removed first,
-# so a crate the lock file has dropped leaves no text behind.
+# Each built variant replaces its folder's files.
 for variant in "${built_variants[@]}"; do
     out="$HERE/release/$variant"
     mkdir -p "$out"
-    rm -rf "$out/licences"
     cp -R "$STAGING/$variant/." "$out/"
 done
 
 # The identity check travels with the images, so `release/flash.sh` refuses
-# the wrong board even in a tree copied to another machine -- and the licences
-# travel with them too.
+# the wrong board even in a tree copied to another machine.
 for shared in $SHARED_INTO_RELEASE $NOTICES_INTO_RELEASE; do
     cp "$HERE/$shared" "$HERE/release/$(basename "$shared")"
 done
@@ -286,7 +204,5 @@ done
 rm -rf "$STAGING"
 
 echo
-echo "Commit the release/ tree so the images, their stamps and their licence texts travel together."
-echo "release/notice.md is written by hand: it carries what licences.py cannot collect -- DFRobot's"
-echo "driver, the fonts, the flagged crates -- and LittleFS's texts too, and says which logo each image draws. If"
-echo "any of those changed, or an image's version or commit it names did, update it."
+echo "The images stay local: release/<variant>/ is gitignored, so keep them on this machine."
+echo "If a copied script under release/ changed, commit that -- git status shows which."

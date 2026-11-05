@@ -11,8 +11,8 @@
 # ## Why this is not ../flash.sh
 #
 # `../flash.sh` builds and writes whatever is in `target/` — the right thing
-# while developing. This one writes an image that was built, stamped and
-# committed, and it refuses to write one whose sources have changed since.
+# while developing. This one writes an image that `../tools/release.sh` built
+# and stamped, and it refuses to write one whose sources have changed since.
 #
 # ⚠ **All three artifacts, every time.** `espflash flash <app>` writes only the
 # application and leaves whatever bootloader and partition table are already on
@@ -20,13 +20,8 @@
 # partition, and the app loaded and immediately reset while printing nothing --
 # which reads exactly like a firmware bug. See ../flash.sh for the full story.
 #
-# **The licence texts travel with the images.** An image is lightning's code and
-# other people's -- Rust crates, the Rust standard library, ESP-IDF -- and their
-# licences ask for their texts to go with every copy. They are here beside this
-# script: `notice.md` and `LICENSE` in this folder, and each variant's
-# `licences/`, generated from that image by `../tools/release.sh`. Writing an
-# image to a board needs none of them; handing a copy of an image, of this
-# folder, or a board that carries one, to anyone else means handing them on too.
+# **The images are local.** Each variant's folder here is gitignored, so a fresh
+# clone has none until `../tools/release.sh` builds them on that machine.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +41,7 @@ for arg in "$@"; do
 done
 
 DIR="$HERE/$TARGET"
-[[ -d "$DIR" ]] || { echo "no such variant: $TARGET" >&2; exit 1; }
+[[ -d "$DIR" ]] || { echo "no such variant: $TARGET -- the images are built locally: ./tools/release.sh $TARGET" >&2; exit 1; }
 [[ -f "$DIR/VERSION" ]] || { echo "$TARGET has no VERSION stamp -- rebuild it" >&2; exit 1; }
 
 field() { grep -m1 "^$1 " "$DIR/VERSION" | cut -d: -f2- | sed 's/^ *//'; }
@@ -125,9 +120,10 @@ echo "purpose : $PURPOSE"
 # --- staleness guard --------------------------------------------------------
 #
 # **Compare firmware inputs, not commits.** "Stamp == HEAD" is the obvious check
-# and it is wrong: committing the release/ tree itself moves HEAD, so every image
-# would be stale the moment it was checked in. What matters is whether anything
-# the binary is BUILT FROM has changed since.
+# and it is wrong: every commit moves HEAD, the copies `release.sh` puts beside
+# this script included, so every image would go stale at the next commit of
+# anything at all. What matters is whether anything the binary is BUILT FROM
+# has changed since.
 if ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     echo "note: no git here, so staleness cannot be checked. Image says $STAMPED."
 else

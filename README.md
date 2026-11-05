@@ -75,7 +75,7 @@ seconds and point a phone at the screen.
 
 ```sh
 tools/check.sh          # the host checks, then the release build
-tools/release.sh        # stamped images, and their licence texts, into release/
+tools/release.sh        # stamped images into release/, kept locally and not in git
 tools/power.sh list     # lightning's boards, where each is, present or not
 tools/power.sh cycle <name>   # cut and restore USB power, when the port stops appearing
 tools/send.py           # type console commands once the board is listening
@@ -191,16 +191,10 @@ one armed `events` window during a real one to answer.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). What in this repository and its firmware images is
-not this project's own keeps its own licence: DFRobot's AS3935 driver, the fonts,
-the date algorithm, qrcodegen, LittleFS, ESP-IDF and the Rust crates. Each is
-named, with its source and the attribution it asks for, in
-[notice.md](notice.md). **The licence texts the images owe go with them**, in
-`release/`: [release/notice.md](release/notice.md), `release/LICENSE`, and each
-image's `licences/` folder, generated from the image by garden's
-`tools/licences.py`. `tools/release.sh` makes each image's `licences/` again
-with every image it builds, and copies `LICENSE` in; `release/notice.md` is kept
-by hand. Whoever passes on an image passes them on with it.
+MIT — see [LICENSE](LICENSE). The few parts of this repository that are other
+people's work keep their own licences, and [notice.md](notice.md) lists them.
+The firmware also links third-party libraries — ESP-IDF, the Rust standard
+library and the Rust crates — each under its own licence.
 
 
 ---

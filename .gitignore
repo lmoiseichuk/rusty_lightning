@@ -27,3 +27,17 @@ storm-*.csv
 
 # The boards on this bench -- local identities, not shared code.
 devices.list
+
+# Release images are built and kept locally, never committed: each variant's
+# folder under release/ holds an image, its bootloader, its partition table and
+# its VERSION stamp, and an older build may have left a licences/ folder too.
+# release/flash.sh and its helpers beside them stay tracked, and so does
+# release/garden/, which holds no image.
+/release/*/lightning
+/release/*/bootloader.bin
+/release/*/partition-table.bin
+/release/*/VERSION
+/release/*/licences/
+
+# Python's bytecode cache, made beside any script that is run.
+__pycache__/
